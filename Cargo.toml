@@ -1,0 +1,91 @@
+[package]
+name = "grass-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Worked examples for the GRASS scheduler / multi-physics stack"
+publish = false
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elizabeth-suehr/grass"
+
+[workspace.dependencies]
+# Inter-crate paths so cargo resolves them inside this workspace.
+grass_scheduler = { path = "crates/grass_scheduler", version = "0.1.0" }
+grass_app       = { path = "crates/grass_app",       version = "0.1.0" }
+grass_io        = { path = "crates/grass_io",        version = "0.1.0" }
+grass_mpi       = { path = "crates/grass_mpi",       version = "0.1.0", default-features = false }
+grass_derive    = { path = "crates/grass_derive",    version = "0.1.0" }
+grass_multi     = { path = "crates/grass_multi",     version = "0.1.0" }
+grass_precice   = { path = "crates/grass_precice",   version = "0.1.0" }
+oscillator_demo = { path = "crates/oscillator_demo", version = "0.1.0" }
+
+[features]
+default = []
+# Enables the MPI two-binary example (`explicit_mpi_a` / `_b`).
+mpi = ["grass_multi/mpi", "dep:grass_mpi", "grass_mpi/mpi_backend"]
+
+[dependencies]
+grass_app       = { workspace = true }
+grass_io        = { workspace = true }
+grass_multi     = { workspace = true }
+grass_mpi       = { workspace = true, optional = true }
+grass_scheduler = { workspace = true }
+oscillator_demo = { workspace = true }
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+
+# ─── Examples ──────────────────────────────────────────────────────────────
+#
+# `single_oscillator` is the no-coupling intro: one oscillator running under
+# a plain grass App. The rest are coupled-oscillator scenarios built directly
+# on grass_multi's Tier-0 primitives — each parent App registers its sub-Apps
+# with `add_subapp` / `add_remote_subapp`, registers Tier-0 systems for ticks
+# and couplers, and sets a `Schedule` by hand.
+
+[[example]]
+name = "single_oscillator"
+path = "examples/coupling/single_oscillator/main.rs"
+
+[[example]]
+name = "explicit"
+path = "examples/coupling/explicit/main.rs"
+
+[[example]]
+name = "explicit_mpi_a"
+path = "examples/coupling/explicit_mpi/a.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "explicit_mpi_b"
+path = "examples/coupling/explicit_mpi/b.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "implicit"
+path = "examples/coupling/implicit/main.rs"
+
+[[example]]
+name = "adaptive"
+path = "examples/coupling/adaptive/main.rs"
+
+[[example]]
+name = "io"
+path = "examples/io/main.rs"
+
+[[example]]
+name = "io_coupled"
+path = "examples/io_coupled/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

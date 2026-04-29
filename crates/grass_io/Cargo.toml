@@ -1,0 +1,17 @@
+[package]
+name = "grass_io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "TOML config loading + simulation observability (clock, thermo, dump) for the grass simulation framework"
+keywords = ["simulation", "io", "toml", "logging"]
+categories = ["simulation"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_multi = { workspace = true }
+grass_scheduler = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

@@ -1,0 +1,25 @@
+# explicit — explicit/CSS coupling between two damped oscillators.
+# Each sub-App reads its [<name>.oscillator] slice via Config::for_subapp.
+
+[run]
+steps = 200
+
+[a.oscillator]
+x0 = 1.0
+v0 = 0.0
+other_x0 = -0.3
+k_self = 1.0
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3
+
+[b.oscillator]
+x0 = -0.3
+v0 = 0.0
+other_x0 = 1.0
+k_self = 1.5
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3

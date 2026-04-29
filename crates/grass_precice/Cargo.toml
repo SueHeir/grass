@@ -1,0 +1,20 @@
+[package]
+name = "grass_precice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "preCICE integration for the grass simulation framework — plugin wrapper around precice::Participant"
+keywords = ["precice", "fsi", "coupling", "multiphysics", "simulation"]
+categories = ["simulation"]
+
+[features]
+# Off by default so `cargo build --workspace` works on machines without
+# libprecice.so installed. Enable when you have preCICE C++ available.
+default = []
+precice = ["dep:precice"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_scheduler = { workspace = true }
+precice = { version = "3.4", optional = true }

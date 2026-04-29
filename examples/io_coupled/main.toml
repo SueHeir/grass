@@ -1,0 +1,54 @@
+# Coupled-oscillator demo driven by ONE main TOML file.
+#
+# Two damped harmonic oscillators connected by an interface spring.
+# Sub-App "a" gets the [a.*] sections; sub-App "b" gets the [b.*]
+# sections. Parent App owns clock / term_out / dump.
+#
+# Try:
+#   cargo run --example io_coupled -- examples/io_coupled/main.toml
+#   cargo run --example io_coupled -- --generate-config
+
+[output]
+dir = "examples/io_coupled/out"
+
+[run]
+steps = 200
+
+# ─── Parent-level observability ────────────────────────────────────────────
+
+[clock]
+start_step = 0
+start_time = 0.0
+
+[term_out]
+every = 20
+columns = ["step", "time", "x_a", "v_a", "x_b", "v_b"]
+width = 14
+
+[dump]
+interval = 50
+path_template = "frame_{step:06}.json"
+
+# ─── Sub-App "a" — namespace-prefixed sections become the dem app's TOML ───
+
+[a.oscillator]
+x0 = 1.0
+v0 = 0.0
+other_x0 = -0.3
+k_self = 1.0
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3
+
+# ─── Sub-App "b" ───────────────────────────────────────────────────────────
+
+[b.oscillator]
+x0 = -0.3
+v0 = 0.0
+other_x0 = 1.0
+k_self = 1.5
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3

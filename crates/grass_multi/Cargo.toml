@@ -1,0 +1,22 @@
+[package]
+name = "grass_multi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-physics orchestrator for the grass simulation framework: trait-based Physics + Coupler + CouplingStrategy for in-process and (eventually) multi-process coupling"
+keywords = ["multiphysics", "coupling", "simulation", "scheduler"]
+categories = ["simulation"]
+
+[features]
+default = []
+# Enables the MPI inter-process Transport (`MpiInterCommTransport`). Off by
+# default so workspaces without libmpi installed can still build grass_multi.
+mpi = ["dep:grass_mpi", "grass_mpi/mpi_backend", "dep:mpi"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_derive = { workspace = true }
+grass_scheduler = { workspace = true }
+grass_mpi = { workspace = true, optional = true }
+mpi = { version = "0.8", optional = true }

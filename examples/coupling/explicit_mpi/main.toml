@@ -1,0 +1,33 @@
+# explicit_mpi — explicit/CSS coupling across two MPI binaries.
+#
+# Both binaries (explicit_mpi_a / _b) load this same TOML.  Each reads
+# its own [<name>.oscillator] slice for the locally-owned oscillator;
+# the remote mirror needs no config — it just send/recvs OscState bytes.
+#
+# Launch:
+#   cargo build --features mpi --example explicit_mpi_a --example explicit_mpi_b
+#   mpirun -np 1 ./target/debug/examples/explicit_mpi_a examples/coupling/explicit_mpi/main.toml \
+#        : -np 1 ./target/debug/examples/explicit_mpi_b examples/coupling/explicit_mpi/main.toml
+
+[run]
+steps = 200
+
+[a.oscillator]
+x0 = 1.0
+v0 = 0.0
+other_x0 = -0.3
+k_self = 1.0
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3
+
+[b.oscillator]
+x0 = -0.3
+v0 = 0.0
+other_x0 = 1.0
+k_self = 1.5
+gamma = 0.05
+k_couple = 50.0
+mass = 1.0
+dt = 5.0e-3

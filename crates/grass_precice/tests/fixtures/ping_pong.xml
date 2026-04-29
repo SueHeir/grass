@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<precice-configuration>
+  <log enabled="false"/>
+
+  <data:scalar name="ValueAB"/>
+  <data:scalar name="ValueBA"/>
+
+  <mesh name="MeshA" dimensions="3">
+    <use-data name="ValueAB"/>
+    <use-data name="ValueBA"/>
+  </mesh>
+
+  <mesh name="MeshB" dimensions="3">
+    <use-data name="ValueAB"/>
+    <use-data name="ValueBA"/>
+  </mesh>
+
+  <participant name="A">
+    <provide-mesh name="MeshA"/>
+    <receive-mesh name="MeshB" from="B"/>
+    <write-data name="ValueAB" mesh="MeshA"/>
+    <read-data  name="ValueBA" mesh="MeshA"/>
+    <mapping:nearest-neighbor direction="read" from="MeshB" to="MeshA"
+        constraint="consistent"/>
+  </participant>
+
+  <participant name="B">
+    <provide-mesh name="MeshB"/>
+    <receive-mesh name="MeshA" from="A"/>
+    <write-data name="ValueBA" mesh="MeshB"/>
+    <read-data  name="ValueAB" mesh="MeshB"/>
+    <mapping:nearest-neighbor direction="read" from="MeshA" to="MeshB"
+        constraint="consistent"/>
+  </participant>
+
+  <m2n:sockets acceptor="A" connector="B" exchange-directory="."/>
+
+  <coupling-scheme:serial-explicit>
+    <participants first="A" second="B"/>
+    <max-time-windows value="3"/>
+    <time-window-size value="1.0"/>
+    <exchange data="ValueAB" mesh="MeshA" from="A" to="B"/>
+    <exchange data="ValueBA" mesh="MeshB" from="B" to="A"/>
+  </coupling-scheme:serial-explicit>
+</precice-configuration>

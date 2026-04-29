@@ -1,0 +1,13 @@
+[package]
+name = "grass_scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dependency-injection scheduler with typed resources, schedule sets, ordering, run conditions, and states"
+readme = "README.md"
+keywords = ["scheduler", "dependency-injection", "simulation"]
+categories = ["simulation"]
+
+[dependencies]
+grass_derive = { workspace = true }
