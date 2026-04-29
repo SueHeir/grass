@@ -17,8 +17,8 @@
 //!   - [`Physics`] trait + [`AppPhysics`] adapter (local sub-App) +
 //!     [`RemoteMirrorPhysics`] (cross-process mirror) so MPI mirrors slot
 //!     into the same `SubApps` machinery as local sub-Apps
-//!   - [`Wire`] / [`Transport`] / [`MpiInterCommTransport`] for cross-process
-//!     coupling
+//!   - [`Wire`] / [`Transport`] / `MpiInterCommTransport` (behind the
+//!     `mpi` feature) for cross-process coupling
 //!   - [`OuterIterStopPlugin`] for fixed-iter termination
 //!   - [`snapshot_subapp_resource`] / [`restore_subapp_resource`] for opt-in
 //!     reversibility (Picard / adaptive retries)

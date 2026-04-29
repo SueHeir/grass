@@ -1,10 +1,10 @@
 //! # grass_precice — preCICE integration for the grass simulation framework
 //!
 //! Wraps the [`precice`](https://docs.rs/precice) Rust bindings as a single
-//! plugin that registers a [`PreciceParticipant`] resource on a normal
+//! plugin that registers a `PreciceParticipant` resource on a normal
 //! [`grass_app::App`] and slots three systems —
-//! [`system_precice_initialize`], [`system_precice_advance`],
-//! [`system_precice_check_done`] — into the schedule, so each iter
+//! `system_precice_initialize`, `system_precice_advance`,
+//! `system_precice_check_done` — into the schedule, so each iter
 //! automatically does `Write → Advance → Read` and the App's "done" signal
 //! is `precice.is_coupling_ongoing()`.
 //!
