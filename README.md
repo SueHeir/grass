@@ -66,17 +66,16 @@ cargo run --example io_coupled -- examples/io_coupled/main.toml
 ## Origin
 
 The core App + scheduler crates were extracted from
-[MDDEM](https://github.com/elizabeth-suehr/MDDEM); they were always
-domain-agnostic
+[MDDEM](https://github.com/SueHeir/MDDEM);
 The crates here are consumed by:
 
-- [**MDDEM**](https://github.com/elizabeth-suehr/MDDEM) — discrete
+- [**MDDEM**](https://github.com/SueHeir/MDDEM) — discrete
   element method (granular contact, parallel bonds, walls, thermal,
   clumps). Uses `grass_app` + `grass_scheduler` as its plugin substrate.
-- [**toy-cfd**](https://github.com/elizabeth-suehr/toy-cfd) — RK3 +
+- [**toy-cfd**](https://github.com/SueHeir/toy-cfd) — RK3 +
   CFL compressible CFD with cfd_state / cfd_eos / cfd_grid / cfd_solver
   / cfd_output crates. Same substrate.
-- [**toy-cfd-mddem**](https://github.com/elizabeth-suehr/toy-cfd-mddem)
+- [**toy-cfd-mddem**](https://github.com/SueHeir/toy-cfd-mddem)
   — DEM↔CFD fluid–solid coupling examples (drag, immersed boundary,
   ghost-cell IBM). Uses `grass_multi`'s primitives to compose
   the two codes above into a single coupled simulation.
