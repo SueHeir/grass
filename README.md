@@ -16,12 +16,12 @@ This is a pure library workspace (no examples).
 
 | crate | role |
 |---|---|
-| [`grass_app`](crates/grass_app/) | `App` / `Plugin` / `PluginGroup` — top-level container and lifecycle |
-| [`grass_scheduler`](crates/grass_scheduler/) | typed-resource scheduler; `Schedule { Phase, Sequence, Loop, Branch }` tree; run conditions; states and stages |
-| [`grass_derive`](crates/grass_derive/) | `#[derive(ScheduleSet)]`, `#[derive(StageEnum)]`, `#[derive(Namespace)]` |
-| [`grass_multi`](crates/grass_multi/) | cross-namespace coupling — `MultiRes<T, NS>` / `MultiResMut<T, NS>` SystemParams, `add_subapp` / `add_remote_subapp`, `Wire` / `Transport` / `MpiInterCommTransport` |
-| [`grass_io`](crates/grass_io/) | optional companion: TOML config loading (`Config` + `InputPlugin`) plus `SimClock`, `RunPlugin`, `TermOut`, `Dump` plugins |
-| [`grass_mpi`](crates/grass_mpi/) | thin MPI abstraction (`CommBackend`); powers `MpiInterCommTransport` |
+| [`grass_app`](crates/grass_app/README.md) | `App` / `Plugin` / `PluginGroup` — top-level container and lifecycle |
+| [`grass_scheduler`](crates/grass_scheduler/README.md) | typed-resource scheduler; `Schedule { Phase, Sequence, Loop, Branch }` tree; run conditions; states and stages |
+| [`grass_derive`](crates/grass_derive/README.md) | `#[derive(ScheduleSet)]`, `#[derive(StageEnum)]`, `#[derive(Namespace)]` |
+| [`grass_multi`](crates/grass_multi/README.md) | cross-namespace coupling — `MultiRes<T, NS>` / `MultiResMut<T, NS>` SystemParams, `add_subapp` / `add_remote_subapp`, `Wire` / `Transport` / `MpiInterCommTransport` |
+| [`grass_io`](crates/grass_io/README.md) | optional companion: TOML config loading (`Config` + `InputPlugin`) plus `SimClock`, `RunPlugin`, `TermOut`, `Dump` plugins |
+| [`grass_mpi`](crates/grass_mpi/README.md) | thin MPI abstraction (`CommBackend`); powers `MpiInterCommTransport` |
 
 ## Architecture
 
