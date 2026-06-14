@@ -1,43 +1,37 @@
 # grass_io
 
-Optional companion crate to [`grass_app`](../grass_app/) — TOML config
-loading + the three observability plugins every real simulation wants
-but the framework core shouldn't be required to pull in.
+TOML config loading plus simulation observability (clock, run loop, terminal log, file dumps) for the [`grass`](../../) simulation framework.
 
-Apps that don't want any of this don't depend on `grass_io` at all.
-Apps that want to swap one piece (roll their own thermo, write
-checkpoints in a custom format) skip that plugin and add their own —
-every piece here is a plugin, not a hardwired assumption.
+Optional companion to [`grass_app`](../grass_app/). It provides the things every real simulation wants but the framework core shouldn't be forced to pull in. Apps that want none of it don't depend on `grass_io`; apps that want to swap one piece (roll their own thermo, write checkpoints in a custom format) skip that plugin and add their own. Every piece here is a plugin, not a hardwired assumption.
 
-## What's in here
+## What it does
 
-| item | TOML section | what it does |
+`InputPlugin` parses the CLI, reads the TOML file at `args[1]`, and installs a `Config` resource holding the parsed table. Each plugin's `build()` then calls `Config::load::<MyConfig>(app, "section")` to deserialize its own slice and register it as a resource. Because every plugin here implements `Plugin::default_config`, `--generate-config` assembles a complete starter TOML from all registered plugins.
+
+The remaining plugins gate periodic work on a shared step/time clock.
+
+## Key types and plugins
+
+| item | TOML | what it does |
 |---|---|---|
-| [`Config`](src/config.rs) + [`InputPlugin`](src/config.rs) | reads `args[1]` | `InputPlugin` parses CLI, loads the input TOML, installs a `Config` resource. Each plugin's `build()` calls `Config::load::<MyConfig>(app, "key")` to seed its own typed config. |
-| [`SimClockPlugin`](src/clock.rs) + [`SimClock`](src/clock.rs) | `[clock]` | `step` / `time` accumulator. `every_n_steps(n)` is a `.run_if(...)` predicate that gates periodic work (term_out prints, dump writes). |
-| [`RunPlugin`](src/run.rs) + [`RunSchedule`](src/run.rs) | `[run]` | reads `[run] steps`, ends the App at that count. Auto-installs `SimClockPlugin` and auto-registers `advance_step` if not already present. Namespaced at `RUN_NAMESPACE = 1000` so non-`Loop` schedules don't need explicit `set_schedule`. |
-| [`TermOutPlugin`](src/term_out.rs) + [`TermOut`](src/term_out.rs) | `[term_out]` | LAMMPS-style aligned terminal log. User systems push named values via `TermOut::set(name, value)`; plugin prints aligned columns at the configured cadence. |
-| [`DumpPlugin<F>`](src/dump.rs) + [`DumpBuffer`](src/dump.rs) | `[dump]` | per-frame file output. Generic over [`DumpFormat`](src/dump.rs); ships [`RawFrameWriter`](src/dump.rs) (writes bytes verbatim — JSON / CSV / binary all work). User fills `DumpBuffer.payload`; plugin handles path templating + file IO. |
-| [`MultiIoExt::add_subapp_with_config`](src/config.rs) | (sub-App registration) | extension method on `App` that bridges `Config::for_subapp` + `add_subapp` — slices the parent's main TOML for a named sub-App, pre-seeds the slice as the sub-App's local `Config`, runs the user closure to add plugins, registers the sub-App. |
+| `Config` + `InputPlugin` | `args[1]` | `InputPlugin` parses CLI, loads the input TOML, installs a `Config` (and `Input`) resource. `Config::load`/`section`/`parse_array` deserialize sections, returning `T::default()` for missing ones. |
+| `SimClock` + `SimClockPlugin` | `[clock]` | `step` / `time` accumulator. Install the resource (optionally seeded with `start_step`/`start_time`); add `advance_step` in whichever phase should tick. `every_n_steps(n)` is a `.run_if(...)` predicate gating periodic work. |
+| `RunPlugin` + `RunConfig` + `RunSchedule` | `[run]` / `[[run]]` | drives one or more run stages (single table or array of tables), each with its own `steps`, optional `name`/`dt`/`skip`/`save_at_end`, and a flattened `overrides` catch-all merged into `StageOverrides`. Auto-installs `SimClockPlugin` and `advance_step`; ends the App after the final stage. Namespaced at `RUN_NAMESPACE = 1000`. |
+| `TermOutPlugin` + `TermOut` + `TermOutSchedule` | `[term_out]` | LAMMPS-style aligned terminal log. User systems push named values via `TermOut::set` in `TermOutSchedule::Compute`; `step`/`time` are auto-populated. Prints every `every` steps (`0` disables). |
+| `DumpPlugin<F>` + `DumpBuffer` + `DumpSchedule` | `[dump]` | periodic per-frame file output. Generic over `DumpFormat`; ships `RawFrameWriter` (writes bytes verbatim). User fills `DumpBuffer.payload` in `DumpSchedule::Build`; plugin templates the path (`{step}`/`{step:0N}`/`{time}`) and writes every `interval` steps (`0` disables). |
+| `MultiIoExt::add_subapp_with_config` | sub-App registration | extension method on `App` that slices the parent TOML for a named sub-App, pre-seeds the slice as that sub-App's local `Config`, runs the user closure to add plugins, and registers the sub-App via `grass_multi`. |
 
 ## CLI surface (via `InputPlugin`)
 
 ```
 myapp <config.toml>          # run
-myapp --generate-config      # print every plugin's default_config snippet
-                             # (assembled into a complete starter TOML) and exit
+myapp --generate-config      # print every plugin's default_config snippet,
+                             # assembled into a complete starter TOML, then exit
 ```
 
-`--generate-config` works because every plugin in this crate implements
-`Plugin::default_config`. The same pattern applies to user plugins — emit
-your snippet, get free `--generate-config` support.
+## Usage — minimum
 
-## Example shape — minimum
-
-The simple case (no observability) is three plugins plus `start`.
-`RunPlugin` auto-installs `SimClockPlugin`, auto-registers
-`advance_step`, and is namespaced high so you don't need
-`set_schedule`:
+The simple case (no observability) is three plugins plus `start`. `RunPlugin` auto-installs `SimClockPlugin`, auto-registers `advance_step`, and is namespaced high so you don't need `set_schedule`:
 
 ```rust
 use grass_app::prelude::*;
@@ -50,10 +44,9 @@ app.add_plugins(RunPlugin);
 app.start();
 ```
 
-## Example shape — with observability
+## Usage — with observability
 
-Add `TermOutPlugin` / `DumpPlugin` for periodic terminal output and
-file dumps, plus user systems that push columns / payload bytes:
+Add `TermOutPlugin` / `DumpPlugin` for periodic terminal output and file dumps, plus user systems that push columns / payload bytes:
 
 ```rust
 use grass_app::prelude::*;
@@ -68,7 +61,6 @@ app.add_plugins(MyPhysicsPlugin);
 app.add_plugins(TermOutPlugin);
 app.add_plugins(DumpPlugin::default());
 
-// User systems push columns into TermOut and bytes into DumpBuffer.
 fn set_columns(state: Res<MyState>, mut term: ResMut<TermOut>) {
     term.set("x", state.x);
     term.set("v", state.v);
@@ -79,26 +71,18 @@ fn build_dump(state: Res<MyState>, mut buf: ResMut<DumpBuffer>) {
 app.add_update_system(set_columns, TermOutSchedule::Compute);
 app.add_update_system(build_dump.run_if(every_n_steps(50)), DumpSchedule::Build);
 
-// IMPORTANT: register `advance_step` BEFORE adding `RunPlugin` if you
-// want it in a specific phase (here so `TermOut` reads the just-
-// completed `step`). The `RunPlugin` build() guards via
-// `App::has_update_system` and skips its auto-add when it sees the
-// existing registration.
+// Register advance_step BEFORE RunPlugin if you want it in a specific phase
+// (e.g. so TermOut reads the just-completed step). RunPlugin's build() guards
+// via App::has_update_system and skips its auto-add when it sees the registration.
 app.add_update_system(advance_step, MyPhysicsPhase::Step);
 
 app.add_plugins(RunPlugin);
 app.start();
 ```
 
-A worked end-to-end demo with a `main.toml` driving all five plugins
-lives at [`examples/io/`](../../examples/io/).
+## Conditional registration (the opt-in pattern)
 
-## Conditional registration (the "fix gravity" pattern)
-
-When a plugin should only register systems if the user opted in via
-TOML — DIRT-style `[gravity]` body force — the plugin's `build()`
-checks whether its config section has non-default values and
-short-circuits otherwise:
+A plugin that should register systems only when the user opted in via TOML checks whether its config section is non-default and short-circuits otherwise:
 
 ```rust
 impl Plugin for GravityPlugin {
@@ -112,28 +96,17 @@ impl Plugin for GravityPlugin {
 }
 ```
 
-`Config::section` and `Config::load` both return `T::default()` for
-missing sections, so this pattern is one `if`-statement away.
+`Config::section` and `Config::load` both return `T::default()` for missing sections, so this is one `if` away.
 
 ## Multi-App config
 
-Coupled simulations need each sub-App seeded from its own slice of the
-main TOML. [`Config::for_subapp`](src/config.rs) handles two
-compositional models, optionally combined:
+Coupled simulations need each sub-App seeded from its own slice of the main TOML. `Config::for_subapp` handles two compositional models, optionally combined:
 
-- **Namespace prefix.** `[a.oscillator] dt = 1e-3` in main.toml shows
-  up as `[oscillator] dt = 1e-3` to sub-App `a`'s plugins. The plugin
-  code never knows the prefix existed.
-- **File reference.** `[subapps.a] config_path = "a.toml"` in main.toml
-  loads `a.toml` (relative to main.toml's directory) as sub-App `a`'s
-  base Config. The same file works standalone if you point a single-App
-  binary at it.
-- **Combined.** `[subapps.a] config_path = "..."` for the bulk plus
-  inline `[a.section] knob = ...` overrides deep-merged on top. Useful
-  for per-run tweaks without editing the per-domain file.
+- **Namespace prefix.** `[a.oscillator] dt = 1e-3` in main.toml shows up as `[oscillator] dt = 1e-3` to sub-App `a`'s plugins.
+- **File reference.** `[subapps.a] config_path = "a.toml"` loads `a.toml` (relative to main.toml's directory) as sub-App `a`'s base config. The same file works standalone.
+- **Combined.** A `config_path` base with inline `[a.section]` overrides deep-merged on top.
 
-The `add_subapp_with_config` extension method bundles the slice-and-
-seed pattern into one call:
+`add_subapp_with_config` bundles the slice-and-seed pattern into one call:
 
 ```rust
 parent.add_subapp_with_config("dem", |app| {
@@ -144,20 +117,14 @@ parent.add_subapp_with_config("cfd", |app| {
 });
 ```
 
-The closure receives a fresh sub-App with its `Config` already pre-
-seeded from the relevant slice (`[dem.*]` / `[cfd.*]` or whatever the
-`config_path` reference loaded). Anything the closure registers —
-plugins, resources, systems — runs against that pre-seeded `Config`.
+The closure receives a fresh sub-App with its `Config` (and `Input`) already pre-seeded from the relevant slice. Anything the closure registers runs against that pre-seeded config.
 
 ## See also
 
-- [`grass_app`](../grass_app/) — the App/Plugin layer that hosts the
-  resources and runs the schedule.
-- [`grass_scheduler`](../grass_scheduler/) — the underlying scheduler;
-  TermOut and Dump declare phase enums (`TermOutSchedule`,
-  `DumpSchedule`) so user systems can wire up to them.
-- [`grass_multi`](../grass_multi/) — sub-App registration and
-  cross-namespace SystemParams (`MultiRes<T, NS>`) used to read sub-App
-  state from parent-level TermOut / Dump systems.
-- [`examples/io/`](../../examples/io/) — single-oscillator demo
-  exercising every plugin.
+- [`grass_app`](../grass_app/) — the App/Plugin layer that hosts the resources and runs the schedule.
+- [`grass_scheduler`](../grass_scheduler/) — the underlying scheduler; `RunSchedule`, `TermOutSchedule`, and `DumpSchedule` are phase enums user systems wire up to.
+- [`grass_multi`](../grass_multi/) — sub-App registration and cross-namespace SystemParams used to read sub-App state from parent-level term_out / dump systems.
+
+## License
+
+MIT OR Apache-2.0

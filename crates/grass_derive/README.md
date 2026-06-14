@@ -1,24 +1,31 @@
 # grass_derive
 
-Proc-macro crate for the GRASS framework. Three derives:
+Proc-macro derives for the GRASS framework.
+
+A `proc-macro = true` crate providing three enum/unit-struct derives that
+implement traits defined elsewhere in the workspace. The target trait paths
+(`grass_scheduler::*`, `grass_multi::*`) are referenced literally, so those
+crates must be in your dependency graph when you use the derives.
+
+## Derives
 
 | derive | trait | what it does |
 |---|---|---|
-| `#[derive(ScheduleSet)]` | [`grass_scheduler::ScheduleSet`](../grass_scheduler/src/lib.rs) | for enums, assigns each variant a sequential index by declaration order. Variants used as schedule phases run in that order. Also works on unit structs (single-phase). |
-| `#[derive(StageEnum)]` | `grass_scheduler::StageName` | for enums whose variants carry `#[stage("name")]` attributes. Binds multi-stage `[[run]]` workflows in TOML to a Rust enum. |
-| `#[derive(Namespace)]` | [`grass_multi::Namespace`](../grass_multi/src/multi.rs) | for unit structs; sets `NAME` to the struct's name. Use [`grass_multi::namespace!`](../grass_multi/src/multi.rs) when you want a different namespace string than the struct name. |
+| `#[derive(ScheduleSet)]` | [`grass_scheduler::ScheduleSet`](../grass_scheduler/) | For an enum, assigns each variant a sequential index in declaration order (0, 1, 2, …) and a `name()` from the variant identifier. Variants used as schedule phases run in that order. Also accepts a unit struct (`struct Foo;`) as a single-phase marker (`to_index() = 0`). |
+| `#[derive(StageEnum)]` | [`grass_scheduler::StageName`](../grass_scheduler/) | For an enum whose variants each carry a `#[stage("name")]` attribute. Binds multi-stage `[[run]]` workflows in TOML to a Rust enum. Compile error if a variant lacks `#[stage(...)]` or two stage names collide. |
+| `#[derive(Namespace)]` | [`grass_multi::Namespace`](../grass_multi/) | For a unit struct, sets `NAME` to the struct's identifier. Use [`grass_multi::namespace!`](../grass_multi/) when you want a namespace string different from the struct name. |
 
-## Examples
+All three reject inputs they can't handle (e.g. `ScheduleSet` rejects tuple/named
+structs and unions; `Namespace` accepts unit structs only) with a clear
+compile-time error.
+
+## Usage
 
 ```rust
-use grass_derive::ScheduleSet;
+use grass_derive::{ScheduleSet, StageEnum, Namespace};
 
 #[derive(Clone, Copy, Debug, PartialEq, ScheduleSet)]
 enum CfdSchedule { Setup, ComputeFluxes, Integrate, PostStep }
-```
-
-```rust
-use grass_derive::StageEnum;
 
 #[derive(Clone, PartialEq, Default, StageEnum)]
 enum Phase {
@@ -26,19 +33,16 @@ enum Phase {
     #[stage("settle")]   Settle,
     #[stage("compress")] Compress,
 }
-```
-
-```rust
-use grass_derive::Namespace;
 
 #[derive(Namespace)]
-pub struct A;  // NAME = "A"
-
-// or with a custom string:
-grass_multi::namespace!(pub B = "b");
+pub struct Cfd; // Namespace::NAME = "Cfd"
 ```
 
 ## See also
 
-- [`grass_scheduler`](../grass_scheduler/) — defines the `ScheduleSet` trait.
-- [`grass_multi`](../grass_multi/) — defines the `Namespace` trait and the `namespace!` macro.
+- [`grass_scheduler`](../grass_scheduler/) — defines `ScheduleSet` and `StageName`.
+- [`grass_multi`](../grass_multi/) — defines `Namespace` and the `namespace!` macro.
+
+## License
+
+MIT OR Apache-2.0

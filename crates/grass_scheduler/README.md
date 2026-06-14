@@ -4,18 +4,28 @@ A lightweight, Bevy-inspired dependency-injection scheduler for explicit, time-s
 
 ## What It Does
 
-Systems are functions that declare the resources they need as parameters. The scheduler automatically injects typed resources, manages execution order across user-defined lifecycle phases (`ScheduleSet`), and supports conditional execution and simulation states.
+Systems are plain functions whose parameters declare the resources they need. The scheduler resolves typed resources at startup and executes systems in user-defined phase order each timestep. It supports `before`/`after` ordering, run conditions, simulation states and stages, composite `SystemGroup`s, and an optional `Schedule` tree for hierarchical loop/branch control.
+
+This crate is part of the GRASS framework; it knows nothing about particles or physics.
 
 ## Key Types
 
-- **`ScheduleSet`** — Trait for defining custom execution phases. Implement on your own enum or use `#[derive(ScheduleSet)]`.
-- **`Res<T>` / `ResMut<T>`** — Resource access (read-only / mutable). The scheduler validates that all required resources are registered before execution starts.
-- **`Local<T>`** — Per-system persistent state, unshared with other systems.
-- **`Option<Res<T>>`** — Optional resources; systems are not skipped if missing.
+| Item | Purpose |
+| --- | --- |
+| `Scheduler` | Owns resources and registered systems; runs them each timestep. |
+| `ScheduleSet` | Trait for user-defined execution phases. Implement by hand or `#[derive(ScheduleSet)]`. |
+| `Res<T>` / `ResMut<T>` | Read-only / exclusive resource access (validated before run). |
+| `Local<T>` | Per-system persistent state, unshared with other systems. |
+| `Option<Res<T>>` | Optional resource access; the system still runs if the resource is missing. |
+| `SystemExt` | Adds `.run_if()`, `.label()`, `.before()`, `.after()` to systems. |
+| `SystemGroup` | Bundles systems into one composite unit with inner phase ordering and optional looping. |
+| `Schedule` / `ScheduleBuilder` | Tree of `Phase` / `Sequence` / `Loop` / `Branch` nodes for hierarchical run-loop control. |
+| `Snapshot<T>` | Single-slot save buffer for per-resource opt-in reversibility. |
+| `CurrentState<S>` / `NextState<S>` | State-machine resources, with `in_state()` / `on_enter_state()` run conditions. |
 
 ## Ordering & Conditions
 
-Within a schedule phase, systems are topologically sorted using `.before()` / `.after()` constraints. Run conditions gate execution:
+Within a phase, systems are topologically sorted by `.before()` / `.after()` constraints. Run conditions gate execution:
 
 ```rust
 struct Timestep { current: u64 }
@@ -24,156 +34,95 @@ fn every_n_steps(n: u64) -> impl Fn(Res<Timestep>) -> bool {
     move |ts: Res<Timestep>| ts.current % n == 0
 }
 
-app.add_update_system(
-    dump_particles.run_if(every_n_steps(1_000)),
-    VerletSchedule::PostFinalIntegration,
+scheduler.add_update_system(
+    dump_state.run_if(every_n_steps(1_000)),
+    Phase::PostStep,
 );
 ```
 
 ## Quick Example
 
-A minimal velocity-Verlet DEM schedule:
-
 ```rust
 use grass_scheduler::prelude::*;
 
 #[derive(Clone, Copy, Debug, ScheduleSet)]
-enum VerletSchedule {
-    InitialIntegration,
-    Exchange,
-    Neighbor,
+enum Phase {
+    Integrate,
     Force,
-    FinalIntegration,
-    PostFinalIntegration,
+    Finalize,
 }
 
-struct Particles { pos: Vec<[f64; 3]>, vel: Vec<[f64; 3]>, force: Vec<[f64; 3]> }
+struct State { pos: Vec<[f64; 3]>, vel: Vec<[f64; 3]>, force: Vec<[f64; 3]> }
 
-fn initial_integrate(mut p: ResMut<Particles>) {
-    // First half-step: update velocities and positions
-}
-
-fn compute_hertz_forces(mut p: ResMut<Particles>) {
-    // Hertz-Mindlin contact force loop
-}
-
-fn final_integrate(mut p: ResMut<Particles>) {
-    // Second half-step: update velocities
-}
+fn integrate(mut s: ResMut<State>) { /* first half-step */ }
+fn compute_forces(mut s: ResMut<State>) { /* force loop */ }
+fn finalize(mut s: ResMut<State>) { /* second half-step */ }
 
 let mut scheduler = Scheduler::default();
-scheduler.add_resource(Particles { pos: vec![], vel: vec![], force: vec![] });
-scheduler.add_update_system(initial_integrate, VerletSchedule::InitialIntegration);
-scheduler.add_update_system(compute_hertz_forces, VerletSchedule::Force);
-scheduler.add_update_system(final_integrate, VerletSchedule::FinalIntegration);
+scheduler.add_resource(State { pos: vec![], vel: vec![], force: vec![] });
+scheduler.add_update_system(integrate, Phase::Integrate);
+scheduler.add_update_system(compute_forces, Phase::Force);
+scheduler.add_update_system(finalize, Phase::Finalize);
+
+scheduler.run(); // executes phases in order each timestep
 ```
 
 ## System Groups
 
-`SystemGroup` bundles multiple systems into a single composite unit with its own
-internal phase ordering and optional looping. 
-
-### Defining inner phases
-
-Inner phases use the same `ScheduleSet` trait (or `#[derive(ScheduleSet)]`)
-as top-level phases:
+`SystemGroup` bundles multiple systems into a single composite unit with its own inner phase ordering and optional looping. Because it implements `IntoSystem`, it gets the same API as ordinary systems — `.run_if()`, `.label()`, `.before()`, `.after()`.
 
 ```rust
-use grass_scheduler::prelude::*;
-
 #[derive(Clone, Copy, Debug, ScheduleSet)]
-enum RelaxPhase {
-    ComputeForces,
-    MoveParticles,
-    CheckOverlap,
-}
+enum RelaxPhase { ComputeForces, MoveParticles, CheckOverlap }
 
-struct Overlap(f64);
-
-fn compute_repulsion(mut p: ResMut<Particles>) {
-    // Compute soft repulsive forces to resolve overlaps
-}
-
-fn move_particles(mut p: ResMut<Particles>) {
-    // Damped displacement toward equilibrium
-}
-
-fn measure_overlap(p: Res<Particles>, mut ovlp: ResMut<Overlap>) {
-    // Find maximum particle-particle overlap ratio
-}
-
-fn has_overlap(ovlp: Res<Overlap>) -> bool {
-    ovlp.0 > 1e-4
-}
-
-// Relax overlaps after insertion — runs as a single system in the outer schedule
-app.add_update_system(
+scheduler.add_update_system(
     SystemGroup::new("overlap_relaxation")
         .add_system(compute_repulsion, RelaxPhase::ComputeForces)
         .add_system(move_particles,    RelaxPhase::MoveParticles)
         .add_system(measure_overlap,   RelaxPhase::CheckOverlap)
         .loop_while(has_overlap, 100),   // iterate until resolved or 100 cap
-    VerletSchedule::PostFinalIntegration,
+    Phase::PostStep,
 );
 ```
 
-Each outer timestep runs the three inner systems in phase order, repeating until
-`has_overlap` returns `false` or the 100-iteration cap is hit.
+Each outer timestep runs the inner systems in phase order, repeating until `has_overlap` returns `false` or the iteration cap is hit. Groups may nest, at a small per-call overhead.
 
-### Nesting groups
+## Schedule Trees
 
-Groups can contain other groups. You should be careful where you do this. System calls have a small amount of overhead.
-
-
-### Composability
-
-Because `SystemGroup` implements `IntoSystem`, it gets the same API
-as ordinary systems — `.run_if()`, `.label()`, `.before()`, `.after()`:
+For schedules with iteration or state-conditional fragments, build a `Schedule` tree and install it with `Scheduler::set_schedule`. Phases compose by `then`; `loop_until` re-executes a body until a condition flips (with `OnMax::AcceptUnconverged` or `OnMax::Panic` on hitting `max_iters`); `branch` provides first-match-wins state-conditional dispatch. `loop_with_rollback` pairs a loop with a rollback fragment (`OnMax::Rollback`) that runs once on non-convergence.
 
 ```rust
-app.add_update_system(
-    SystemGroup::new("overlap_relaxation")
-        .add_system(compute_repulsion, RelaxPhase::ComputeForces)
-        .add_system(move_particles,    RelaxPhase::MoveParticles)
-        .loop_while(has_overlap, 100)
-        .label("relaxation")
-        .after("insert_particles")
-        .run_if(in_stage("settling")),
-    VerletSchedule::PostFinalIntegration,
-);
+use grass_scheduler::{OnMax, Schedule};
+
+let schedule = Schedule::builder()
+    .then::<CouplingPre>()
+    .loop_until(check_converged, 20, OnMax::Panic, |body| {
+        body.then::<DemTick>()
+            .then::<CfdTick>()
+            .then::<ResidualUpdate>()
+    })
+    .then::<CouplingPost>()
+    .build();
+
+scheduler.set_schedule(schedule);
 ```
 
-### Timing and visualization
+Schedulers that never call `set_schedule` keep the flat `(namespace, index)` ordering.
 
-Per-system timing is recorded automatically. At the end of a run, DIRT prints
-a sorted breakdown showing where wall-clock time was spent:
+## Reversibility
 
-```
---- Per-system timing (10000 steps) ---
-System                                               Time(s)        %
-----------------------------------------------------------------------
-hertz_mindlin_contact                                  1.2340    45.2%
-build_neighbor_list                                    0.5678    20.8%
-initial_integrate                                      0.2100     7.7%
-final_integrate                                        0.1980     7.3%
-exchange_atoms                                         0.1456     5.3%
-forward_comm_positions                                 0.0987     3.6%
-dump_particles                                         0.0543     2.0%
-----------------------------------------------------------------------
-TOTAL                                                  2.7304   100.0%
-```
+`Snapshot<T>` opts a resource into reversibility. Register `Snapshot::<T>::default()` alongside the resource, then place `snapshot_resource::<T>()` / `restore_resource::<T>()` systems where save/restore points are needed (e.g. a loop accepting a tentative step that may be rolled back). The default helpers require `T: Clone`; for expensive clones, fill the snapshot slot with a custom save/restore pair.
 
-SystemGroups show an indented breakdown of their inner systems:
+## States & Stages
 
-```
-overlap_relaxation                                     0.3210    11.8%
-  ComputeForces: compute_repulsion                     0.1500     5.5%
-  MoveParticles: move_particles                        0.1100     4.0%
-  CheckOverlap: measure_overlap                        0.0610     2.2%
-```
+`CurrentState<S>` / `NextState<S>` drive state-machine simulations; `apply_state_transitions::<S>` applies queued transitions, and `in_state()` / `on_enter_state()` gate systems by state. Named stages (`set_stage_names`) support `in_stage()`, `on_enter_stage()`, `first_stage_only()`, and `check_stage_advance` for multi-stage runs.
 
-Pass `--schedule` to emit a Graphviz DOT file (`schedule.dot`) showing the full
-execution graph. SystemGroups appear as subgraph clusters with phase
-sub-clusters, execution-order edges, and green back-edges for loop conditions.
+## Diagnostics
 
-See inline crate documentation for full details on system states, labels, and run conditions.
+Per-system wall-clock timing is recorded automatically and printed as a sorted breakdown at the end of a run, with `SystemGroup`s shown as indented sub-breakdowns. Call `enable_schedule_print()` to also emit a Graphviz DOT file (`schedule.dot`) of the execution graph, with groups as subgraph clusters and loop back-edges.
+
+See the inline crate documentation for full details on system parameters, labels, and run conditions.
+
+## License
+
+MIT OR Apache-2.0
