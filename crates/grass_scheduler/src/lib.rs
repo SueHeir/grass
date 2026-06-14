@@ -2,7 +2,8 @@
 //!
 //! # Overview
 //!
-//! This crate provides a lightweight, Bevy-inspired scheduler for scientific simulations.
+//! This crate provides a lightweight, Bevy-inspired scheduler for explicit, time-stepping
+//! particle and grid solvers.
 //! Systems are plain functions whose parameters implement [`SystemParam`]. The scheduler
 //! resolves resource indices at startup and executes systems in [`ScheduleSet`] order each
 //! timestep.

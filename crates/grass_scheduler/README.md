@@ -1,6 +1,6 @@
 # grass_scheduler
 
-A lightweight, Bevy-inspired dependency-injection scheduler for scientific simulations.
+A lightweight, Bevy-inspired dependency-injection scheduler for explicit, time-stepping particle and grid solvers.
 
 ## What It Does
 
@@ -145,7 +145,7 @@ app.add_update_system(
 
 ### Timing and visualization
 
-Per-system timing is recorded automatically. At the end of a run, MDDEM prints
+Per-system timing is recorded automatically. At the end of a run, DIRT prints
 a sorted breakdown showing where wall-clock time was spent:
 
 ```

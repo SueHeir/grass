@@ -96,7 +96,7 @@ lives at [`examples/io/`](../../examples/io/).
 ## Conditional registration (the "fix gravity" pattern)
 
 When a plugin should only register systems if the user opted in via
-TOML — MDDEM-style `[gravity]` body force — the plugin's `build()`
+TOML — DIRT-style `[gravity]` body force — the plugin's `build()`
 checks whether its config section has non-default values and
 short-circuits otherwise:
 
@@ -149,13 +149,6 @@ seeded from the relevant slice (`[dem.*]` / `[cfd.*]` or whatever the
 `config_path` reference loaded). Anything the closure registers —
 plugins, resources, systems — runs against that pre-seeded `Config`.
 
-A worked end-to-end demo is at [`examples/io_coupled/`](../../examples/io_coupled/)
-— two oscillators coupled explicitly, every parameter (including
-parent-level `[clock]` / `[term_out]` / `[dump]`) flowing from one
-`main.toml`. Final state matches the hard-coded
-`examples/coupling/explicit` to the bit, confirming the TOML-driven
-path produces the same trajectory.
-
 ## See also
 
 - [`grass_app`](../grass_app/) — the App/Plugin layer that hosts the
@@ -168,5 +161,3 @@ path produces the same trajectory.
   state from parent-level TermOut / Dump systems.
 - [`examples/io/`](../../examples/io/) — single-oscillator demo
   exercising every plugin.
-- [`examples/io_coupled/`](../../examples/io_coupled/) — coupled
-  oscillators driven by one `main.toml` via `Config::for_subapp`.

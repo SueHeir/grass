@@ -1,7 +1,7 @@
 //! Minimal hand-rolled byte serialization for Phase 3 remote sub-Apps.
 //!
 //! The agnostic-coupling design wants to keep coupling crates (e.g.
-//! `mddem_cfd_fsi`) **wire-agnostic** — `SphereSet` is a plain struct with
+//! `dirt_cfd_fsi`) **wire-agnostic** — `SphereSet` is a plain struct with
 //! no `Serialize`/`Deserialize` derive baked in. Wire packing is opted into
 //! per type, in the binary that wires up the remote coupling. That binary
 //! `impl Wire for SphereSet { ... }` once and registers the type via

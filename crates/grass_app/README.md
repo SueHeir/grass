@@ -1,6 +1,7 @@
 # grass_app
 
-Plugin-based application framework on top of [`grass_scheduler`](../grass_scheduler/).
+Plugin-based application framework on top of [`grass_scheduler`](../grass_scheduler/),
+aimed at explicit, time-stepping particle and grid solvers.
 Provides [`App`](src/app.rs) as the top-level container and [`Plugin`](src/plugin.rs)
 as the modular registration unit.
 
@@ -68,5 +69,3 @@ impl PluginGroup for MyCustomPlugins {
   `App` wraps.
 - [`grass_multi`](../grass_multi/) — extension trait `MultiAppExt` adds
   `add_subapp` / `add_remote_subapp` for cross-namespace coupling.
-- [`examples/coupling/single_oscillator/main.rs`](../../examples/coupling/single_oscillator/main.rs)
-  — minimal `App` + `Plugin` use.

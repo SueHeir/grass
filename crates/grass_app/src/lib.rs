@@ -1,4 +1,4 @@
-//! Plugin-based application framework for scientific simulations.
+//! Plugin-based application framework for explicit, time-stepping particle and grid solvers.
 //!
 //! Provides [`App`] as the central container and the [`Plugin`] trait for modular registration
 //! of resources and systems.

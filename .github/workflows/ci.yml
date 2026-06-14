@@ -45,7 +45,7 @@ jobs:
       # run it under mpirun in CI — that requires a working OpenMPI launcher
       # and adds flakiness for little gain over a build check.
       - name: cargo build --features mpi (MPI examples)
-        run: cargo build --features mpi --example explicit_mpi_a --example explicit_mpi_b
+        run: cargo build --features mpi --example explicit_mpmd_mpi_a --example explicit_mpmd_mpi_b
 
       - name: cargo doc (broken intra-doc links = error)
         env:

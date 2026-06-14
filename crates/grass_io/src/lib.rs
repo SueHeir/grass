@@ -5,7 +5,7 @@
 //! pull in:
 //!
 //!   - [`Config`] + [`InputPlugin`] — read a TOML file at startup, seed
-//!     plugin parameters from it. Mirrors MDDEM's `Config::load::<T>(app,
+//!     plugin parameters from it. Mirrors DIRT's `Config::load::<T>(app,
 //!     "section")` convention so plugins port between the two with no
 //!     reshape.
 //!   - (coming) `SimClockPlugin` — `step` / `time` resource that everything

@@ -33,5 +33,5 @@ cargo build --features mpi_backend
 
 - [`grass_multi::MpiInterCommTransport`](../grass_multi/src/transport.rs)
   — uses `get_mpi_world_raw()` to address peers in MPMD launches.
-- [`examples/coupling/explicit_mpi/`](../../examples/coupling/explicit_mpi/)
+- [`examples/coupling/explicit_mpmd_mpi/`](../../examples/coupling/explicit_mpmd_mpi/)
   — two-binary MPI coupling worked example.

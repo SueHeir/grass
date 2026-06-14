@@ -14,7 +14,7 @@
 //! ## Conditional registration
 //!
 //! When a plugin should only register systems if the user opted in via
-//! TOML (e.g. an MDDEM-style `[gravity]` body force), the plugin checks
+//! TOML (e.g. an DIRT-style `[gravity]` body force), the plugin checks
 //! whether its config section exists or has non-default values, and
 //! short-circuits its `build()` if not. The config-reading API supports
 //! this by returning `T::default()` for missing sections.
@@ -323,8 +323,26 @@ impl MultiIoExt for App {
             .unwrap_or_else(|| Config::from_str(""));
         let slice = main_cfg.for_subapp(name, input_dir.as_deref());
 
+        // Seed `Input` on the sub-App so plugins that resolve relative
+        // output paths (DIRT's print/dump systems, `grass_io::DumpPlugin`)
+        // see the slice's `[output] dir`. Without this each example would
+        // need a `seed_subapp_input(app)` helper that re-implemented this
+        // lookup. The build closure can still overwrite the Input
+        // resource if it wants something different.
+        let sub_output_dir = slice
+            .table
+            .get("output")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("dir"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
         let mut sub = App::new();
         sub.add_resource(slice);
+        sub.add_resource(Input {
+            filename: String::new(),
+            output_dir: sub_output_dir,
+        });
         build(&mut sub);
 
         use grass_multi::MultiAppExt;
