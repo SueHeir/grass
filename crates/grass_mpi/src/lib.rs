@@ -34,6 +34,12 @@ pub trait CommBackend: Send + Sync + 'static {
     fn recv_f64_any(&self) -> Vec<f64>;
     // Deadlock-free sendrecv: send to dest while receiving from source
     fn sendrecv_f64(&self, dest: i32, send_buf: &[f64], source: i32) -> Vec<f64>;
+    /// Deadlock-free sendrecv with a **known** receive length, into a caller-owned
+    /// buffer. Avoids the `MPI_Probe` + per-call heap allocation that `sendrecv_f64`
+    /// incurs: the caller resizes `recv_buf` to the exact expected element count and
+    /// the message is received directly into it. Used by the per-step ghost
+    /// forward/reverse comm, where `SwapData` already records the recv count.
+    fn sendrecv_f64_into(&self, dest: i32, send_buf: &[f64], source: i32, recv_buf: &mut [f64]);
 }
 
 // ── CommResource ─────────────────────────────────────────────────────────────
@@ -117,6 +123,9 @@ impl CommBackend for SingleProcessComm {
     }
     fn sendrecv_f64(&self, _dest: i32, _send_buf: &[f64], _source: i32) -> Vec<f64> {
         unreachable!("SingleProcessComm::sendrecv_f64 should never be called");
+    }
+    fn sendrecv_f64_into(&self, _dest: i32, _send_buf: &[f64], _source: i32, _recv_buf: &mut [f64]) {
+        unreachable!("SingleProcessComm::sendrecv_f64_into should never be called");
     }
 }
 
@@ -335,6 +344,18 @@ impl CommBackend for MpiCommBackend {
             sreq.wait();
             msg
         })
+    }
+
+    fn sendrecv_f64_into(&self, dest: i32, send_buf: &[f64], source: i32, recv_buf: &mut [f64]) {
+        // Probe-free, allocation-free counterpart to sendrecv_f64: the caller knows
+        // the exact receive length and provides a correctly-sized buffer, so we skip
+        // the MPI_Probe round-trip and receive directly. Deadlock-free via immediate_send.
+        let world = &self.world;
+        mpi::request::scope(|scope| {
+            let sreq = world.process_at_rank(dest).immediate_send(scope, send_buf);
+            world.process_at_rank(source).receive_into(recv_buf);
+            sreq.wait();
+        });
     }
 }
 
