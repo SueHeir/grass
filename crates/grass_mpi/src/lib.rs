@@ -15,6 +15,25 @@ use mpi::collective::SystemOperation;
 #[cfg(feature = "mpi_backend")]
 use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Source};
 
+// ── Batched non-blocking sendrecv ────────────────────────────────────────────
+
+/// One element of a batched non-blocking sendrecv (see
+/// [`CommBackend::sendrecv_batch_f64_into`]). Each op sends `send_buf` to `dest`
+/// while receiving from `source` into `recv_buf`. A `dest`/`source` of `-1`
+/// disables that half (send-only or recv-only at a non-periodic boundary).
+///
+/// The caller must size `recv_buf` to the exact expected element count — like
+/// [`CommBackend::sendrecv_f64_into`], no probe is performed. All ops in a batch
+/// must be mutually independent (disjoint `recv_buf`s, and no send may depend on
+/// another op's receive completing): the backend posts every send and receive
+/// concurrently and only then waits on all of them.
+pub struct SendRecvOp<'a> {
+    pub dest: i32,
+    pub send_buf: &'a [f64],
+    pub source: i32,
+    pub recv_buf: &'a mut [f64],
+}
+
 // ── CommBackend trait ────────────────────────────────────────────────────────
 
 /// Abstraction over MPI or single-process communication.
@@ -40,6 +59,16 @@ pub trait CommBackend: Send + Sync + 'static {
     /// the message is received directly into it. Used by the per-step ghost
     /// forward/reverse comm, where `SwapData` already records the recv count.
     fn sendrecv_f64_into(&self, dest: i32, send_buf: &[f64], source: i32, recv_buf: &mut [f64]);
+    /// Post a batch of non-blocking sendrecv ops and wait for all to complete.
+    ///
+    /// Each op's send (`Isend`) and receive (`Irecv`) are posted up front and
+    /// all are in flight concurrently, so the latency of mutually-independent
+    /// swaps overlaps instead of serializing one `sendrecv` at a time. This is
+    /// the overlap counterpart to [`sendrecv_f64_into`](Self::sendrecv_f64_into):
+    /// same probe-free, caller-sized `recv_buf` contract, applied to a whole
+    /// round of swaps at once. The caller is responsible for batching only
+    /// independent ops together (see [`SendRecvOp`]).
+    fn sendrecv_batch_f64_into(&self, ops: &mut [SendRecvOp<'_>]);
 }
 
 // ── CommResource ─────────────────────────────────────────────────────────────
@@ -126,6 +155,9 @@ impl CommBackend for SingleProcessComm {
     }
     fn sendrecv_f64_into(&self, _dest: i32, _send_buf: &[f64], _source: i32, _recv_buf: &mut [f64]) {
         unreachable!("SingleProcessComm::sendrecv_f64_into should never be called");
+    }
+    fn sendrecv_batch_f64_into(&self, _ops: &mut [SendRecvOp<'_>]) {
+        unreachable!("SingleProcessComm::sendrecv_batch_f64_into should never be called");
     }
 }
 
@@ -355,6 +387,41 @@ impl CommBackend for MpiCommBackend {
             let sreq = world.process_at_rank(dest).immediate_send(scope, send_buf);
             world.process_at_rank(source).receive_into(recv_buf);
             sreq.wait();
+        });
+    }
+
+    fn sendrecv_batch_f64_into(&self, ops: &mut [SendRecvOp<'_>]) {
+        // Post every receive (Irecv) and send (Isend) before waiting on any of
+        // them, so the latency of independent swaps overlaps. Receives are posted
+        // first to give MPI a matching buffer ready when the sender's data lands,
+        // avoiding unexpected-message buffering. A `dest`/`source` of -1 skips
+        // that half (non-periodic boundary). Self-sends are handled by the caller
+        // and never reach here.
+        let world = &self.world;
+        // Up to 2 requests (one send, one recv) per op.
+        let max_reqs = ops.len() * 2;
+        mpi::request::multiple_scope(max_reqs, |scope, coll| {
+            for op in ops.iter_mut() {
+                // Copy the scalar/shared-ref fields out before mutably borrowing
+                // recv_buf, so the send and receive borrow disjoint state.
+                let dest = op.dest;
+                let source = op.source;
+                let send_buf = op.send_buf;
+                if source != -1 {
+                    let rreq = world
+                        .process_at_rank(source)
+                        .immediate_receive_into(scope, &mut *op.recv_buf);
+                    coll.add(rreq);
+                }
+                if dest != -1 {
+                    let sreq = world.process_at_rank(dest).immediate_send(scope, send_buf);
+                    coll.add(sreq);
+                }
+            }
+            // Wait for all posted requests. `wait_all` drains the collection so
+            // neither it nor the scope panics on drop.
+            let mut completed = Vec::with_capacity(max_reqs);
+            coll.wait_all(&mut completed);
         });
     }
 }
