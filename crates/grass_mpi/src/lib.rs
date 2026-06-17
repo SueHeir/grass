@@ -156,8 +156,14 @@ impl CommBackend for SingleProcessComm {
     fn sendrecv_f64_into(&self, _dest: i32, _send_buf: &[f64], _source: i32, _recv_buf: &mut [f64]) {
         unreachable!("SingleProcessComm::sendrecv_f64_into should never be called");
     }
-    fn sendrecv_batch_f64_into(&self, _ops: &mut [SendRecvOp<'_>]) {
-        unreachable!("SingleProcessComm::sendrecv_batch_f64_into should never be called");
+    fn sendrecv_batch_f64_into(&self, ops: &mut [SendRecvOp<'_>]) {
+        // Single process: every op is a self-exchange (periodic wrap onto the same
+        // rank), so copy each op's send buffer into its recv buffer. min() guards
+        // send-only / recv-only ops (to_proc == -1) whose buffers differ in length.
+        for op in ops.iter_mut() {
+            let n = op.send_buf.len().min(op.recv_buf.len());
+            op.recv_buf[..n].copy_from_slice(&op.send_buf[..n]);
+        }
     }
 }
 
