@@ -43,6 +43,12 @@ pub enum MirrorState {
 /// itself (so this crate stays wgpu-free). Must NOT touch the `CoherenceRegistry`
 /// cell — the scheduler holds it borrowed while calling `download`.
 pub trait MirrorBridge: 'static {
+    /// Resolve any resource indices the bridge needs (host copies, device handle)
+    /// from the type→slot map. Called once from
+    /// [`CoherenceRegistry::resolve_indices`] when the resource table is final.
+    /// Default no-op for bridges that need no extra indices.
+    fn resolve(&mut self, _index: &HashMap<TypeId, usize>) {}
+
     /// Sync the device copy back into the host resource(s). Called by the scheduler
     /// when a host consumer reads a `DeviceDirty` mirror.
     fn download(&self, resources: &[RefCell<Box<dyn Any>>]);
@@ -103,6 +109,7 @@ impl CoherenceRegistry {
     pub fn resolve_indices(&mut self, index: &HashMap<TypeId, usize>) {
         for m in &mut self.mirrors {
             m.trigger_index = index.get(&m.trigger_type).copied().unwrap_or(usize::MAX);
+            m.bridge.resolve(index);
         }
     }
 
