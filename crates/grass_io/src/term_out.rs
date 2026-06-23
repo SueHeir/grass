@@ -63,7 +63,15 @@ pub struct TermOut {
 impl TermOut {
     /// Push a named value. Plugins call this from systems registered in
     /// [`TermOutSchedule::Compute`] each iter; the value is read by the
-    /// print system in [`TermOutSchedule::Print`] and cleared after.
+    /// print system in [`TermOutSchedule::Print`].
+    ///
+    /// Values **persist** between iters — `set` overwrites, and nothing
+    /// clears the map. A column that has never been `set` prints as `—`;
+    /// once set, it keeps showing its last value on every printed line until
+    /// the next `set` overwrites it. So a system that only sets a column on
+    /// some steps will show a *stale* (carried-over) value on the steps in
+    /// between, not `—`. If you need a column to read as "no data this step",
+    /// set it explicitly each step (e.g. to `f64::NAN` or `0.0`).
     pub fn set(&mut self, name: &str, value: f64) {
         self.values.insert(name.to_string(), value);
     }

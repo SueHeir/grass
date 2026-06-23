@@ -28,24 +28,30 @@
 //! parent.set_schedule(s);
 //! ```
 //!
-//! ## What's in 1.0
+//! ## Node types
+//!
+//! All four node kinds are implemented and tested (see the `schedule_*`
+//! tests in `lib.rs`):
 //!
 //! - `ScheduleNode::Phase` — run all systems registered under one
 //!   `ScheduleSet` enum type. Namespace index is assigned during lowering by
-//!   tree-walk position.
+//!   tree-walk position. Use [`ScheduleBuilder::then_variant`] to dispatch a
+//!   single variant of the enum instead of the whole batch.
 //! - `ScheduleNode::Sequence` — run children in order.
-//! - `ScheduleNode::Loop` — re-execute body until the `until` condition
-//!   returns `true`, or `max_iters` is reached. On hitting max:
-//!   - `OnMax::AcceptUnconverged` — continue past the loop
-//!   - `OnMax::Panic` — abort with diagnostic
+//! - `ScheduleNode::Loop` — re-execute body **until** the `until` condition
+//!   returns `true`, or `max_iters` is reached. The condition is checked
+//!   *after* each iteration, so the body always runs at least once. On
+//!   hitting max without convergence:
+//!   - [`OnMax::AcceptUnconverged`] — continue past the loop
+//!   - [`OnMax::Panic`] — abort with diagnostic
+//!   - [`OnMax::Rollback`] — run a user-supplied rollback fragment once, then
+//!     continue (build with [`ScheduleBuilder::loop_with_rollback`])
+//! - `ScheduleNode::Branch` — first-match-wins state-conditional dispatch;
+//!   build with [`ScheduleBuilder::branch`].
 //!
-//!   `OnMax::RejectAndShrinkDt` is deferred to Phase 2 (needs `Snapshot<T>`
-//!   wired up first).
-//!
-//! ## What's not yet
-//!
-//! - `Branch` (state-conditional fragments) — Phase 1.5.
-//! - `RejectAndShrinkDt` rollback semantics — Phase 2.
+//! Contrast with [`SystemGroup::loop_while`](crate::SystemGroup::loop_while),
+//! which repeats **while** its condition is `true` (the logical inverse of
+//! `Loop`'s `loop_until`). Both check the condition after each iteration.
 
 use crate::{Condition, IntoCondition, ScheduleSet};
 use std::any::TypeId;
@@ -221,6 +227,14 @@ impl ScheduleBuilder {
 
     /// Append a phase: every system registered under `P` runs at this point,
     /// in `to_index` order. Whole-enum dispatch.
+    ///
+    /// # Panics
+    ///
+    /// Not here — but mixing whole-enum `.then::<P>()` with per-variant
+    /// `.then_variant(P::V)` for the **same** `P` in one tree makes
+    /// [`Scheduler::set_schedule`](crate::Scheduler::set_schedule) panic at
+    /// install time (a single system would match both, so the namespace
+    /// assignment is ambiguous). Pick one form per enum type.
     pub fn then<P: ScheduleSet + 'static>(mut self) -> Self {
         self.nodes.push(ScheduleNode::Phase {
             type_name: std::any::type_name::<P>(),
@@ -236,10 +250,14 @@ impl ScheduleBuilder {
     /// of the same `ScheduleSet` enum at different positions in the tree
     /// (e.g. `Stage::Save` before a `Loop`, `Stage::Check` after).
     ///
+    /// # Panics
+    ///
     /// Mixing whole-enum (`then::<P>()`) and per-variant (`then_variant`)
-    /// dispatch for the **same `P`** in one tree is a build-time error —
-    /// the lowering can't assign a unique namespace to systems that
-    /// would match both forms.
+    /// dispatch for the **same `P`** in one tree makes
+    /// [`Scheduler::set_schedule`](crate::Scheduler::set_schedule) panic at
+    /// install time — the lowering can't assign a unique namespace to systems
+    /// that would match both forms. (The panic fires from `set_schedule`, not
+    /// from this builder method.)
     pub fn then_variant<P: ScheduleSet + 'static>(mut self, value: P) -> Self {
         self.nodes.push(ScheduleNode::Phase {
             type_name: std::any::type_name::<P>(),

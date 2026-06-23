@@ -20,10 +20,13 @@ use std::cell::RefCell;
 /// Outcome of one [`Physics::step`] call.
 #[derive(Debug, Clone, Copy)]
 pub struct StepResult {
-    /// `true` if this substep finished a full timestep — the orchestrator can
-    /// fire couplers / write outputs / advance shared time on this boundary.
-    /// For single-stage integrators (Euler) every substep is a full step;
-    /// for RK3 only every third returns true.
+    /// **Reserved — not yet consumed by this crate.** Intended to read `true`
+    /// when this substep finished a full timestep, so the orchestrator could
+    /// fire couplers / write outputs / advance shared time on that boundary
+    /// (single-stage Euler → every substep; RK3 → every third). Today every
+    /// [`Physics::step`] impl hard-codes `true` and nothing reads the field;
+    /// couplers run on the parent schedule's phase boundaries instead. Don't
+    /// rely on it discriminating substeps until a consumer lands.
     pub completed_full_step: bool,
 }
 
@@ -45,8 +48,11 @@ impl Default for StepResult {
 ///   and write internal state.
 /// - **Optional time / stability hooks** ([`time`](Self::time),
 ///   [`max_stable_dt`](Self::max_stable_dt), [`set_dt`](Self::set_dt)) that
-///   adaptive strategies use. Default implementations return `None` /
-///   no-op, signalling "I don't expose this — treat me as fixed-rate".
+///   adaptive strategies *will* use. Default implementations return `None`
+///   / no-op, signalling "I don't expose this — treat me as fixed-rate".
+///   **Reserved — not yet consumed:** no code in `grass_multi` currently
+///   calls these three; they define the interface an adaptive-dt
+///   orchestrator will read once one exists.
 pub trait Physics: 'static {
     /// Stable identifier (e.g. `"cfd"`, `"dem"`) used for accessor lookups.
     fn name(&self) -> &str;
@@ -76,6 +82,8 @@ pub trait Physics: 'static {
 
     /// Current physical time of this subsystem (seconds), if it tracks
     /// one. Default: `None` — subsystem doesn't expose a clock.
+    ///
+    /// **Reserved — not yet consumed by this crate.**
     fn time(&self) -> Option<f64> {
         None
     }
@@ -83,12 +91,16 @@ pub trait Physics: 'static {
     /// Largest stable timestep this subsystem can take *right now* given
     /// its current state (CFL bound, contact-time bound, etc.). Default:
     /// `None` — subsystem is fixed-rate or doesn't report stability.
+    ///
+    /// **Reserved — not yet consumed by this crate.**
     fn max_stable_dt(&self) -> Option<f64> {
         None
     }
 
     /// Externally-imposed timestep. Default: no-op — subsystem ignores
     /// external dt.
+    ///
+    /// **Reserved — not yet consumed by this crate.**
     fn set_dt(&mut self, _dt: f64) {}
 }
 

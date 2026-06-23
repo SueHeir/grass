@@ -1,0 +1,19 @@
+[book]
+title = "GRASS — General Rust App System Scheduler"
+description = "Guide to the GRASS App/Plugin/Scheduler framework and building your own solver"
+authors = ["Elizabeth Suehr"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "rust"
+git-repository-url = "https://github.com/SueHeir/grass"
+edit-url-template = "https://github.com/SueHeir/grass/edit/main/docs/{path}"
+
+[output.html.fold]
+enable = true
+level = 1

@@ -140,6 +140,12 @@ fn run_binary<Tr: Transport + 'static>(
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
+#[ignore = "TODO: incomplete — body never asserts on the swapped peer values \
+            (a_seen_peer/b_seen_peer are discarded). It demonstrates the \
+            mirror feedback-loop bug that arises without a local→mirror export \
+            before TickPeer; the correct wiring is exercised by \
+            `properly_wired_export_makes_each_side_see_peer_local` below. \
+            Re-enable once this test asserts the intended swap semantics."]
 #[test]
 fn two_parents_swap_counter_via_remote_mirror() {
     const N: usize = 5;

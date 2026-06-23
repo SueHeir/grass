@@ -387,6 +387,24 @@ pub trait MultiAppExt {
     /// The builder registers a [`RemoteMirrorPhysics`] with the parent's
     /// [`SubApps`] when it drops at the end of the chain — declaration is
     /// done in one statement.
+    ///
+    /// ## Export-before-tick (avoid a one-iter latency / feedback loop)
+    ///
+    /// A remote sub-App is a **mirror**: `send_each_iter::<T>` ships the
+    /// mirror's *current* `T` to the peer during `tick_subapp("peer")`, and
+    /// `recv_each_iter::<T>` overwrites the mirror's `T` with what the peer
+    /// sent. So whatever the mirror holds *at tick time* is what the peer
+    /// receives. If you never populate the mirror locally, you just bounce the
+    /// peer's previous value back and forth — a feedback loop with one outer
+    /// iter of latency.
+    ///
+    /// The fix is to **export local → mirror before ticking the peer**: run a
+    /// coupling system that copies this side's real value into the mirror's
+    /// `T` slot, ordered *before* the `tick_subapp("peer")` system. Canonical
+    /// phase order: `TickLocal → Export(local→mirror) → TickPeer → Import`.
+    /// (See the `properly_wired_export_makes_each_side_see_peer_local`
+    /// integration test for the working wiring, and the `#[ignore]`d
+    /// `two_parents_swap_counter_via_remote_mirror` for the bug it avoids.)
     fn add_remote_subapp<Tr: Transport + 'static>(
         &mut self,
         name: &str,
@@ -479,7 +497,12 @@ impl<'a> RemoteSubAppBuilder<'a> {
         self
     }
 
-    /// Register `T` to be sent every iter (during `Physics::step`).
+    /// Register `T` to be sent every iter (during `Physics::step`, i.e. when
+    /// `tick_subapp("<this mirror>")` runs). The value sent is whatever the
+    /// mirror's `T` slot holds **at tick time** — so populate it first with an
+    /// export system ordered before the peer's tick (see the
+    /// "Export-before-tick" note on [`MultiAppExt::add_remote_subapp`]),
+    /// otherwise you ship a stale / bounced-back value.
     pub fn send_each_iter<T: Default + crate::wire::Wire + 'static>(mut self) -> Self {
         self.with_physics(|p| p.add_send_each_iter::<T>());
         self

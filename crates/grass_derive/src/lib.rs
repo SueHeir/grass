@@ -1,18 +1,46 @@
 //! Proc-macros for the grass simulation framework.
 //!
-//! Provides two derives, both for enums:
+//! Provides **three** derives:
 //!
-//! - **`#[derive(ScheduleSet)]`** — implements `grass_scheduler::ScheduleSet`
-//!   for an enum, assigning each variant a sequential index in declaration order.
+//! - **`#[derive(ScheduleSet)]`** — implements `grass_scheduler::ScheduleSet`.
+//!   Works on an **enum** (each variant gets a sequential index in declaration
+//!   order) *or* on a **unit struct** (a single phase with `to_index() = 0`).
 //!   Used to define solver phases (Setup → ComputeFluxes → Integrate → …).
 //!
 //! - **`#[derive(StageEnum)]`** — implements `grass_scheduler::StageName` for
-//!   an enum where every variant carries a `#[stage("name")]` attribute. Used
-//!   to bind multi-stage `[[run]]` workflows in TOML to a Rust enum.
+//!   an **enum** where every variant carries a `#[stage("name")]` attribute.
+//!   Used to bind multi-stage `[[run]]` workflows in TOML to a Rust enum.
 //!
-//! Both derives target trait paths in `grass_scheduler::*` (literal, not
-//! re-exported) — make sure that crate is in your dependency graph when
-//! using these derives.
+//! - **`#[derive(Namespace)]`** — implements `grass_multi::Namespace` for a
+//!   **unit struct**, using the struct's identifier as the namespace string
+//!   (`struct Cfd;` → `Namespace::NAME == "Cfd"`). Used to tag sub-Apps in a
+//!   `grass_multi` coupling.
+//!
+//! So only `StageEnum` is enum-only; `ScheduleSet` also accepts unit structs,
+//! and `Namespace` is unit-struct-only.
+//!
+//! # Required companion derives & dependencies
+//!
+//! The generated code references trait paths in `grass_scheduler::*` and
+//! `grass_multi::*` **literally** (not re-exported), so the corresponding
+//! crate must be in your dependency graph: `grass_scheduler` for `ScheduleSet`
+//! / `StageEnum`, `grass_multi` for `Namespace`.
+//!
+//! `#[derive(ScheduleSet)]` does **not** add the trait's supertrait bounds for
+//! you. `ScheduleSet: Copy + Clone + Debug + 'static`, so the target type must
+//! *also* derive `Copy`, `Clone`, and `Debug` itself — e.g.
+//! `#[derive(Clone, Copy, Debug, ScheduleSet)]`. (`StageEnum` similarly needs
+//! whatever `Clone`/`PartialEq`/`Default` your `[[run]]` driver expects.)
+//!
+//! # Two invariants worth memorizing
+//!
+//! 1. **Enum declaration order = schedule index.** `ScheduleSet`'s `to_index()`
+//!    is the variant's positional index, so reordering variants silently
+//!    reorders the schedule. Treat the variant order as load-bearing.
+//! 2. **`#[stage("...")]` strings are the `[[run]]` TOML contract.** Each
+//!    `StageEnum` stage name must exactly match a stage `name` in the
+//!    `[[run]]` config that drives it; renaming one without the other breaks
+//!    the binding.
 
 use proc_macro::TokenStream;
 use quote::quote;

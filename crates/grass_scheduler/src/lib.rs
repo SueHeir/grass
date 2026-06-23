@@ -20,14 +20,79 @@
 //! - **States**: [`CurrentState<S>`] / [`NextState<S>`] pairs for state-machine-driven
 //!   simulations, with [`in_state()`] and [`in_stage()`] run conditions.
 //!
-//! # Execution Order
+//! # How execution order is decided
 //!
-//! Each timestep executes systems sorted by `(namespace, index)`. The namespace defaults to 0
-//! for all phase enums; use [`Scheduler::set_schedule_namespace`] or [`chain_namespaces!`] to
-//! control cross-solver ordering when multiple phase enums coexist.
-//! Within each `(namespace, index)` group, systems are topologically sorted by
-//! `.before()` / `.after()` constraints. Systems with no ordering constraints run in
-//! registration order.
+//! Each timestep, every registered update system runs exactly once, in an
+//! order computed by three layered rules — applied in this sequence:
+//!
+//! 1. **Sort by `(namespace, index)`.** Each system carries a [`StoredPhase`]
+//!    whose `index` comes from its `ScheduleSet` variant's
+//!    [`to_index()`](ScheduleSet::to_index) and whose `namespace` defaults to
+//!    `0` (see the footgun below). Systems are ordered first by namespace,
+//!    then by phase index.
+//! 2. **Topologically sort within each `(namespace, index)` group** using
+//!    Kahn's algorithm over the `.before()` / `.after()` constraints declared
+//!    on those systems.
+//! 3. **Registration-order tie-break.** Systems left unordered by steps 1–2
+//!    (same `(namespace, index)`, no relative constraint) run in the order
+//!    they were registered.
+//!
+//! ## Footgun #1: every `ScheduleSet` enum defaults to namespace 0
+//!
+//! Phase indices come from `to_index()`, which a derived `ScheduleSet`
+//! numbers `0, 1, 2, …` *per enum*. The namespace, however, defaults to `0`
+//! for **every** enum. So if two solvers each define their own phase enum —
+//! say `FluidPhase::Force` (index 0) and `SolidPhase::Force` (index 0) —
+//! both land at `(namespace 0, index 0)` and their systems **interleave**
+//! instead of one solver running fully before the other. There is no error;
+//! the ordering is just silently wrong.
+//!
+//! Three ways to separate them (pick one):
+//!
+//! - **Per-enum:** [`Scheduler::set_schedule_namespace::<E>(n)`](Scheduler::set_schedule_namespace)
+//!   assigns namespace `n` to every system registered under enum `E`.
+//! - **Bulk, ordered:** the [`chain_namespaces!`] macro assigns `0, 1, 2, …`
+//!   to the enums you list, left to right.
+//! - **Explicit tree:** build a [`Schedule`] and install it with
+//!   [`Scheduler::set_schedule`] — the tree's walk order *is* the namespace
+//!   assignment, and it additionally supports loops and branches.
+//!
+//! ```rust
+//! # use grass_scheduler::prelude::*;
+//! # use grass_scheduler::chain_namespaces;
+//! # #[derive(Debug, Clone, Copy)] enum FluidPhase { Force }
+//! # impl ScheduleSet for FluidPhase { fn to_index(&self) -> u32 { 0 } fn name(&self) -> &'static str { "Force" } }
+//! # #[derive(Debug, Clone, Copy)] enum SolidPhase { Force }
+//! # impl ScheduleSet for SolidPhase { fn to_index(&self) -> u32 { 0 } fn name(&self) -> &'static str { "Force" } }
+//! # let mut scheduler = Scheduler::default();
+//! // FluidPhase systems run entirely before SolidPhase systems:
+//! chain_namespaces!(scheduler, FluidPhase, SolidPhase);
+//! ```
+//!
+//! # Choosing a scheduling primitive
+//!
+//! | Primitive | Use when |
+//! |-----------|----------|
+//! | Plain phases (`add_update_system(sys, Phase::X)`) | One linear pass per step; ordering is just `(namespace, index)` + before/after. |
+//! | [`SystemGroup`] (`.loop_while(cond, max)`) | A *block of systems inside one phase* must iterate (e.g. a fixed-point coupling sub-loop). |
+//! | [`Schedule`] tree (`set_schedule`) | The whole step needs structure: ordered phases plus `loop_until` / `branch` over them. |
+//!
+//! [`SystemGroup::loop_while`] repeats **while** its condition stays `true`;
+//! [`Schedule`]'s `loop_until` repeats **until** its condition becomes `true`
+//! (the inverse). In both cases the condition is evaluated **after** each
+//! iteration, so the loop body always runs at least once.
+//!
+//! # Diagnostics
+//!
+//! - `SIM_TRACE` env var — when set, prints each system name to stderr as it
+//!   executes (via [`run_flat`](Scheduler::run_flat)).
+//! - `SIM_SUPPRESS_WARNINGS` env var — when set, suppresses the schedule
+//!   validation warnings normally printed at the end of
+//!   [`organize_systems`](Scheduler::organize_systems).
+//! - [`Scheduler::enable_schedule_print`] — writes a Graphviz `schedule.dot`
+//!   after organizing (render with `dot -Tpng schedule.dot`).
+//! - [`Scheduler::start`] prints a per-system timing table when the run loop
+//!   ends.
 //!
 //! # Example
 //!
@@ -332,6 +397,15 @@ impl<T: 'static> DerefMut for ResMut<'_, T> {
 // ANCHOR: Local
 /// Per-system local state. Persists across invocations of the same system instance.
 /// Initialized with `T::default()` on first access.
+///
+/// Unlike [`Res`]/[`ResMut`], a `Local<T>` is **not** a shared resource: each
+/// system instance owns its own `T`, keyed by `TypeId` in that system's
+/// private `locals` map. Two different systems that both take `Local<u32>`
+/// see two independent counters, and a `Local<T>` is invisible to every other
+/// system (you can't read it through `Res<T>`). It is `Default`-initialized
+/// lazily on first access and lives as long as the system is registered — the
+/// idiomatic way to keep per-system step counters, "first call" flags, or
+/// previous-value caches without polluting the global resource table.
 pub struct Local<'a, T: Default + 'static> {
     value: &'a mut T,
     _marker: PhantomData<&'a mut T>,
@@ -1211,6 +1285,12 @@ impl<S: Clone + PartialEq + 'static> IntoCondition<InStateMarker> for InStateCon
 }
 
 /// Run condition: returns true when the current state equals `target`.
+///
+/// Reads `CurrentState<S>`. Transitions are applied by
+/// [`apply_state_transitions`] and kept in sync with `[[run]]` stages by
+/// [`check_stage_advance`] — both of which `grass_app` wires up via
+/// `StatesPlugin<S>` / `update_cycle`. Register those (or run them manually
+/// at end-of-step) or `CurrentState<S>` never changes.
 pub fn in_state<S: Clone + PartialEq + std::fmt::Debug + 'static>(
     target: S,
 ) -> InStateCondition<S> {
@@ -1361,6 +1441,12 @@ impl IntoCondition<InStageMarker> for InStageCondition {
 }
 
 /// Run condition: returns true when the current stage name matches.
+///
+/// Reads `SchedulerManager::stage_name`. That field is **only** populated by
+/// the run-stage driver in `grass_app` (`update_cycle` walking the `[[run]]`
+/// config's stages); a bare `Scheduler` leaves it `None`, so `in_stage(..)`
+/// is always `false` unless something sets the stage. See `grass_app`'s
+/// `RunPlugin` / `StatesPlugin`.
 pub fn in_stage(name: &str) -> InStageCondition {
     let cond_name = format!("in_stage({})", name);
     InStageCondition {
@@ -1942,8 +2028,20 @@ impl Scheduler {
     /// 3. Every `Loop`'s `until` condition is `prepare`d against the current
     ///    `resource_index`, so it can resolve resource slots when invoked.
     ///
-    /// Call **after** all systems have been registered. Repeat calls replace
-    /// the previously-installed schedule.
+    /// Call **after** all systems have been registered (and after
+    /// [`add_resource`](Self::add_resource) for any resource a `Loop`'s
+    /// `until` condition reads). Repeat calls replace the previously-installed
+    /// schedule.
+    ///
+    /// # Panics
+    ///
+    /// - If the tree references the same `ScheduleSet` enum type both as a
+    ///   whole-enum phase (`.then::<E>()`) and as a per-variant phase
+    ///   (`.then_variant(E::V)`) — the namespace assignment would be
+    ///   ambiguous.
+    /// - If any `Loop`/`Branch` condition needs a resource that has not been
+    ///   registered yet (conditions are `prepare`d here against the current
+    ///   resource index).
     pub fn set_schedule(&mut self, mut schedule: Schedule) {
         // 1. Assign namespaces in tree-walk order.
         let mut counter: u32 = 0;

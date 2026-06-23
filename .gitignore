@@ -6,3 +6,6 @@ Cargo.lock
 
 # Generated example output (dump frames from `cargo run --example io ...`).
 examples/*/out/
+
+# mdBook rendered output (source lives in docs/src)
+docs/book/

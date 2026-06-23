@@ -4,6 +4,67 @@
 //! resource wrapper, and two backends:
 //! - [`SingleProcessComm`]: no-op backend for serial runs
 //! - [`MpiCommBackend`]: real MPI backend (behind the `mpi_backend` feature)
+//!
+//! # How to wire a backend
+//!
+//! Consumers don't construct a backend by hand and pass it around — they put a
+//! `CommResource` into the scheduler so systems can take it as
+//! `Res<CommResource>`. There is no `CommPlugin` in this crate; the wiring
+//! lives in the consumer (e.g. a setup system in your `App`).
+//!
+//! **Parallel path** (with the `mpi_backend` feature):
+//!
+//! ```rust,ignore
+//! use grass_mpi::*;
+//!
+//! // 1. (MPMD only) split MPI_COMM_WORLD once, before any get_mpi_world().
+//! init_app_color(0);
+//!
+//! // 2. Grab this app's communicator (the color-split intra-comm if step 1 ran).
+//! let world = get_mpi_world();
+//!
+//! // 3. Build the real backend and wrap it as a resource.
+//! let comm = CommResource(Box::new(MpiCommBackend::new(world)));
+//! scheduler.add_resource(comm); // now available as Res<CommResource>
+//! ```
+//!
+//! **Serial path** (no feature, or a single-process run): use the no-op
+//! backend — every collective is the identity and point-to-point is never
+//! reached (see the [`SingleProcessComm`] contract below):
+//!
+//! ```rust,ignore
+//! use grass_mpi::{CommResource, SingleProcessComm};
+//! let comm = CommResource(Box::new(SingleProcessComm::new()));
+//! scheduler.add_resource(comm);
+//! ```
+//!
+//! # Lifecycle & ordering
+//!
+//! 1. **`init_app_color(color)` once, before the first `get_mpi_world()`.**
+//!    It color-splits `MPI_COMM_WORLD` for MPMD launches
+//!    (`mpirun -np N1 ./a : -np N2 ./b`); calling it after a backend already
+//!    captured the world is too late. Skip it entirely for SPMD/single-binary
+//!    runs.
+//! 2. **Two communicator views:**
+//!    - [`get_mpi_world`] returns the **color-split intra-comm** (this binary's
+//!      own ranks) when `init_app_color` ran, else raw WORLD. This is what a
+//!      backend should normally capture.
+//!    - [`get_mpi_world_raw`] / [`world_rank`] / [`world_size`] always go to
+//!      the **raw `MPI_COMM_WORLD`**, so MPMD couplers can address peers in
+//!      *other* binaries by absolute world rank (this is what
+//!      `grass_multi`'s transport uses).
+//! 3. **`finalize_mpi()` after every `CommResource` has dropped** (i.e. after
+//!    the last `App` is finished). It calls `MPI_Finalize`; using any comm
+//!    afterward is undefined.
+//!
+//! ## The `unsafe impl Send/Sync` promise
+//!
+//! [`MpiCommBackend`] (and the internal intra-comm storage) carry hand-written
+//! `unsafe impl Send for .. {}` / `Sync` so they can live in the scheduler's
+//! resource table and a `static`. The soundness rests on a usage promise, not
+//! on MPI's own thread-safety: **all MPI calls happen on a single thread**
+//! (the simulation is single-threaded per rank). Do not share a
+//! `CommResource` across OS threads.
 
 use std::ops::{Deref, DerefMut};
 
@@ -37,21 +98,45 @@ pub struct SendRecvOp<'a> {
 // ── CommBackend trait ────────────────────────────────────────────────────────
 
 /// Abstraction over MPI or single-process communication.
+///
+/// # Serial-fallback contract
+///
+/// [`SingleProcessComm`] implements the collectives as the identity
+/// (`all_reduce_*` return their input, `barrier` is a no-op) but leaves every
+/// point-to-point method as `unreachable!`. That is deliberate, not a stub:
+/// on one rank every neighbor *is* this rank, so callers must take their
+/// `to_proc == rank` local-copy branch and never reach `send_f64` / `recv_f64`
+/// / `sendrecv_f64*`. The lone exception is
+/// [`sendrecv_batch_f64_into`](Self::sendrecv_batch_f64_into), which the serial
+/// backend services directly by copying each op's send buffer into its recv
+/// buffer (periodic self-exchange).
 pub trait CommBackend: Send + Sync + 'static {
+    /// This process's rank within the communicator (`0` for serial).
     fn rank(&self) -> i32;
+    /// Number of ranks in the communicator (`1` for serial).
     fn size(&self) -> i32;
+    /// Cartesian process-grid dimensions `[nx, ny, nz]` of the rank decomposition.
     fn processor_decomposition(&self) -> [i32; 3];
+    /// This rank's `[ix, iy, iz]` coordinate within the process grid.
     fn processor_position(&self) -> [i32; 3];
+    /// Record the process-grid shape and this rank's position in it.
     fn set_processor_grid(&mut self, decomp: [i32; 3], position: [i32; 3]);
+    /// Sum `local` across all ranks and return the result to every rank.
     fn all_reduce_sum_f64(&self, local: f64) -> f64;
+    /// Min of `local` across all ranks, returned to every rank (e.g. global dt).
     fn all_reduce_min_f64(&self, local: f64) -> f64;
+    /// Block until every rank reaches this point.
     fn barrier(&self);
 
     // Point-to-point communication for borders/exchange/reverse_send_force
+    /// Send `buf` to rank `dest`. `unreachable!` on the serial backend.
     fn send_f64(&self, dest: i32, buf: &[f64]);
+    /// Receive a `Vec<f64>` from rank `source`. `unreachable!` on the serial backend.
     fn recv_f64(&self, source: i32) -> Vec<f64>;
+    /// Receive a `Vec<f64>` from any rank. `unreachable!` on the serial backend.
     fn recv_f64_any(&self) -> Vec<f64>;
-    // Deadlock-free sendrecv: send to dest while receiving from source
+    /// Deadlock-free combined send-to-`dest` / receive-from-`source` (probes for
+    /// the recv length, then allocates). `unreachable!` on the serial backend.
     fn sendrecv_f64(&self, dest: i32, send_buf: &[f64], source: i32) -> Vec<f64>;
     /// Deadlock-free sendrecv with a **known** receive length, into a caller-owned
     /// buffer. Avoids the `MPI_Probe` + per-call heap allocation that `sendrecv_f64`
@@ -193,8 +278,10 @@ static MPI_INTRA: Mutex<Option<IntraComm>> = Mutex::new(None);
 
 /// Returns this app's communicator: the intra-comm registered by
 /// [`init_app_color`] if MPMD-style bootstrap was performed, otherwise raw
-/// `MPI_COMM_WORLD`. `CommPlugin` and other consumers should call this so
-/// each binary in an MPMD launch sees only its own subset of ranks.
+/// `MPI_COMM_WORLD`. The code that builds the [`CommResource`] (typically a
+/// backend-wiring setup system in your `App`; see the crate-level "How to
+/// wire a backend" example) should call this so each binary in an MPMD launch
+/// sees only its own subset of ranks.
 #[cfg(feature = "mpi_backend")]
 pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
     let mut guard = MPI_UNIVERSE.lock().unwrap();
@@ -221,8 +308,9 @@ pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
 /// from [`get_mpi_world`]. Each color value yields a disjoint sub-communicator
 /// — by convention `color = 0` for the first binary, `1` for the second, etc.
 ///
-/// Call **once**, **before** any plugin builds (so `CommPlugin` picks up
-/// the intra-comm). Idempotent if called twice with the same color.
+/// Call **once**, **before** the first [`get_mpi_world`] (so the code that
+/// builds the [`CommResource`] picks up the intra-comm). Idempotent if called
+/// twice with the same color.
 #[cfg(feature = "mpi_backend")]
 pub fn init_app_color(color: i32) {
     use mpi::topology::Communicator;
