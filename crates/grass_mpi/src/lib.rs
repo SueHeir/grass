@@ -154,6 +154,22 @@ pub trait CommBackend: Send + Sync + 'static {
     /// round of swaps at once. The caller is responsible for batching only
     /// independent ops together (see [`SendRecvOp`]).
     fn sendrecv_batch_f64_into(&self, ops: &mut [SendRecvOp<'_>]);
+
+    /// Like [`sendrecv_batch_f64_into`](Self::sendrecv_batch_f64_into) but runs
+    /// `overlap` *while the swaps are in flight* — the interior/boundary overlap
+    /// primitive (roadmap step 4): post every Isend/Irecv, run independent local
+    /// work (e.g. computing forces on interior atoms that need no ghosts), then
+    /// wait. `overlap` must not touch the ops' send/recv buffers. The default
+    /// impl runs `overlap` then a blocking batch (correct, but no concurrency);
+    /// the MPI backend overrides it to truly overlap.
+    fn sendrecv_batch_overlap_f64_into(
+        &self,
+        ops: &mut [SendRecvOp<'_>],
+        overlap: &mut dyn FnMut(),
+    ) {
+        overlap();
+        self.sendrecv_batch_f64_into(ops);
+    }
 }
 
 // ── CommResource ─────────────────────────────────────────────────────────────
@@ -514,6 +530,39 @@ impl CommBackend for MpiCommBackend {
             }
             // Wait for all posted requests. `wait_all` drains the collection so
             // neither it nor the scope panics on drop.
+            let mut completed = Vec::with_capacity(max_reqs);
+            coll.wait_all(&mut completed);
+        });
+    }
+
+    fn sendrecv_batch_overlap_f64_into(
+        &self,
+        ops: &mut [SendRecvOp<'_>],
+        overlap: &mut dyn FnMut(),
+    ) {
+        // Post every Isend/Irecv, run the caller's independent local work while
+        // the swaps are in flight, then wait. `overlap` touches caller state
+        // (e.g. force arrays) disjoint from the ops' send/recv buffers.
+        let world = &self.world;
+        let max_reqs = ops.len() * 2;
+        mpi::request::multiple_scope(max_reqs, |scope, coll| {
+            for op in ops.iter_mut() {
+                let dest = op.dest;
+                let source = op.source;
+                let send_buf = op.send_buf;
+                if source != -1 {
+                    let rreq = world
+                        .process_at_rank(source)
+                        .immediate_receive_into(scope, &mut *op.recv_buf);
+                    coll.add(rreq);
+                }
+                if dest != -1 {
+                    let sreq = world.process_at_rank(dest).immediate_send(scope, send_buf);
+                    coll.add(sreq);
+                }
+            }
+            // Swaps are in flight — do the caller's independent local work now.
+            overlap();
             let mut completed = Vec::with_capacity(max_reqs);
             coll.wait_all(&mut completed);
         });
