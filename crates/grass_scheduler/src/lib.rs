@@ -127,8 +127,10 @@ use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
+pub mod coherence;
 pub mod schedule;
 pub mod snapshot;
+pub use coherence::{CoherenceRegistry, MirrorBridge, MirrorState};
 pub use schedule::{BranchBuilder, OnMax, Schedule, ScheduleBuilder, ScheduleNode};
 pub use snapshot::{restore_resource, snapshot_resource, Snapshot};
 
@@ -1787,6 +1789,10 @@ pub struct Scheduler {
     /// filtered run pass); when `None`, falls back to today's flat
     /// `(namespace, index)`-sorted run. Set via [`set_schedule`](Self::set_schedule).
     schedule: Option<Schedule>,
+    /// Cached resource index of the [`CoherenceRegistry`], if one is registered.
+    /// `None` (the default) makes the per-system coherence hooks a no-op, so
+    /// CPU-only runs pay nothing. Resolved in [`organize_systems`](Self::organize_systems).
+    coherence_index: Option<usize>,
 }
 // ANCHOR_END: Scheduler
 
@@ -1808,6 +1814,7 @@ impl Default for Scheduler {
             stage_names: Vec::new(),
             warning_fn: None,
             schedule: None,
+            coherence_index: None,
         }
     }
 }
@@ -1906,6 +1913,20 @@ impl Scheduler {
             panic!("Schedule validation errors:\n{}", errors.join("\n"));
         }
 
+        // Coherence (coherence_plan.md): cache the CoherenceRegistry slot and
+        // resolve each mirror's trigger index. Absent → the run-loop hooks no-op.
+        self.coherence_index = self
+            .resource_index
+            .get(&TypeId::of::<CoherenceRegistry>())
+            .copied();
+        if let Some(ci) = self.coherence_index {
+            let mut guard = self.resources[ci].borrow_mut();
+            guard
+                .downcast_mut::<CoherenceRegistry>()
+                .expect("coherence: slot is not a CoherenceRegistry")
+                .resolve_indices(&self.resource_index);
+        }
+
         // Initialize index-based timing vector
         self.system_timings = vec![0.0; self.update_systems.len()];
 
@@ -1971,6 +1992,7 @@ impl Scheduler {
     /// the no-schedule path; use [`run`](Self::run) unless you want to bypass
     /// any installed [`Schedule`].
     pub fn run_flat(&mut self) {
+        let coh = self.coherence_index;
         for (idx, (entry, phase)) in self.update_systems.iter_mut().enumerate() {
             if self.trace {
                 eprintln!(
@@ -1980,9 +2002,15 @@ impl Scheduler {
                     entry.name
                 );
             }
+            if let Some(ci) = coh {
+                coherence::ensure_coherent(&self.resources, ci, entry.system.accesses(), &entry.name);
+            }
             let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
             self.system_timings[idx] += t0.elapsed().as_secs_f64();
+            if let Some(ci) = coh {
+                coherence::mark_writes(&self.resources, ci, entry.system.accesses());
+            }
         }
         self.timing_steps += 1;
     }
@@ -2053,6 +2081,7 @@ impl Scheduler {
     /// Run only update systems whose namespace equals `ns`. Used by
     /// `run_node` for `ScheduleNode::Phase` dispatch.
     fn run_namespace_filtered(&mut self, ns: u32) {
+        let coh = self.coherence_index;
         for (idx, (entry, phase)) in self.update_systems.iter_mut().enumerate() {
             if phase.namespace != ns {
                 continue;
@@ -2065,9 +2094,15 @@ impl Scheduler {
                     entry.name
                 );
             }
+            if let Some(ci) = coh {
+                coherence::ensure_coherent(&self.resources, ci, entry.system.accesses(), &entry.name);
+            }
             let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
             self.system_timings[idx] += t0.elapsed().as_secs_f64();
+            if let Some(ci) = coh {
+                coherence::mark_writes(&self.resources, ci, entry.system.accesses());
+            }
         }
     }
 
@@ -3307,6 +3342,10 @@ pub mod prelude {
         // Resource access kind (read/write) surfaced to coherence mediation
         AccessKind,
         check_stage_advance,
+        // Host<->device coherence mediation
+        CoherenceRegistry,
+        MirrorBridge,
+        MirrorState,
         first_stage_only,
         in_stage,
         in_state,
