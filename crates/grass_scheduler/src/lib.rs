@@ -160,6 +160,7 @@ macro_rules! impl_system {
 
             fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
                 self.indices.clear();
+                self.accesses.clear();
                 let mut _missing = Vec::new();
                 $(
                     let _type_info = <$params as SystemParam>::resource_type_id();
@@ -171,9 +172,17 @@ macro_rules! impl_system {
                             _missing.push(name.to_string());
                         }
                     }
+                    let _kind = <$params as SystemParam>::access_kind();
+                    if _kind != AccessKind::None && _idx != usize::MAX {
+                        self.accesses.push((_idx, _kind));
+                    }
                     self.indices.push(_idx);
                 )*
                 _missing
+            }
+
+            fn accesses(&self) -> &[(usize, AccessKind)] {
+                &self.accesses
             }
 
             fn name(&self) -> &str { std::any::type_name::<F>() }
@@ -191,7 +200,7 @@ macro_rules! impl_into_system {
         {
             type System = FunctionSystem<($($params,)*), Self>;
             fn into_system(self) -> Self::System {
-                FunctionSystem { f: self, marker: Default::default(), locals: HashMap::new(), indices: Vec::new() }
+                FunctionSystem { f: self, marker: Default::default(), locals: HashMap::new(), indices: Vec::new(), accesses: Vec::new() }
             }
         }
     }
@@ -267,6 +276,19 @@ macro_rules! impl_into_condition {
 // ─── SystemParam ──────────────────────────────────────────────────────────────
 
 // ANCHOR: SystemParam
+/// How a [`SystemParam`] accesses its resource — surfaced to the scheduler so it
+/// can mediate host↔device coherence (see `CoherenceRegistry`). `Res` reads,
+/// `ResMut` writes, `Local` and resource-free params access nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessKind {
+    /// Does not access a shared resource (e.g. [`Local`]).
+    None,
+    /// Shared read access ([`Res`], `Option<Res>`).
+    Read,
+    /// Exclusive write access ([`ResMut`], `Option<ResMut>`).
+    Write,
+}
+
 /// Types that can be injected as parameters into system functions.
 ///
 /// Implementors define how to retrieve a value from the scheduler's resource storage.
@@ -298,6 +320,13 @@ pub trait SystemParam {
     fn is_optional() -> bool {
         false
     }
+
+    /// How this param accesses its resource (read/write/none). Defaults to `None`
+    /// so resource-free params (e.g. [`Local`]) report no access; `Res`/`ResMut`
+    /// and their `Option` wrappers override it.
+    fn access_kind() -> AccessKind {
+        AccessKind::None
+    }
 }
 // ANCHOR_END: SystemParam
 
@@ -319,6 +348,9 @@ impl<'res, T: 'static> SystemParam for Res<'res, T> {
     fn resource_type_id() -> Option<(TypeId, &'static str)> {
         Some((TypeId::of::<T>(), std::any::type_name::<T>()))
     }
+    fn access_kind() -> AccessKind {
+        AccessKind::Read
+    }
 }
 // ANCHOR_END: ResSystemParam
 
@@ -339,6 +371,9 @@ impl<'res, T: 'static> SystemParam for ResMut<'res, T> {
     }
     fn resource_type_id() -> Option<(TypeId, &'static str)> {
         Some((TypeId::of::<T>(), std::any::type_name::<T>()))
+    }
+    fn access_kind() -> AccessKind {
+        AccessKind::Write
     }
 }
 // ANCHOR_END: ResMutSystemParam
@@ -471,6 +506,9 @@ impl<'res, T: 'static> SystemParam for Option<Res<'res, T>> {
     fn is_optional() -> bool {
         true
     }
+    fn access_kind() -> AccessKind {
+        AccessKind::Read
+    }
 }
 
 impl<'res, T: 'static> SystemParam for Option<ResMut<'res, T>> {
@@ -495,6 +533,9 @@ impl<'res, T: 'static> SystemParam for Option<ResMut<'res, T>> {
     fn is_optional() -> bool {
         true
     }
+    fn access_kind() -> AccessKind {
+        AccessKind::Write
+    }
 }
 
 // ─── System trait & FunctionSystem ───────────────────────────────────────────
@@ -518,6 +559,13 @@ pub trait System {
     /// Returns the system's human-readable name (typically `std::any::type_name::<F>()`).
     fn name(&self) -> &str {
         "unknown"
+    }
+
+    /// The resources this system accesses, as `(resource_index, AccessKind)` pairs,
+    /// resolved during [`prepare`](Self::prepare). The scheduler reads this to
+    /// mediate host↔device coherence. Defaults to empty (no tracked access).
+    fn accesses(&self) -> &[(usize, AccessKind)] {
+        &[]
     }
 
     /// Returns the name of this system's run condition, if any.
@@ -556,6 +604,9 @@ pub struct FunctionSystem<Input, F> {
     locals: HashMap<TypeId, Box<dyn Any>>,
     /// Cached resource indices resolved during [`System::prepare`].
     indices: Vec<usize>,
+    /// Cached (resource_index, access_kind) for params that touch a resource,
+    /// resolved during [`System::prepare`]. Drives scheduler coherence mediation.
+    accesses: Vec<(usize, AccessKind)>,
 }
 
 /// Converts a function (with up to 10 [`SystemParam`] parameters) into a [`System`].
@@ -716,6 +767,9 @@ impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
     }
     fn name(&self) -> &str {
         self.system.name()
+    }
+    fn accesses(&self) -> &[(usize, AccessKind)] {
+        self.system.accesses()
     }
     fn condition_name(&self) -> Option<&str> {
         let n = self.condition.name();
@@ -3250,6 +3304,8 @@ impl SchedulerManager {
 pub mod prelude {
     pub use crate::{
         apply_state_transitions,
+        // Resource access kind (read/write) surfaced to coherence mediation
+        AccessKind,
         check_stage_advance,
         first_stage_only,
         in_stage,
@@ -3359,6 +3415,45 @@ mod tests {
     fn system_with_optional_present(res: Option<Res<MyResource>>) {
         assert!(res.is_some());
         assert_eq!(res.unwrap().0, 42);
+    }
+
+    // ── Phase 1: access metadata (read/write surfaced to the scheduler) ──────────
+
+    #[test]
+    fn access_kind_reported_for_res_resmut_and_local() {
+        struct A(i32);
+        struct B(i32);
+        fn sys(_a: Res<A>, _b: ResMut<B>, _l: Local<u32>) {}
+        let mut s = sys.into_system();
+        let mut index = HashMap::new();
+        index.insert(TypeId::of::<A>(), 7usize);
+        index.insert(TypeId::of::<B>(), 3usize);
+        let missing = s.prepare(&index);
+        assert!(missing.is_empty());
+        let acc = s.accesses();
+        // Local contributes no tracked access; A reads slot 7, B writes slot 3.
+        assert_eq!(acc.len(), 2);
+        assert!(acc.contains(&(7, AccessKind::Read)));
+        assert!(acc.contains(&(3, AccessKind::Write)));
+    }
+
+    #[test]
+    fn optional_access_present_recorded_missing_skipped_and_reprepare_is_idempotent() {
+        struct C(i32);
+        fn sys(_c: Option<ResMut<C>>) {}
+        let mut s = sys.into_system();
+        // Missing optional: no validation error, and nothing recorded (idx == MAX).
+        let empty = HashMap::new();
+        assert!(s.prepare(&empty).is_empty());
+        assert!(s.accesses().is_empty());
+        // Present: recorded as a Write at its slot.
+        let mut index = HashMap::new();
+        index.insert(TypeId::of::<C>(), 1usize);
+        s.prepare(&index);
+        assert_eq!(s.accesses(), &[(1, AccessKind::Write)]);
+        // Re-prepare must not duplicate (accesses cleared each time).
+        s.prepare(&index);
+        assert_eq!(s.accesses(), &[(1, AccessKind::Write)]);
     }
 
     #[test]
