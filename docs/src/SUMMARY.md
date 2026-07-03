@@ -12,6 +12,7 @@
 # Tutorial
 
 - [Write Your Own Solver](./tutorial/write-your-own-solver.md)
+- [Coupling Two Solvers](./tutorial/coupling-two-solvers.md)
 
 # Reference
 
