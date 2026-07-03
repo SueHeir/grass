@@ -20,8 +20,11 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles)
 - **[DIRT](https://github.com/SueHeir/dirt)** — DEM physics on the substrate. See
   the [DIRT book](https://sueheir.github.io/dirt).
 
-This is a pure library workspace — no examples binaries; the consumers are SOIL,
-DIRT, and your own solver.
+This is a library workspace — the consumers are SOIL, DIRT, and your own
+solver — but each crate ships runnable `cargo` examples so you can learn by
+doing (`cargo run -p grass_scheduler --example verlet_minisolver` runs the
+falling-body solver this book's [quickstart](quickstart.md) builds in prose;
+see also `hello_app`, `heat_diffusion_1d`, and `observed_oscillator`).
 
 ## What kind of solver is GRASS for
 
