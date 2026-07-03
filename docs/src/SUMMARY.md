@@ -9,6 +9,7 @@
 - [The Scheduler](./model/scheduler.md)
 - [I/O and Configuration](./model/io.md)
 - [MPI and Coupling](./model/mpi-coupling.md)
+- [Non-Particle Solvers on GRASS](./model/non-particle-solvers.md)
 
 # Tutorial
 
