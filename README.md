@@ -1,7 +1,8 @@
 # GRASS
 
-**Build explicit solvers as composable plugins instead of a hand-rolled main
-loop — and couple several together, in-process or across MPI.**
+**Build solvers as composable plugins instead of a hand-rolled main loop —
+explicit time-stepping or a single implicit global solve, particles or a mesh —
+and couple several together, in-process or across MPI.**
 
 You don't write a `main` loop. You register your state as **resources** and your
 step logic as **systems** (plain functions that declare what they read and write
@@ -77,20 +78,28 @@ Three things worth spotlighting:
 
 ## When to use it — and when not
 
-**Use GRASS when** your solver's state is **resource-shaped with separable
-read/write sets**: an explicit, time-stepping method where each step is a
-sequence of systems that read some resources and write others. That is exactly
-the shape of a particle code, a finite-volume sweep, or a cellular update — and
-the payoff is that you write the physics, not the plumbing, and you can couple
-your solver to someone else's.
+**Use GRASS when** your solver's step decomposes into **systems with separable
+read/write sets** — each stage reads some resources and writes others. That is
+the shape of a particle code, a finite-volume sweep, a cellular update, *and*
+(as it turns out) an implicit assemble-and-solve: the payoff is that you write
+the physics, not the plumbing, and you can couple your solver to someone else's.
 
-**Reach for something else when** your state is one large coupled matrix rather
-than separable resources — implicit global solvers (FEM, spectral,
-Newton–Krylov) where every unknown depends on every other through a global solve.
-GRASS is **not proven** for that shape today, and we would rather say so than
-imply a fit that isn't there. (This is scope, not a permanent verdict: a
-mesh/implicit substrate is being worked on, and this section will grow when
-there's a landed proof to point at.)
+**Implicit global solves work too — and it's proven.** These docs used to say
+GRASS was "not proven for implicit global solvers (FEM, spectral, Newton–Krylov)".
+That caveat is retired. FIELD's [`fem_poisson`](https://github.com/SueHeir/field)
+example solves steady-state Poisson with P1 finite elements as a **single global
+sparse solve** `K u = b` — every unknown coupled through one matrix, no
+timestepping — expressed as an ordinary `Assemble → Solve → Validate` schedule on
+GRASS. It converges at the theoretical 2nd order (observed mean L² order **1.995**
+vs. theory 2.000). What GRASS gives you there is the schedule and the resources;
+**you bring the sparse solver** (`fem_poisson` uses `nalgebra-sparse`). See
+[Non-Particle Solvers on GRASS](https://sueheir.github.io/grass/model/non-particle-solvers.html).
+
+**Still honestly scoped:** the landed proof is one *linear, symmetric,
+single-solve* problem. Nonlinear Newton–Krylov iteration, spectral methods, and
+large distributed sparse solves are consistent with the design but not yet
+demonstrated with a validated example — we'll cite them here when they land, not
+before.
 
 ## The stack
 
@@ -98,19 +107,25 @@ GRASS is the framework tier of a three-repo stack. Lower tiers never depend on
 higher ones:
 
 ```
-GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles)
-  └─ SOIL   substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
-       └─ DIRT   physics: Discrete Element Method
+GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no mesh)
+  ├─ SOIL    substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
+  │    └─ DIRT   physics: Discrete Element Method
+  └─ FIELD   substrate: Mesh, FieldData, halo, AMR                         (no equations)
+       └─ test-cfd  physics: compressible CFD (Riemann/EOS/IBM)  — in progress
 ```
 
 - **GRASS** (this repo) — App + Plugin + dependency-injection scheduler, I/O,
-  MPI, coupling primitives. No particles, no physics.
+  MPI, coupling primitives. No particles, no mesh, no physics.
 - **[SOIL](https://github.com/SueHeir/soil)** — a method-agnostic particle
   substrate on GRASS (base `Atom`, `AtomData` registry, domain decomposition,
   communication, neighbor lists). See the [SOIL book](https://sueheir.github.io/soil).
 - **[DIRT](https://github.com/SueHeir/dirt)** — the Discrete Element Method on
   the SOIL substrate (contact, parallel bonds, walls, clumps). See the
   [DIRT book](https://sueheir.github.io/dirt).
+- **[FIELD](https://github.com/SueHeir/field)** — the mesh/Eulerian substrate on
+  GRASS (`UniformMesh`, `FieldData`, halo), equation-agnostic the way SOIL is
+  method-agnostic. It already hosts the `fem_poisson` implicit-solve proof; its
+  compressible-CFD physics tier (**test-cfd**) is in progress.
 
 The App + scheduler crates here were extracted from that particle codebase; GRASS
 retains nothing particle- or physics-specific.
@@ -161,6 +176,7 @@ The book is the primary docs; it builds from `docs/` with `mdbook build`.
 - [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html) — a complete time-stepping solver, from scratch.
 - [The Scheduler](https://sueheir.github.io/grass/model/scheduler.html) — resources, systems, the schedule tree, and the borrow rules.
 - [MPI and Coupling](https://sueheir.github.io/grass/model/mpi-coupling.html) — running across processes and coupling several solvers.
+- [Non-Particle Solvers on GRASS](https://sueheir.github.io/grass/model/non-particle-solvers.html) — the mesh and implicit-FEM proofs that GRASS is discretization-agnostic.
 
 ## License
 
