@@ -28,6 +28,9 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
   GRASS, equation-agnostic; it hosts the `fem_poisson` implicit-solve proof, with
   a compressible-CFD physics tier (test-cfd) in progress.
 
+New to the stack? [How the Stack Fits Together](./stack/how-the-stack-fits-together.md)
+is the canonical walkthrough of how the tiers compose and where to start.
+
 This is a library workspace — the consumers are SOIL, DIRT, and your own
 solver — but each crate ships runnable `cargo` examples so you can learn by
 doing (`cargo run -p grass_scheduler --example verlet_minisolver` runs the
