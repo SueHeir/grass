@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](./introduction.md)
+[GRASS in 5 minutes](./quickstart.md)
 
 # The Model
 
