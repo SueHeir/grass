@@ -3,6 +3,10 @@
 [Introduction](./introduction.md)
 [GRASS in 5 minutes](./quickstart.md)
 
+# The Stack
+
+- [How the Stack Fits Together](./stack/how-the-stack-fits-together.md)
+
 # The Model
 
 - [App, Plugin, PluginGroup](./model/app-plugin.md)
