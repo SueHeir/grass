@@ -2003,7 +2003,12 @@ impl Scheduler {
                 );
             }
             if let Some(ci) = coh {
-                coherence::ensure_coherent(&self.resources, ci, entry.system.accesses(), &entry.name);
+                coherence::ensure_coherent(
+                    &self.resources,
+                    ci,
+                    entry.system.accesses(),
+                    &entry.name,
+                );
             }
             let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
@@ -2095,7 +2100,12 @@ impl Scheduler {
                 );
             }
             if let Some(ci) = coh {
-                coherence::ensure_coherent(&self.resources, ci, entry.system.accesses(), &entry.name);
+                coherence::ensure_coherent(
+                    &self.resources,
+                    ci,
+                    entry.system.accesses(),
+                    &entry.name,
+                );
             }
             let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
@@ -3339,18 +3349,16 @@ impl SchedulerManager {
 pub mod prelude {
     pub use crate::{
         apply_state_transitions,
-        // Resource access kind (read/write) surfaced to coherence mediation
-        AccessKind,
         check_stage_advance,
-        // Host<->device coherence mediation
-        CoherenceRegistry,
-        MirrorBridge,
-        MirrorState,
         first_stage_only,
         in_stage,
         in_state,
         on_enter_stage,
         on_enter_state,
+        // Resource access kind (read/write) surfaced to coherence mediation
+        AccessKind,
+        // Host<->device coherence mediation
+        CoherenceRegistry,
         ConditionalSystem,
         // Simulation states
         CurrentState,
@@ -3358,6 +3366,8 @@ pub mod prelude {
         // System label (function-handle or string ordering)
         IntoSystemLabel,
         Local,
+        MirrorBridge,
+        MirrorState,
         NextState,
         Res,
         ResMut,

@@ -26,7 +26,9 @@
 //! per-stage re-reading, e.g. a solver tweaking `dt` between stages.)
 
 use grass_app::prelude::*;
-use grass_io::{Config, DumpPlugin, DumpSchedule, InputPlugin, RunPlugin, TermOut, TermOutSchedule};
+use grass_io::{
+    Config, DumpPlugin, DumpSchedule, InputPlugin, RunPlugin, TermOut, TermOutSchedule,
+};
 use grass_scheduler::prelude::*;
 use grass_scheduler::{Res, ResMut};
 
@@ -126,5 +128,8 @@ fn main() {
     app.start();
 
     let s = app.get_resource_ref::<OscState>().expect("OscState");
-    println!("observed_oscillator: finished at x = {:.4}, v = {:.4}", s.x, s.v);
+    println!(
+        "observed_oscillator: finished at x = {:.4}, v = {:.4}",
+        s.x, s.v
+    );
 }
