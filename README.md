@@ -16,6 +16,14 @@ GRASS — the **General Rust App System Scheduler** — is that framework tier. 
 knows nothing about particles or physics; it is the App, scheduler, I/O, MPI, and
 coupling layer that domain crates (and your own solver) build on.
 
+It's the foundation a research ecosystem is built on, not a monolith you run.
+[SOIL](https://github.com/SueHeir/soil) builds a parallel particle substrate on it;
+[DIRT](https://github.com/SueHeir/dirt) builds a LAMMPS-validated DEM code on that;
+[FIELD](https://github.com/SueHeir/field) builds a mesh substrate for PDE solvers —
+and the same seams are open for a CFD, SPH, or peridynamics tier you write yourself.
+Each is a library you read, extend, and customize in Rust, reusing the scheduler,
+I/O, and coupling instead of a hand-rolled main loop.
+
 ## Ten seconds
 
 ```rust
@@ -56,6 +64,13 @@ Everything is three primitives and one scheduler.
   wires its resources and systems; a group bundles plugins and lets a consumer
   `disable::<T>()` one and substitute their own. This is exactly how SOIL and
   DIRT layer on, and how you swap an integrator or output law.
+
+Because a solver here *is* Rust — resources, systems, plugins — you extend or
+change one the same way you read it: add a system, add a plugin, override a group.
+There is no separate input-script language to learn or grow out of; a new feature
+is type-checked code you can read, modify, and step through in a debugger. (`grass_io`
+does offer TOML config for values you'd rather not hard-code — parameters, run
+stages — but the *behavior* stays in Rust, where you can see it.)
 
 Three things worth spotlighting:
 
@@ -147,9 +162,9 @@ themselves:
 - **[SOIL](https://github.com/SueHeir/soil)** — Write your own particle method
   without hand-writing domain decomposition, halo exchange, migration, and
   neighbor lists — declare your state once, SOIL carries it through all of it.
-- **[DIRT](https://github.com/SueHeir/dirt)** — A Rust granular-DEM engine that
-  resolves every contact individually — cross-checked against LAMMPS and
-  closed-form theory.
+- **[DIRT](https://github.com/SueHeir/dirt)** — A Rust granular-DEM code you read
+  and extend as composable plugins — cross-checked against LAMMPS and closed-form
+  theory.
 
 **Where to start:** to *run* granular simulations, start at
 [DIRT](https://github.com/SueHeir/dirt), the batteries-included physics tier; to
