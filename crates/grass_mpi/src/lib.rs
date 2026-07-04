@@ -599,3 +599,213 @@ mod tests {
         assert_eq!(comm.processor_position(), pos);
     }
 }
+
+// ── MPI multi-rank overlap-equivalence test ───────────────────────────────────
+//
+// Proves the real MPI backend's `sendrecv_batch_overlap_f64_into` is correct:
+//   (1) the overlapped batch of Isend/Irecv delivers results BIT-IDENTICAL to
+//       issuing the same swaps one at a time via `sendrecv_f64_into`, on the same
+//       seeded buffers, and
+//   (2) the caller's local work run in the in-flight window does not corrupt the
+//       send/recv scratch buffers.
+//
+// `cargo test` runs the test binary as a single process, so `world.size()` would
+// be 1 and no genuine inter-rank routing would be exercised. To get a real
+// multi-rank layout the coordinating run re-launches THIS test binary under
+// `mpirun -np N`, guarded by an env var so each spawned child runs the body once
+// instead of re-spawning. Requires `mpirun` on PATH; if it is absent the test
+// skips with a visible note (the `mpi_backend` build still compiles the check).
+#[cfg(all(test, feature = "mpi_backend"))]
+mod mpi_overlap_tests {
+    use super::*;
+    use std::process::Command;
+
+    const CHILD_ENV: &str = "GRASS_MPI_OVERLAP_CHILD";
+    const NRANKS: usize = 4; // >=3 so each rank's left/right neighbors are distinct
+    const NPER: usize = 17; // f64 elements per swap buffer (odd, small)
+
+    // The buffer a rank sends toward its +1 (right) neighbor …
+    const TAG_PLUS: u64 = 1;
+    // … and the buffer it sends toward its -1 (left) neighbor.
+    const TAG_MINUS: u64 = 2;
+
+    // Deterministic (rank, direction, index)-specific payload. Distinct bit
+    // patterns per element so a mis-routed or corrupted value is detectable, with
+    // a fractional part that makes bit-for-bit comparison meaningful. A pure
+    // function of its inputs => an INDEPENDENT reference, not a self-consistent
+    // echo of whatever the comm happened to move. Always finite / non-NaN.
+    fn payload(rank: i32, tag: u64, i: usize) -> f64 {
+        // splitmix64-style hash of (rank, tag, i) -> a [0,1) fraction.
+        let mut z = (rank as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(tag.wrapping_mul(0xD1B5_4A32_D192_ED03))
+            .wrapping_add(i as u64);
+        z ^= z >> 30;
+        z = z.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z ^= z >> 27;
+        let frac = (z >> 11) as f64 / (1u64 << 53) as f64; // [0,1)
+        (rank as f64) * 1000.0 + (tag as f64) * 10.0 + i as f64 + frac
+    }
+
+    fn bits_eq(a: &[f64], b: &[f64]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+    }
+
+    // The real multi-rank check, run once per rank under mpirun.
+    fn run_body() {
+        let world = get_mpi_world();
+        let comm = MpiCommBackend::new(world);
+        let rank = comm.rank();
+        let size = comm.size();
+        assert!(size >= 2, "overlap equivalence needs >=2 ranks, got {size}");
+
+        let right = (rank + 1).rem_euclid(size);
+        let left = (rank - 1).rem_euclid(size);
+
+        // Seeded send buffers, held immutable across the whole swap.
+        let send_plus: Vec<f64> = (0..NPER).map(|i| payload(rank, TAG_PLUS, i)).collect();
+        let send_minus: Vec<f64> = (0..NPER).map(|i| payload(rank, TAG_MINUS, i)).collect();
+
+        // ── Reference: issue the two swaps SERIALLY, one sendrecv at a time ──
+        //   Op A: send TAG_PLUS  to right, recv from left.
+        //   Op B: send TAG_MINUS to left,  recv from right.
+        let mut ref_from_left = vec![0.0f64; NPER];
+        let mut ref_from_right = vec![0.0f64; NPER];
+        comm.sendrecv_f64_into(right, &send_plus, left, &mut ref_from_left);
+        comm.sendrecv_f64_into(left, &send_minus, right, &mut ref_from_right);
+
+        // ── Overlapped batch on freshly-seeded, byte-identical buffers ──
+        let send_plus2: Vec<f64> = (0..NPER).map(|i| payload(rank, TAG_PLUS, i)).collect();
+        let send_minus2: Vec<f64> = (0..NPER).map(|i| payload(rank, TAG_MINUS, i)).collect();
+        assert!(
+            bits_eq(&send_plus, &send_plus2) && bits_eq(&send_minus, &send_minus2),
+            "rank {rank}: reseeded send buffers must be bit-identical to the originals"
+        );
+
+        let mut batch_from_left = vec![0.0f64; NPER];
+        let mut batch_from_right = vec![0.0f64; NPER];
+
+        // Independent local work performed WHILE the swaps are in flight. It
+        // touches only `interior`, never the ops' send/recv scratch, and records
+        // that it actually ran so we can prove the overlap fired.
+        let mut interior = vec![0.0f64; 64];
+        let mut overlap_ran = 0u32;
+        {
+            let mut ops = [
+                SendRecvOp {
+                    dest: right,
+                    send_buf: &send_plus2,
+                    source: left,
+                    recv_buf: &mut batch_from_left,
+                },
+                SendRecvOp {
+                    dest: left,
+                    send_buf: &send_minus2,
+                    source: right,
+                    recv_buf: &mut batch_from_right,
+                },
+            ];
+            let mut overlap = || {
+                overlap_ran += 1;
+                for (i, s) in interior.iter_mut().enumerate() {
+                    *s = (i as f64).mul_add(1.5, rank as f64);
+                }
+            };
+            comm.sendrecv_batch_overlap_f64_into(&mut ops, &mut overlap);
+        }
+
+        // (2) The overlap closure ran exactly once and its result is intact.
+        assert_eq!(
+            overlap_ran, 1,
+            "rank {rank}: overlap closure must run exactly once"
+        );
+        for (i, s) in interior.iter().enumerate() {
+            assert_eq!(
+                s.to_bits(),
+                (i as f64).mul_add(1.5, rank as f64).to_bits(),
+                "rank {rank}: overlap local work corrupted at index {i}"
+            );
+        }
+
+        // (2) The send scratch buffers were NOT mutated by the in-flight window.
+        assert!(
+            bits_eq(&send_plus2, &send_plus),
+            "rank {rank}: send_plus scratch mutated during overlap"
+        );
+        assert!(
+            bits_eq(&send_minus2, &send_minus),
+            "rank {rank}: send_minus scratch mutated during overlap"
+        );
+
+        // (1) The overlapped recv buffers are BIT-IDENTICAL to the serial ones.
+        assert!(
+            bits_eq(&batch_from_left, &ref_from_left),
+            "rank {rank}: overlap recv(from left) != serial sendrecv_f64_into reference"
+        );
+        assert!(
+            bits_eq(&batch_from_right, &ref_from_right),
+            "rank {rank}: overlap recv(from right) != serial sendrecv_f64_into reference"
+        );
+
+        // Independent analytic cross-check (guards against both paths sharing the
+        // same routing bug): the +1 buffer we received from `left` must equal what
+        // `left` sent toward its right (== us), and the -1 buffer from `right` must
+        // equal what `right` sent toward its left (== us).
+        let expect_from_left: Vec<f64> = (0..NPER).map(|i| payload(left, TAG_PLUS, i)).collect();
+        let expect_from_right: Vec<f64> = (0..NPER).map(|i| payload(right, TAG_MINUS, i)).collect();
+        assert!(
+            bits_eq(&batch_from_left, &expect_from_left),
+            "rank {rank}: from-left buffer routed/corrupted (expected left rank's TAG_PLUS payload)"
+        );
+        assert!(
+            bits_eq(&batch_from_right, &expect_from_right),
+            "rank {rank}: from-right buffer routed/corrupted (expected right rank's TAG_MINUS payload)"
+        );
+
+        comm.barrier();
+        if rank == 0 {
+            eprintln!(
+                "grass_mpi overlap-equivalence PASS: {size} ranks, {NPER} elems/swap \u{2014} \
+                 overlap batch == serial sendrecv (bit-identical), scratch intact, overlap fired"
+            );
+        }
+        // Honor the finalize-after-comm-dropped contract: drop the backend's
+        // communicator handle before MPI_Finalize.
+        drop(comm);
+        finalize_mpi();
+    }
+
+    #[test]
+    fn batch_overlap_matches_serial_across_ranks() {
+        // Child leg: we were re-launched under mpirun — run the real body once.
+        if std::env::var_os(CHILD_ENV).is_some() {
+            run_body();
+            return;
+        }
+        // Coordinator leg: re-launch THIS test binary under `mpirun -np N`.
+        if Command::new("mpirun").arg("--version").output().is_err() {
+            eprintln!(
+                "SKIP batch_overlap_matches_serial_across_ranks: `mpirun` not found on PATH \
+                 (multi-rank overlap-equivalence check not exercised)"
+            );
+            return;
+        }
+        let exe = std::env::current_exe().expect("locate current test binary");
+        let status = Command::new("mpirun")
+            .args(["--oversubscribe", "-np", &NRANKS.to_string()])
+            .arg(&exe)
+            .args([
+                "--exact",
+                "mpi_overlap_tests::batch_overlap_matches_serial_across_ranks",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, "1")
+            .status()
+            .expect("spawn mpirun for multi-rank overlap-equivalence run");
+        assert!(
+            status.success(),
+            "multi-rank overlap-equivalence run under mpirun failed: {status}"
+        );
+    }
+}
