@@ -71,5 +71,8 @@ fn main() {
 
     let counter = app.get_resource_ref::<Counter>().expect("Counter resource");
     println!("hello_app: ran {} steps", counter.steps);
-    assert_eq!(counter.steps, 5, "expected the done-condition to stop at 5 steps");
+    assert_eq!(
+        counter.steps, 5,
+        "expected the done-condition to stop at 5 steps"
+    );
 }

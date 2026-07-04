@@ -116,7 +116,11 @@ impl CoherenceRegistry {
     /// Mark the device copy authoritative (the device just advanced the trajectory).
     /// Called by the device producer after stepping.
     pub fn mark_device_dirty(&mut self, trigger_type: TypeId) {
-        if let Some(m) = self.mirrors.iter_mut().find(|m| m.trigger_type == trigger_type) {
+        if let Some(m) = self
+            .mirrors
+            .iter_mut()
+            .find(|m| m.trigger_type == trigger_type)
+        {
             m.state = MirrorState::DeviceDirty;
         }
     }
@@ -125,7 +129,11 @@ impl CoherenceRegistry {
     /// caller must upload host→device). Otherwise return `false`. Called by the
     /// device producer before stepping.
     pub fn take_host_dirty(&mut self, trigger_type: TypeId) -> bool {
-        if let Some(m) = self.mirrors.iter_mut().find(|m| m.trigger_type == trigger_type) {
+        if let Some(m) = self
+            .mirrors
+            .iter_mut()
+            .find(|m| m.trigger_type == trigger_type)
+        {
             if m.state == MirrorState::HostDirty {
                 m.state = MirrorState::Coherent;
                 return true;
@@ -243,8 +251,16 @@ mod tests {
     }
     impl MirrorBridge for FakeBridge {
         fn download(&self, res: &[RefCell<Box<dyn Any>>]) {
-            let gpu_val = res[self.gpu_idx].borrow().downcast_ref::<FakeGpu>().unwrap().0;
-            res[self.atom_idx].borrow_mut().downcast_mut::<FakeAtom>().unwrap().0 = gpu_val;
+            let gpu_val = res[self.gpu_idx]
+                .borrow()
+                .downcast_ref::<FakeGpu>()
+                .unwrap()
+                .0;
+            res[self.atom_idx]
+                .borrow_mut()
+                .downcast_mut::<FakeAtom>()
+                .unwrap()
+                .0 = gpu_val;
         }
     }
 
@@ -253,7 +269,10 @@ mod tests {
         let (atom_idx, coh_idx, gpu_idx) = (0usize, 1usize, 2usize);
         let mut reg = CoherenceRegistry::new();
         reg.suppress_warnings = true;
-        reg.register(TypeId::of::<FakeAtom>(), Box::new(FakeBridge { atom_idx, gpu_idx }));
+        reg.register(
+            TypeId::of::<FakeAtom>(),
+            Box::new(FakeBridge { atom_idx, gpu_idx }),
+        );
         let mut index = HashMap::new();
         index.insert(TypeId::of::<FakeAtom>(), atom_idx);
         reg.resolve_indices(&index);
@@ -277,13 +296,19 @@ mod tests {
     #[test]
     fn device_dirty_read_pulls_and_counts() {
         let (res, coh, atom) = setup();
-        res[coh].borrow_mut().downcast_mut::<CoherenceRegistry>().unwrap()
+        res[coh]
+            .borrow_mut()
+            .downcast_mut::<CoherenceRegistry>()
+            .unwrap()
             .mark_device_dirty(TypeId::of::<FakeAtom>());
         // A host reader of the trigger forces a download.
         ensure_coherent(&res, coh, &[(atom, AccessKind::Read)], "reader_sys");
         assert_eq!(res[atom].borrow().downcast_ref::<FakeAtom>().unwrap().0, 99);
         assert_eq!(reg_ref(&res, coh), MirrorState::Coherent);
-        let syncs = res[coh].borrow().downcast_ref::<CoherenceRegistry>().unwrap()
+        let syncs = res[coh]
+            .borrow()
+            .downcast_ref::<CoherenceRegistry>()
+            .unwrap()
             .syncs(TypeId::of::<FakeAtom>());
         assert_eq!(syncs, 1);
     }
@@ -302,12 +327,18 @@ mod tests {
         mark_writes(&res, coh, &[(atom, AccessKind::Write)]);
         assert_eq!(reg_ref(&res, coh), MirrorState::HostDirty);
         // The device producer consumes the HostDirty (→ would upload+reprime).
-        let took = res[coh].borrow_mut().downcast_mut::<CoherenceRegistry>().unwrap()
+        let took = res[coh]
+            .borrow_mut()
+            .downcast_mut::<CoherenceRegistry>()
+            .unwrap()
             .take_host_dirty(TypeId::of::<FakeAtom>());
         assert!(took);
         assert_eq!(reg_ref(&res, coh), MirrorState::Coherent);
         // Second take is false (already cleared).
-        let took2 = res[coh].borrow_mut().downcast_mut::<CoherenceRegistry>().unwrap()
+        let took2 = res[coh]
+            .borrow_mut()
+            .downcast_mut::<CoherenceRegistry>()
+            .unwrap()
             .take_host_dirty(TypeId::of::<FakeAtom>());
         assert!(!took2);
     }
@@ -315,15 +346,27 @@ mod tests {
     #[test]
     fn self_managed_system_is_skipped() {
         let (res, coh, atom) = setup();
-        res[coh].borrow_mut().downcast_mut::<CoherenceRegistry>().unwrap()
+        res[coh]
+            .borrow_mut()
+            .downcast_mut::<CoherenceRegistry>()
+            .unwrap()
             .mark_device_dirty(TypeId::of::<FakeAtom>());
         // A self-managed system touches the registry (coh index) AND the trigger.
-        ensure_coherent(&res, coh, &[(atom, AccessKind::Write), (coh, AccessKind::Write)], "resident_step");
+        ensure_coherent(
+            &res,
+            coh,
+            &[(atom, AccessKind::Write), (coh, AccessKind::Write)],
+            "resident_step",
+        );
         // No download happened; state untouched.
         assert_eq!(res[atom].borrow().downcast_ref::<FakeAtom>().unwrap().0, 0);
         assert_eq!(reg_ref(&res, coh), MirrorState::DeviceDirty);
         // And mark_writes is also skipped (no false HostDirty).
-        mark_writes(&res, coh, &[(atom, AccessKind::Write), (coh, AccessKind::Write)]);
+        mark_writes(
+            &res,
+            coh,
+            &[(atom, AccessKind::Write), (coh, AccessKind::Write)],
+        );
         assert_eq!(reg_ref(&res, coh), MirrorState::DeviceDirty);
     }
 }

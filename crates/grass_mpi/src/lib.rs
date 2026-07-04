@@ -254,7 +254,13 @@ impl CommBackend for SingleProcessComm {
     fn sendrecv_f64(&self, _dest: i32, _send_buf: &[f64], _source: i32) -> Vec<f64> {
         unreachable!("SingleProcessComm::sendrecv_f64 should never be called");
     }
-    fn sendrecv_f64_into(&self, _dest: i32, _send_buf: &[f64], _source: i32, _recv_buf: &mut [f64]) {
+    fn sendrecv_f64_into(
+        &self,
+        _dest: i32,
+        _send_buf: &[f64],
+        _source: i32,
+        _recv_buf: &mut [f64],
+    ) {
         unreachable!("SingleProcessComm::sendrecv_f64_into should never be called");
     }
     fn sendrecv_batch_f64_into(&self, ops: &mut [SendRecvOp<'_>]) {

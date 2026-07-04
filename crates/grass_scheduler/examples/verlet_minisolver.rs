@@ -24,9 +24,9 @@ struct Body {
 /// Phases of one velocity-Verlet step. Declaration order = schedule index.
 #[derive(Debug, Clone, Copy)]
 enum Step {
-    KickA,  // v += a*dt/2 using the *old* acceleration
-    Drift,  // x += v*dt, then recompute acceleration for the new x
-    KickB,  // v += a*dt/2 using the *new* acceleration
+    KickA, // v += a*dt/2 using the *old* acceleration
+    Drift, // x += v*dt, then recompute acceleration for the new x
+    KickB, // v += a*dt/2 using the *new* acceleration
 }
 
 impl ScheduleSet for Step {
@@ -93,13 +93,20 @@ fn main() {
     println!("after {steps} steps: x = {:.4}, v = {:.4}", body.x, body.v);
 
     // After one full period the oscillator should return near its start.
-    assert!((body.x - x0).abs() < 1e-2, "x did not return to start: {}", body.x);
+    assert!(
+        (body.x - x0).abs() < 1e-2,
+        "x did not return to start: {}",
+        body.x
+    );
     assert!(body.v.abs() < 1e-2, "v did not return to zero: {}", body.v);
 
     // Energy (0.5 v^2 + 0.5 k x^2) should be conserved by symplectic Verlet.
     let energy = 0.5 * body.v * body.v + 0.5 * k * body.x * body.x;
     let energy0 = 0.5 * k * x0 * x0;
-    assert!((energy - energy0).abs() < 1e-3, "energy drift: {energy} vs {energy0}");
+    assert!(
+        (energy - energy0).abs() < 1e-3,
+        "energy drift: {energy} vs {energy0}"
+    );
 
     println!("verlet_minisolver: final state asserts passed");
 }
