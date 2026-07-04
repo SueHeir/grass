@@ -79,6 +79,10 @@ pub struct RemoteMirrorPhysics {
 }
 
 impl RemoteMirrorPhysics {
+    /// Creates a mirror physics under `name`, backed by `transport` for
+    /// cross-process resource replication. The pump lists start empty;
+    /// populate them via the [`MultiAppExt::add_remote_subapp`](crate::MultiAppExt::add_remote_subapp)
+    /// builder chain before registration.
     pub fn new(name: impl Into<String>, transport: Box<dyn Transport>) -> Self {
         Self {
             name: name.into(),

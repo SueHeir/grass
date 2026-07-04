@@ -80,6 +80,9 @@ impl Default for SubApps {
 }
 
 impl SubApps {
+    /// Creates an empty `SubApps` registry with no sub-Apps. Register
+    /// physics with [`register`](Self::register) (usually via
+    /// [`MultiAppExt::add_subapp`](crate::MultiAppExt::add_subapp)).
     pub fn new() -> Self {
         Self {
             physics: Vec::new(),
