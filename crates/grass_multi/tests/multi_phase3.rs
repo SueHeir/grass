@@ -382,3 +382,353 @@ fn send_at_setup_handshake_exchanges_critical_dt() {
     assert_eq!(a_seen, 5.0e-6, "A's mirror sees B's CritDt after handshake");
     assert_eq!(b_seen, 1.0e-7, "B's mirror sees A's CritDt after handshake");
 }
+
+// ─── In-process vs remote-transport equivalence ────────────────────────────
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct CoupledQuantity {
+    value: f64,
+    flux: f64,
+}
+
+impl Wire for CoupledQuantity {
+    fn pack(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16);
+        out.extend_from_slice(&self.value.to_le_bytes());
+        out.extend_from_slice(&self.flux.to_le_bytes());
+        out
+    }
+
+    fn unpack(buf: &[u8]) -> Self {
+        let mut value = [0u8; 8];
+        let mut flux = [0u8; 8];
+        value.copy_from_slice(&buf[..8]);
+        flux.copy_from_slice(&buf[8..16]);
+        Self {
+            value: f64::from_le_bytes(value),
+            flux: f64::from_le_bytes(flux),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct PeerQuantity(CoupledQuantity);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct SolverState {
+    value: f64,
+    velocity: f64,
+    accumulated_peer_flux: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SolverParams {
+    stiffness: f64,
+    damping: f64,
+    dt: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct EquivalenceResult {
+    state: SolverState,
+    local_quantity: CoupledQuantity,
+    seen_peer: CoupledQuantity,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SolverSchedule {
+    Step,
+}
+
+impl ScheduleSet for SolverSchedule {
+    fn to_index(&self) -> u32 {
+        0
+    }
+
+    fn name(&self) -> &'static str {
+        "Step"
+    }
+}
+
+fn coupled_step(
+    mut state: ResMut<SolverState>,
+    params: Res<SolverParams>,
+    peer: Res<PeerQuantity>,
+    mut output: ResMut<CoupledQuantity>,
+) {
+    let forcing = 0.25 * peer.0.flux - params.stiffness * state.value;
+    state.velocity = (state.velocity + params.dt * forcing) * params.damping;
+    state.value += params.dt * state.velocity + 0.05 * peer.0.value;
+    state.accumulated_peer_flux += peer.0.flux;
+    output.value = state.value;
+    output.flux = params.stiffness * state.value + state.velocity;
+}
+
+fn build_coupled_solver(initial_value: f64, initial_velocity: f64, params: SolverParams) -> App {
+    let mut app = App::new();
+    app.add_resource(SolverState {
+        value: initial_value,
+        velocity: initial_velocity,
+        accumulated_peer_flux: 0.0,
+    });
+    app.add_resource(params);
+    app.add_resource(PeerQuantity::default());
+    app.add_resource(CoupledQuantity {
+        value: initial_value,
+        flux: params.stiffness * initial_value + initial_velocity,
+    });
+    app.add_update_system(coupled_step, SolverSchedule::Step);
+    app
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EquivalenceSchedule {
+    TickA,
+    TickB,
+    Exchange,
+}
+
+impl ScheduleSet for EquivalenceSchedule {
+    fn to_index(&self) -> u32 {
+        match self {
+            Self::TickA => 0,
+            Self::TickB => 1,
+            Self::Exchange => 2,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::TickA => "TickA",
+            Self::TickB => "TickB",
+            Self::Exchange => "Exchange",
+        }
+    }
+}
+
+fn exchange_in_process(world: Multi) {
+    let a = *world.expect_read::<CoupledQuantity>("a");
+    let b = *world.expect_read::<CoupledQuantity>("b");
+    world.expect_write::<PeerQuantity>("a").0 = b;
+    world.expect_write::<PeerQuantity>("b").0 = a;
+}
+
+fn read_equivalence_result(parent: &App, ns: &str) -> EquivalenceResult {
+    let subs = parent.get_resource_ref::<SubApps>().unwrap();
+    let physics = subs.find(ns).unwrap();
+
+    let state = {
+        let cell = physics
+            .resource_cell(std::any::TypeId::of::<SolverState>())
+            .unwrap()
+            .borrow();
+        *cell.downcast_ref::<SolverState>().unwrap()
+    };
+    let local_quantity = {
+        let cell = physics
+            .resource_cell(std::any::TypeId::of::<CoupledQuantity>())
+            .unwrap()
+            .borrow();
+        *cell.downcast_ref::<CoupledQuantity>().unwrap()
+    };
+    let seen_peer = {
+        let cell = physics
+            .resource_cell(std::any::TypeId::of::<PeerQuantity>())
+            .unwrap()
+            .borrow();
+        cell.downcast_ref::<PeerQuantity>().unwrap().0
+    };
+
+    EquivalenceResult {
+        state,
+        local_quantity,
+        seen_peer,
+    }
+}
+
+fn run_in_process_equivalence(n_iters: usize) -> (EquivalenceResult, EquivalenceResult) {
+    let mut parent = App::new();
+    parent.add_subapp(
+        "a",
+        build_coupled_solver(
+            1.25,
+            -0.375,
+            SolverParams {
+                stiffness: 1.5,
+                damping: 0.93,
+                dt: 0.125,
+            },
+        ),
+    );
+    parent.add_subapp(
+        "b",
+        build_coupled_solver(
+            -0.75,
+            0.5,
+            SolverParams {
+                stiffness: 0.85,
+                damping: 0.97,
+                dt: 0.125,
+            },
+        ),
+    );
+
+    parent.add_update_system(tick_subapp("a", 1), EquivalenceSchedule::TickA);
+    parent.add_update_system(tick_subapp("b", 1), EquivalenceSchedule::TickB);
+    parent.add_update_system(exchange_in_process, EquivalenceSchedule::Exchange);
+
+    parent.prepare();
+    for _ in 0..n_iters {
+        parent.run();
+    }
+
+    (
+        read_equivalence_result(&parent, "a"),
+        read_equivalence_result(&parent, "b"),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RemoteEquivalenceSchedule {
+    TickLocal,
+    Export,
+    TickPeer,
+    Import,
+}
+
+impl ScheduleSet for RemoteEquivalenceSchedule {
+    fn to_index(&self) -> u32 {
+        match self {
+            Self::TickLocal => 0,
+            Self::Export => 1,
+            Self::TickPeer => 2,
+            Self::Import => 3,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::TickLocal => "TickLocal",
+            Self::Export => "Export",
+            Self::TickPeer => "TickPeer",
+            Self::Import => "Import",
+        }
+    }
+}
+
+fn export_local_quantity(world: Multi) {
+    let local = *world.expect_read::<CoupledQuantity>("local");
+    *world.expect_write::<CoupledQuantity>("peer") = local;
+}
+
+fn import_peer_quantity(world: Multi) {
+    let peer = *world.expect_read::<CoupledQuantity>("peer");
+    world.expect_write::<PeerQuantity>("local").0 = peer;
+}
+
+fn run_remote_equivalence_side<Tr: Transport + 'static>(
+    transport: Tr,
+    initial_value: f64,
+    initial_velocity: f64,
+    params: SolverParams,
+    n_iters: usize,
+) -> EquivalenceResult {
+    let mut parent = App::new();
+    parent.add_subapp(
+        "local",
+        build_coupled_solver(initial_value, initial_velocity, params),
+    );
+    parent
+        .add_remote_subapp("peer", transport)
+        .send_each_iter::<CoupledQuantity>()
+        .recv_each_iter::<CoupledQuantity>();
+
+    parent.add_update_system(
+        tick_subapp("local", 1),
+        RemoteEquivalenceSchedule::TickLocal,
+    );
+    parent.add_update_system(export_local_quantity, RemoteEquivalenceSchedule::Export);
+    parent.add_update_system(tick_subapp("peer", 1), RemoteEquivalenceSchedule::TickPeer);
+    parent.add_update_system(import_peer_quantity, RemoteEquivalenceSchedule::Import);
+
+    parent.prepare();
+    for _ in 0..n_iters {
+        parent.run();
+    }
+
+    read_equivalence_result(&parent, "local")
+}
+
+fn assert_near_eq(actual: f64, expected: f64, label: &str) {
+    let tol = 4.0 * f64::EPSILON * actual.abs().max(expected.abs()).max(1.0);
+    assert!(
+        (actual - expected).abs() <= tol,
+        "{label}: actual {actual:?} expected {expected:?} tol {tol:?}"
+    );
+}
+
+fn assert_equivalence_result(actual: EquivalenceResult, expected: EquivalenceResult, label: &str) {
+    assert_near_eq(
+        actual.state.value,
+        expected.state.value,
+        &format!("{label}.state.value"),
+    );
+    assert_near_eq(
+        actual.state.velocity,
+        expected.state.velocity,
+        &format!("{label}.state.velocity"),
+    );
+    assert_near_eq(
+        actual.state.accumulated_peer_flux,
+        expected.state.accumulated_peer_flux,
+        &format!("{label}.state.accumulated_peer_flux"),
+    );
+    assert_eq!(
+        actual.local_quantity, expected.local_quantity,
+        "{label}.local_quantity should be bitwise identical"
+    );
+    assert_eq!(
+        actual.seen_peer, expected.seen_peer,
+        "{label}.seen_peer should be bitwise identical"
+    );
+}
+
+#[test]
+fn in_process_and_remote_transport_coupling_are_equivalent() {
+    const N: usize = 8;
+
+    let expected = run_in_process_equivalence(N);
+
+    let (server_t, client_t) = LocalTransport::pair();
+    let h_a = thread::spawn(move || {
+        run_remote_equivalence_side(
+            server_t,
+            1.25,
+            -0.375,
+            SolverParams {
+                stiffness: 1.5,
+                damping: 0.93,
+                dt: 0.125,
+            },
+            N,
+        )
+    });
+    let h_b = thread::spawn(move || {
+        run_remote_equivalence_side(
+            client_t,
+            -0.75,
+            0.5,
+            SolverParams {
+                stiffness: 0.85,
+                damping: 0.97,
+                dt: 0.125,
+            },
+            N,
+        )
+    });
+
+    let remote = (h_a.join().unwrap(), h_b.join().unwrap());
+
+    assert_equivalence_result(remote.0, expected.0, "side A");
+    assert_equivalence_result(remote.1, expected.1, "side B");
+}
