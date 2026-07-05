@@ -8,7 +8,7 @@
 //!   - a done-condition system that ends the run after a fixed number of steps,
 //!   - `App::new().add_plugins(..).start()` (the self-driving lifecycle).
 //!
-//! Run with: `cargo run -p grass_app --example hello_app`
+//! Run with: `cargo run --example hello_app`
 
 use grass_app::prelude::*;
 use grass_scheduler::prelude::*;

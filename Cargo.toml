@@ -1,3 +1,12 @@
+[package]
+name = "grass-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Top-level runnable examples for the grass simulation framework"
+publish = false
+
 [workspace]
 members = ["crates/*"]
 resolver = "2"
@@ -21,3 +30,8 @@ grass_multi     = { path = "crates/grass_multi",     version = "0.1.0" }
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+[dependencies]
+grass_scheduler = { workspace = true }
+grass_app = { workspace = true }
+grass_io = { workspace = true }

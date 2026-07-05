@@ -33,7 +33,7 @@ is the canonical walkthrough of how the tiers compose and where to start.
 
 This is a library workspace — the consumers are SOIL, DIRT, and your own
 solver — but each crate ships runnable `cargo` examples so you can learn by
-doing (`cargo run -p grass_scheduler --example verlet_minisolver` runs the
+doing (`cargo run --example verlet_minisolver` runs the
 falling-body solver this book's [quickstart](quickstart.md) builds in prose;
 see also `hello_app`, `heat_diffusion_1d`, and `observed_oscillator`).
 

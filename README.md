@@ -223,14 +223,14 @@ page in the GRASS book.
 ## Depend on it
 
 GRASS is a library workspace — the consumers are SOIL, DIRT, and your own
-solver — but each crate ships runnable `cargo` examples, so you can get your
-hands dirty before you depend on anything:
+solver — but the workspace ships runnable top-level `cargo` examples, so you can
+get your hands dirty before you depend on anything:
 
 ```console
-cargo run -p grass_app       --example hello_app            # the smallest App
-cargo run -p grass_scheduler --example verlet_minisolver    # a tiny falling-body solver (the quickstart, in code)
-cargo run -p grass_scheduler --example heat_diffusion_1d    # a non-particle 1D mesh solver, checked against theory
-cargo run -p grass_io        --example observed_oscillator  # clock + observer + dump
+cargo run --example hello_app            # the smallest App
+cargo run --example verlet_minisolver    # a tiny falling-body solver (the quickstart, in code)
+cargo run --example heat_diffusion_1d    # a non-particle 1D mesh solver, checked against theory
+cargo run --example observed_oscillator  # clock + observer + dump
 ```
 
 To build against it, point at the crates you need:

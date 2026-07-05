@@ -1,0 +1,13 @@
+# Example Validation
+
+Validated examples commit their result plots beside the runnable example so they
+render in Gitea:
+
+- [`heat_diffusion_1d`](heat_diffusion_1d/README.md) embeds
+  [`plots/heat_diffusion_validation.png`](heat_diffusion_1d/plots/heat_diffusion_validation.png).
+- [`hello_app`](hello_app/README.md) embeds
+  [`plots/hello_app_validation.png`](hello_app/plots/hello_app_validation.png).
+- [`verlet_minisolver`](verlet_minisolver/README.md) embeds
+  [`plots/verlet_validation.png`](verlet_minisolver/plots/verlet_validation.png).
+- [`matrix_free_poisson_cg`](matrix_free_poisson_cg/README.md) embeds
+  [`plots/poisson_convergence.png`](matrix_free_poisson_cg/plots/poisson_convergence.png).
