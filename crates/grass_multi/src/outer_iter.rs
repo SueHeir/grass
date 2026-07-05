@@ -49,7 +49,9 @@ pub fn check_done_outer_iter(
 /// `phase` is generic so callers can target any
 /// [`ScheduleSet`](grass_scheduler::ScheduleSet) variant they like.
 pub struct OuterIterStopPlugin<P: ScheduleSet + Copy + Send + Sync + 'static> {
+    /// Number of outer iterations to run before requesting a stop.
     pub n_iters: u32,
+    /// Schedule set the stop-check system is registered under.
     pub phase: P,
 }
 

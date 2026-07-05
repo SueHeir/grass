@@ -46,6 +46,7 @@ use serde::Deserialize;
 /// Wraps a parsed TOML table. Plugins reach into it with [`Self::section`] /
 /// [`Self::load`] / [`Self::parse_array`] in `Plugin::build`.
 pub struct Config {
+    /// The parsed top-level TOML table backing this config.
     pub table: toml::Table,
 }
 
@@ -212,7 +213,9 @@ impl Config {
 /// parent directory. Plugins that need to write output files can
 /// `Res<Input>` to discover where.
 pub struct Input {
+    /// Path to the input TOML file (typically `args[1]`).
     pub filename: String,
+    /// Resolved output directory, if configured or inferred; `None` otherwise.
     pub output_dir: Option<String>,
 }
 
@@ -309,6 +312,8 @@ impl Plugin for InputPlugin {
 /// config_path`). Anything the closure adds — plugins, resources,
 /// systems — runs against that pre-seeded `Config`.
 pub trait MultiIoExt {
+    /// Adds a named sub-App whose `Config` is pre-seeded from this App's
+    /// `[<name>.*]` slice (and optional `config_path`) before `build` runs.
     fn add_subapp_with_config<F: FnOnce(&mut App)>(&mut self, name: &str, build: F) -> &mut Self;
 }
 

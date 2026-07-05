@@ -120,6 +120,7 @@
 //! ```
 
 #![allow(clippy::too_many_arguments)]
+#![warn(missing_docs)]
 // ANCHOR: All
 use std::any::{Any, TypeId};
 use std::cell::{Ref, RefCell, RefMut};
@@ -655,6 +656,7 @@ pub struct FnLabelMarker<I>(PhantomData<I>);
 /// Strings pass through directly. Function handles resolve to their
 /// `std::any::type_name`, matching the system's registered name.
 pub trait IntoSystemLabel<M> {
+    /// Resolves this label source to its `String` label.
     fn into_label(self) -> String;
 }
 
@@ -860,6 +862,8 @@ pub trait SystemExt<I>: IntoSystem<I> + Sized
 where
     Self::System: 'static,
 {
+    /// Runs the system only when `cond` evaluates to `true` for the step,
+    /// wrapping it in a [`ConditionalSystem`].
     fn run_if<I2, C: Condition + 'static>(
         self,
         cond: impl IntoCondition<I2, Condition = C>,
@@ -870,6 +874,8 @@ where
         }
     }
 
+    /// Attaches an explicit ordering label so other systems can target this
+    /// one with `.before()` / `.after()` / `.requires_label()`.
     fn label(self, lbl: impl Into<String>) -> SystemDescriptor<Self::System> {
         SystemDescriptor {
             system: self.into_system(),
@@ -880,6 +886,7 @@ where
         }
     }
 
+    /// Orders this system to run before `target` (a label or system handle).
     fn before<M>(self, target: impl IntoSystemLabel<M>) -> SystemDescriptor<Self::System> {
         SystemDescriptor {
             system: self.into_system(),
@@ -890,6 +897,7 @@ where
         }
     }
 
+    /// Orders this system to run after `target` (a label or system handle).
     fn after<M>(self, target: impl IntoSystemLabel<M>) -> SystemDescriptor<Self::System> {
         SystemDescriptor {
             system: self.into_system(),
@@ -900,6 +908,8 @@ where
         }
     }
 
+    /// Declares a hard dependency on `target`: this system is only scheduled
+    /// if `target` is also present, and always runs after it.
     fn requires_label<M>(self, target: impl IntoSystemLabel<M>) -> SystemDescriptor<Self::System> {
         SystemDescriptor {
             system: self.into_system(),
@@ -1101,6 +1111,8 @@ pub struct DescMarker;
 
 /// Converts into a `StoredSystemEntry` (boxed system + optional ordering metadata).
 pub trait IntoScheduledSystem<M> {
+    /// Boxes the system together with any ordering metadata into a
+    /// `StoredSystemEntry` for registration.
     fn into_stored(self) -> StoredSystemEntry;
 }
 
@@ -3334,7 +3346,9 @@ pub enum SchedulerState {
 
 /// Tracks the current run stage index and scheduler state (Setup/Run/End).
 pub struct SchedulerManager {
+    /// Current lifecycle phase (`Setup`/`Run`/`End`).
     pub state: SchedulerState,
+    /// Index of the current run stage within the `[[run]]` schedule.
     pub index: usize,
     /// Name of the current stage from `[[run]]` config (if set).
     pub stage_name: Option<String>,

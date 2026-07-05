@@ -52,3 +52,12 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps
+
+      # Documentation-coverage gate. Every library crate opts in with
+      # `#![warn(missing_docs)]`; `-D warnings` flips that warn to a hard error
+      # so no public API can merge undocumented. Scoped to `--lib` so it gates
+      # the crates' public surface, not examples/tests/binaries.
+      - name: missing_docs gate (public API doc coverage = deny)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo build --workspace --lib

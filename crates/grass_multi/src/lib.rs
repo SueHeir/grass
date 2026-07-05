@@ -131,6 +131,8 @@
 //! parent.start();
 //! ```
 
+#![warn(missing_docs)]
+
 mod multi;
 mod outer_iter;
 mod physics;

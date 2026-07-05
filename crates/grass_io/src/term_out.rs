@@ -51,11 +51,14 @@ pub const TERM_OUT_NAMESPACE: u32 = 100;
 /// Holds the configured column list, the current iter's values, and a
 /// flag tracking whether the header has been printed.
 pub struct TermOut {
+    /// Print cadence: emit a row every `every` steps.
     pub every: u64,
+    /// Ordered names of the columns to print each row.
     pub columns: Vec<String>,
     /// Per-column width used by the printer. Same width applied to
     /// header and data; integers right-aligned to the same width.
     pub width: usize,
+    /// Latest value for each column, keyed by column name.
     pub values: HashMap<String, f64>,
     header_printed: bool,
 }
@@ -126,7 +129,9 @@ impl Default for TermOutConfig {
 /// [`TermOutSchedule::Print`].
 #[derive(Debug, Clone, Copy, ScheduleSet)]
 pub enum TermOutSchedule {
+    /// Column-setter systems populate [`TermOut::values`] here.
     Compute,
+    /// The plugin prints the assembled row here.
     Print,
 }
 

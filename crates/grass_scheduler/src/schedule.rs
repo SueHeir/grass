@@ -118,9 +118,13 @@ pub enum ScheduleNode {
     Sequence(Vec<ScheduleNode>),
     /// Re-execute `body` until `until` returns `true` or `max_iters` is hit.
     Loop {
+        /// Sub-tree re-executed each iteration.
         body: Box<ScheduleNode>,
+        /// The loop stops as soon as this condition returns `true`.
         until: Box<dyn Condition + 'static>,
+        /// Hard cap on iterations, applied even if `until` never fires.
         max_iters: usize,
+        /// Action taken when `max_iters` is reached without `until` firing.
         on_max: OnMax,
     },
     /// First-match-wins state-conditional dispatch. Each arm pairs a
@@ -128,6 +132,8 @@ pub enum ScheduleNode {
     /// declaration order and runs the first matching arm's body. If no arm
     /// matches, the branch is a no-op.
     Branch {
+        /// Ordered `(condition, sub-tree)` arms; the first arm whose condition
+        /// matches runs, and the rest are skipped.
         arms: Vec<(Box<dyn Condition + 'static>, ScheduleNode)>,
     },
 }
