@@ -179,13 +179,13 @@ Those examples keep GRASS honest about the abstraction: the framework is not a
 particle code or a mesh code, it is the scheduler, plugin, I/O, and coupling
 layer underneath both.
 
-Today the public stack has two of the six substrate archetypes mapped for
-computational science: SOIL for local-reach particles and FIELD for local-reach
-meshes. Longer-reach/global substrates are roadmap items, not current claims:
-ORBIT for long-range particle methods (tree/FMM/PME) and BEDROCK for
-implicit/global-solve mesh methods. FIELD's `fem_poisson` example is a first
-BEDROCK-shaped proof, but a full implicit/global-solve substrate remains future
-work.
+Today the stack has two substrates — **SOIL** (particles) and **FIELD** (meshes)
+— and both are primarily **short-range/local**. Reaching **long-range / global**
+methods (FMM/Ewald far-field for particles; multigrid and implicit/global solves
+for meshes) is a second, orthogonal axis on the roadmap — and the current plan is
+to grow that reach *inside* SOIL and FIELD themselves, not as separate substrates.
+FIELD's `fem_poisson` example (one implicit `K u = b` solve) is an early proof in
+that direction; a general long-range/global capability is still future work.
 
 The App + scheduler crates here were extracted from that particle codebase; GRASS
 retains nothing particle- or physics-specific.
