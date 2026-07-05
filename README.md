@@ -77,6 +77,19 @@ is type-checked code you can read, modify, and step through in a debugger. (`gra
 does offer TOML config for values you'd rather not hard-code — parameters, run
 stages — but the *behavior* stays in Rust, where you can see it.)
 
+**Nothing is first-class — every aspect of a solver is a plugin.** There are no
+privileged, built-in parts of the physics: a one-line debug print is registered
+the same way inter-particle communication is — as a **system** (with its
+**resources**), bundled in a **plugin**. Plugins add systems and resources, and
+they can also **remove** them — so any part of any simulation, from a core force
+law to I/O to a diagnostic, can be added to, swapped for a replacement, or
+deleted, without editing the code it changes. The model is lifted from
+[Bevy](https://bevyengine.org)'s scheduler. That uniform flexibility is the whole
+point — and an honest double edge: with no fixed skeleton, behavior lives across
+many small plugins rather than one linear main loop, so the power comes with
+indirection to trace. The goal it buys: write a capability **once** and reuse it
+across every solver on the stack, instead of re-implementing it in each code.
+
 Three things worth spotlighting:
 
 - **The DI scheduler.** Systems declare what they touch by argument type; the
