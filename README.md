@@ -80,10 +80,13 @@ stages — but the *behavior* stays in Rust, where you can see it.)
 Three things worth spotlighting:
 
 - **The DI scheduler.** Systems declare what they touch by argument type; the
-  scheduler computes an order from the read/write sets and injects the borrows.
+  scheduler records those read/write sets and injects the borrows into each
+  system as it runs.
   Borrows are checked at *run time* (resources live in `RefCell`s), so two
-  systems never race — but a single system taking the same resource `Res` and
-  `ResMut` at once panics. That trade-off is deliberate and
+  systems never race. Systems in the same phase that both touch a resource are
+  not rejected automatically; use `.before()` / `.after()` when the data order
+  matters. A single system taking the same resource as `Res` and `ResMut` at
+  once panics with a `RefCell` borrow error. That trade-off is deliberate and
   [documented](https://sueheir.github.io/grass/model/scheduler.html).
 - **The `Schedule { Phase, Sequence, Loop, Branch }` tree.** A timestep is a tree
   of nodes: a `Phase` is a named set of systems, a `Sequence` runs children in
