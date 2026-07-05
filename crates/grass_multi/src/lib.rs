@@ -12,6 +12,11 @@
 //!     [`MultiAppExt::add_remote_subapp`] for registration
 //!   - [`Multi`] / [`MultiRes`] / [`MultiResMut`] SystemParams for
 //!     cross-namespace reads and writes from ordinary parent-App systems
+//!   - [`Port`] + [`expose_field`] / [`consume_field`] +
+//!     [`MultiAppExt::add_port`] — the minimal coupling *contract*: a
+//!     producer publishes a value of a shared type into a parent-side slot and
+//!     a consumer reads it, so neither solver names the other's internals
+//!     (see "The coupling contract" below)
 //!   - [`tick_subapp`] / [`tick_n_times`] system constructors that drive
 //!     a sub-App's step loop from the parent's schedule
 //!   - [`Physics`] trait + [`AppPhysics`] adapter (local sub-App) +
@@ -40,6 +45,36 @@
 //! You wire those phases yourself with `add_update_system(sys, Phase::Tick)`
 //! etc.; nothing forces this exact shape, but couplers must run *after* the
 //! ticks that produce the data they read, so phase ordering is the contract.
+//!
+//! ## The coupling contract: exchange ports
+//!
+//! A bare [`Multi`] / [`MultiRes`] coupler works, but it makes the consumer
+//! reach into the *producer's own resource type* — the two solvers become
+//! coupled at the source level. The ergonomic, decoupled path is an exchange
+//! [`Port<T>`](Port): a typed slot on the parent that a producer publishes into
+//! and a consumer reads. The only thing the two solvers share is the contract
+//! type `T` (a scalar source term, a boundary value, a sampled field, …), so
+//! either side can be swapped for any other solver that speaks the same `T`.
+//! This is what makes "couple any grass solver to any other" a few lines:
+//!
+//! ```rust,ignore
+//! struct Flux(f64);                        // the shared contract — the only shared type
+//!
+//! parent.add_subapp("field", field_app);   // a mesh solver (owns HeatField)
+//! parent.add_subapp("particle", part_app); // a particle solver (owns Particle)
+//! parent.add_port::<Flux>();
+//!
+//! parent.add_update_system(tick_subapp("field", 1), Phase::TickProducer);
+//! parent.add_update_system(
+//!     expose_field::<HeatField, Flux>("field", |f| Flux(f.total())), Phase::Couple);
+//! parent.add_update_system(
+//!     consume_field::<Particle, Flux>("particle", |p, flux| p.force = flux.0), Phase::Couple);
+//! parent.add_update_system(tick_subapp("particle", 1), Phase::TickConsumer);
+//! ```
+//!
+//! It is paradigm-agnostic — a mesh solver drives a particle solver above, but
+//! nothing in the port layer knows about either paradigm. See the
+//! `coupling_port` integration test for the full runnable, validated example.
 //!
 //! ## Borrow rules (read before writing a coupler)
 //!
@@ -99,6 +134,7 @@
 mod multi;
 mod outer_iter;
 mod physics;
+mod port;
 mod remote;
 mod snapshot;
 mod transport;
@@ -115,6 +151,7 @@ pub use multi::{
 };
 pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlugin};
 pub use physics::{AppPhysics, Physics, StepResult};
+pub use port::{consume_field, expose_field, Port};
 pub use remote::RemoteMirrorPhysics;
 pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};
 #[cfg(feature = "mpi")]
