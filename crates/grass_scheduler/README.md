@@ -21,6 +21,7 @@ This crate is part of the GRASS framework; it knows nothing about particles or p
 | `SystemGroup` | Bundles systems into one composite unit with inner phase ordering and optional looping. |
 | `Schedule` / `ScheduleBuilder` | Tree of `Phase` / `Sequence` / `Loop` / `Branch` nodes for hierarchical run-loop control. |
 | `Snapshot<T>` | Single-slot save buffer for per-resource opt-in reversibility. |
+| `LinearOperator` + `conjugate_gradient` / `picard_iteration` | Matrix-free iterative-solve scaffolding with caller-owned convergence predicates. |
 | `CurrentState<S>` / `NextState<S>` | State-machine resources, with `in_state()` / `on_enter_state()` run conditions. |
 
 ## Ordering & Conditions
