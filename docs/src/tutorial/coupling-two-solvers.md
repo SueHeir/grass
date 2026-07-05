@@ -16,6 +16,12 @@ If you have not written a standalone solver yet, read
 [Write Your Own Solver](./write-your-own-solver.md) first — each sub-App below
 is just such a solver.
 
+If you only want the rules a solver must satisfy to be couplable — with nothing
+about this particular spring/mass toy — skip to the
+[Couplability contract: the checklist](#couplability-contract-the-checklist) at
+the end. Everything between here and there is the walkthrough that earns each
+line of it.
+
 ## The scenario
 
 App **Spring** holds a spring whose extension produces a force. App **Mass**
@@ -317,6 +323,111 @@ returns a paired in-memory channel `(server, client)` that satisfies the same
 `Transport` interface, so a single-process test can drive both ends of a remote
 coupling. Use it in CI to exercise the pack/unpack and export-before-tick logic
 before running the real MPMD job.
+
+## Couplability contract: the checklist
+
+Everything above is one worked example. This section is the general contract it
+demonstrates: **what any solver must expose, and how it must behave, to be
+coupled to any other solver on grass** — independent of physics or paradigm. If
+a solver satisfies these, `grass_multi` can couple it to any other solver that
+also satisfies them, in-process or across MPI. Each item names the primitive
+that enforces it and the failure you get if you skip it.
+
+### A. Resources a solver must expose
+
+A sub-App is coupled *through its resources*: a coupler reaches into a
+producer's resource to read, and a consumer's resource to write. So the solver
+must make those resources reachable and stable.
+
+- [ ] **Register every exchanged resource with `add_resource::<T>`.** A coupler
+  finds a resource by `TypeId` via `Physics::resource_cell`; an unregistered
+  type resolves to `None`, so the `MultiRes` / `MultiResMut` SystemParam (and
+  `expose_field` / `consume_field`, which go through `expect_read` /
+  `expect_write`) panics at run time with `sub-App … has no resource of type …`.
+  Everything a peer reads or writes must be a registered resource, not a local
+  variable.
+- [ ] **Keep the exchanged data in a resource you own, never in the peer's
+  type.** The producer exposes a value *derived from its own state*; the
+  consumer applies a value *into its own state*. Neither should hold or name the
+  other's resource type. A bare `MultiRes<ProducerState, …>` in the consumer
+  works but source-couples the two — see §6/§6b.
+- [ ] **For a decoupled interface, share only a contract type `T` via a
+  `Port<T>`.** `add_port::<T>()` registers the parent-side slot;
+  `expose_field::<Own, T>` publishes, `consume_field::<Own, T>` reads. `T` is
+  the *entire* shared surface — a scalar, a boundary value, `Vec<f64>`, particle
+  data, anything `'static`. This is what makes the coupling paradigm-agnostic:
+  the two solvers need not be the same kind of discretization, or any
+  discretization at all.
+- [ ] **`consume_field` is a no-op until its port has been published**, so a
+  consumer is safe to schedule before the first expose (e.g. iteration 0). Don't
+  add your own "is it ready yet" guard.
+- [ ] **For cross-process coupling, implement `Wire` for every exchanged type**
+  (`pack`/`unpack`), and register the *same types in the same order* on both
+  peers via `send_each_iter::<T>()` / `recv_each_iter::<T>()`. The wire carries
+  no type tag or framing; a mismatch silently unpacks garbage. Built-in `Wire`
+  impls: the scalar primitives, `bool`, `[f64; 3]`, `Vec<f64>`, `String`.
+
+### B. Tick semantics
+
+The parent schedule is the only driver — there is no hidden loop inside
+`grass_multi`. A couplable solver must be steppable on demand from the parent.
+
+- [ ] **The solver is an ordinary `App` advanced by `tick_subapp(name, n)` /
+  `tick_n_times::<NS>(n)` from the parent's `Tick` phase.** One
+  `parent.run()` = one outer iteration; each `tick_*` registration calls the
+  sub-App's `step` `n` times. There is no self-driving inner loop — if you never
+  register a tick for a namespace, that solver never advances.
+- [ ] **Sub-stepping is `n > 1`.** A stiff solver that needs 3 inner steps per
+  outer step is `tick_n_times::<NS>(3)`; the rate ratio between two solvers is
+  just their two `n`s. This is the only knob for multi-rate coupling today.
+- [ ] **Couplers run *after* the ticks that produce their inputs.** The
+  canonical band order is **Tick → Couple → Check** (or, with ports,
+  `TickProducer → expose → consume → TickConsumer → Check`). Ordering *is* the
+  contract: declare phases in that order and register each system into the right
+  phase. Read-before-produce gives you a one-iteration staleness lag, not an
+  error.
+- [ ] **Signal completion through the scheduler so `is_done` becomes `true`**
+  (e.g. a check system setting `SchedulerManager::state = End`, or
+  `OuterIterStopPlugin`). A **remote mirror's `is_done` is always `false`** — a
+  peer's end-of-run cannot propagate back — so terminate a cross-process
+  coupling with an explicit flag (e.g. `recv_each_iter::<bool>()`), never by
+  waiting on the mirror.
+- [ ] **Cleanup is not automatic across the sub-App boundary.** The parent's
+  `run_cleanup` does not descend into sub-Apps; call `SubApps::cleanup_all`
+  yourself (register it as a cleanup-with-app on `start()`, or after your own
+  driven loop). Skipping it drops every sub-App's final dumps / MPI finalize.
+- [ ] **Remote only: export local state into the mirror *before* you tick it.**
+  `send_each_iter::<T>` ships whatever the mirror's `T` cell holds at tick time;
+  without a copy-in system ordered before the mirror tick you send a stale
+  value — `TickLocal → Export(local→mirror) → TickPeer → Import`.
+
+### C. Borrow rules
+
+Cross-namespace access goes through a `RefCell` on *each* resource, so the
+borrow discipline is per-cell, and violating it panics at run time (not compile
+time).
+
+- [ ] **Isolation is per `(type, namespace)` cell.** One system may hold several
+  cross-namespace handles at once — read `"cfd"` and write `"dem"` in one
+  expression — as long as no two handles touch the *same* `(T, NS)` cell.
+- [ ] **`MultiRes<T, NS>` borrows a cell shared; `MultiResMut<T, NS>` borrows it
+  exclusively.** Two `MultiResMut` on the same cell, or a `MultiRes` and a
+  `MultiResMut` on the same cell, in one system → `already borrowed` panic. Split
+  them across systems or phases.
+- [ ] **Never mix a `Multi*` param and a tick in the same system.** `MultiRes` /
+  `MultiResMut` / `Multi` borrow the `SubApps` resource **shared**; the `tick_*`
+  closures borrow it **exclusively**. A single system that both couples and
+  ticks double-borrows the `SubApps` cell and panics. This is *why* Tick and
+  Couple are separate phases — keep ticking and coupling in different systems.
+- [ ] **A port hop sidesteps cross-solver borrows entirely.** `expose_field`
+  touches only the producer cell + the port; `consume_field` touches only the
+  port + the consumer cell. Neither ever borrows the other solver's cell, so
+  producer and consumer can never contend for the same `(T, NS)`.
+
+The runnable end-to-end example that exercises this whole contract — a
+mesh-style field solver driving a point-particle solver through a port, checked
+against a closed form — is `grass_multi/tests/coupling_port.rs` (`cargo test -p
+grass_multi --test coupling_port`).
 
 ## Where to go from here
 
