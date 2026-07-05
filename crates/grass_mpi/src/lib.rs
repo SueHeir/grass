@@ -66,6 +66,8 @@
 //! (the simulation is single-threaded per rank). Do not share a
 //! `CommResource` across OS threads.
 
+#![warn(missing_docs)]
+
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "mpi_backend")]
@@ -89,9 +91,13 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Source};
 /// another op's receive completing): the backend posts every send and receive
 /// concurrently and only then waits on all of them.
 pub struct SendRecvOp<'a> {
+    /// Destination rank the send buffer is delivered to.
     pub dest: i32,
+    /// Elements sent to `dest`.
     pub send_buf: &'a [f64],
+    /// Source rank the receive buffer is filled from.
     pub source: i32,
+    /// Pre-sized destination buffer for elements received from `source`.
     pub recv_buf: &'a mut [f64],
 }
 
@@ -205,6 +211,7 @@ impl Default for SingleProcessComm {
 }
 
 impl SingleProcessComm {
+    /// Creates a single-process (no-op) backend with a 1×1×1 decomposition.
     pub fn new() -> Self {
         SingleProcessComm {
             processor_decomposition: [1, 1, 1],
@@ -403,6 +410,7 @@ pub fn world_size() -> i32 {
 pub fn finalize_mpi() {}
 
 #[cfg(feature = "mpi_backend")]
+/// Real MPI backend wrapping an mpi `SimpleCommunicator` (behind the `mpi_backend` feature).
 pub struct MpiCommBackend {
     world: mpi::topology::SimpleCommunicator,
     rank: i32,
@@ -418,6 +426,7 @@ unsafe impl Sync for MpiCommBackend {}
 
 #[cfg(feature = "mpi_backend")]
 impl MpiCommBackend {
+    /// Wraps an existing MPI communicator, caching its rank and size.
     pub fn new(world: mpi::topology::SimpleCommunicator) -> Self {
         let rank = world.rank();
         let size = world.size();

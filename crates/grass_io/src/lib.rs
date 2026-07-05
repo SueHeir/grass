@@ -38,6 +38,8 @@
 //! step's *final* state because it runs after the solver, and the run-end /
 //! stage-advance check runs last so it acts on a fully-updated step.
 
+#![warn(missing_docs)]
+
 mod clock;
 mod config;
 mod dump;

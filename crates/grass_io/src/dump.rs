@@ -51,6 +51,7 @@ pub const DUMP_NAMESPACE: u32 = 200;
 /// [`RawFrameWriter`] (writes bytes verbatim — JSON / CSV / binary all
 /// work) but custom impls can wrap headers, compress, etc.
 pub trait DumpFormat: Send + Sync + 'static {
+    /// Writes one payload frame to `path` for the given `step` / `time`.
     fn write_frame(
         &mut self,
         path: &Path,
@@ -87,6 +88,7 @@ impl DumpFormat for RawFrameWriter {
 /// write system reads it in [`DumpSchedule::Write`].
 #[derive(Default)]
 pub struct DumpBuffer {
+    /// Frame bytes filled during `DumpSchedule::Build`, flushed in `Write`.
     pub payload: Vec<u8>,
 }
 
@@ -123,7 +125,9 @@ impl Default for DumpConfig {
 /// User fills the buffer in `Build`; plugin writes in `Write`.
 #[derive(Debug, Clone, Copy, ScheduleSet)]
 pub enum DumpSchedule {
+    /// User systems fill [`DumpBuffer::payload`] here.
     Build,
+    /// The plugin writes the buffered payload to disk here.
     Write,
 }
 
@@ -141,6 +145,7 @@ pub struct DumpPlugin<F: DumpFormat> {
 }
 
 impl<F: DumpFormat> DumpPlugin<F> {
+    /// Creates a plugin that writes frames using `format`.
     pub fn new(format: F) -> Self {
         Self {
             format: Mutex::new(Some(format)),

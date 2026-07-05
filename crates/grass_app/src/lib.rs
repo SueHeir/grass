@@ -61,6 +61,8 @@
 //! app.start();
 //! ```
 
+#![warn(missing_docs)]
+
 mod app;
 mod plugin;
 mod setup;

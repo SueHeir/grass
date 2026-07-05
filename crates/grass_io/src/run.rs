@@ -37,6 +37,7 @@ use crate::{advance_step, SimClockPlugin};
 /// always runs AFTER user phase enums (which default to namespace 0).
 pub const RUN_NAMESPACE: u32 = 1000;
 
+/// Schedule sets owned by the run driver.
 #[derive(Debug, Clone, Copy, ScheduleSet)]
 pub enum RunSchedule {
     /// `RunPlugin` registers `update_cycle` here.
@@ -97,6 +98,7 @@ impl Default for StageConfig {
 /// (array of tables) yields N.
 #[derive(Clone, Debug)]
 pub struct RunConfig {
+    /// The ordered stages parsed from `[run]` / `[[run]]`.
     pub stages: Vec<StageConfig>,
 }
 
@@ -107,6 +109,7 @@ impl RunConfig {
     pub fn current_stage(&self, index: usize) -> &StageConfig {
         &self.stages[index.min(self.stages.len() - 1)]
     }
+    /// Number of configured stages.
     pub fn num_stages(&self) -> usize {
         self.stages.len()
     }
@@ -161,8 +164,11 @@ impl Default for RunConfig {
 /// Mutable state tracking cycle counts per stage and total. Maintained
 /// by [`update_cycle`].
 pub struct RunState {
+    /// Total cycles executed across all stages so far.
     pub total_cycle: usize,
+    /// Cycles executed in each stage, indexed by stage.
     pub cycle_count: Vec<u32>,
+    /// Cycles still remaining in each stage, indexed by stage.
     pub cycle_remaining: Vec<u32>,
 }
 
@@ -173,6 +179,7 @@ impl Default for RunState {
 }
 
 impl RunState {
+    /// Creates a `RunState` with zeroed counters and empty per-stage vectors.
     pub fn new() -> Self {
         Self {
             total_cycle: 0,
@@ -186,10 +193,13 @@ impl RunState {
 /// merged with the current stage's `overrides` catch-all. Plugins read
 /// stage-aware config via [`StageOverrides::section`].
 pub struct StageOverrides {
+    /// The stage-merged TOML table (global config deep-merged with the stage `overrides`).
     pub table: toml::Table,
 }
 
 impl StageOverrides {
+    /// Deserializes the `[key]` section from the merged table, or `T::default()`
+    /// if it is absent or fails to deserialize.
     pub fn section<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> T {
         self.table
             .get(key)

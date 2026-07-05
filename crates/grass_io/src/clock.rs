@@ -41,7 +41,9 @@ use crate::Config;
 /// system has accumulated.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SimClock {
+    /// Outer-iteration counter; incremented once per step by `advance_step`.
     pub step: u64,
+    /// Accumulated simulation time, in whatever units the dt source uses.
     pub time: f64,
 }
 

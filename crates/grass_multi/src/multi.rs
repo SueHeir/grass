@@ -367,6 +367,8 @@ pub fn tick_n_times<NS: Namespace>(n: usize) -> impl FnMut(ResMut<SubApps>) {
 /// hood, so its lifecycle (`prepare` → `step` × N → `cleanup`) plays nicely
 /// with [`SubApps::tick`] and [`SubApps::cleanup_all`].
 pub trait MultiAppExt {
+    /// Registers `app` as a sub-App under `name`, creating the [`SubApps`]
+    /// resource on the parent on the first call.
     fn add_subapp(&mut self, name: &str, app: App) -> &mut Self;
 
     /// Typed counterpart of [`add_subapp`](Self::add_subapp). Registers
