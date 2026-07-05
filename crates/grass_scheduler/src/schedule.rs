@@ -221,6 +221,8 @@ impl Default for ScheduleBuilder {
 }
 
 impl ScheduleBuilder {
+    /// Creates an empty builder. Append nodes with the fluent methods below,
+    /// then call [`build`](Self::build) to finalise into a [`Schedule`].
     pub fn new() -> Self {
         Self { nodes: Vec::new() }
     }
@@ -377,6 +379,8 @@ impl Default for BranchBuilder {
 }
 
 impl BranchBuilder {
+    /// Creates an empty branch. Add condition arms with [`arm`](Self::arm);
+    /// the first arm whose condition is `true` at runtime executes.
     pub fn new() -> Self {
         Self { arms: Vec::new() }
     }

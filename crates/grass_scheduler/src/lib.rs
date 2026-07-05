@@ -832,6 +832,9 @@ impl<S: System + 'static> SystemDescriptor<S> {
         self.requires.push(target.into_label());
         self
     }
+
+    /// Attaches a run condition, preserving this descriptor's label / ordering
+    /// metadata. The wrapped system only runs on steps where `cond` returns `true`.
     pub fn run_if<I2, C: Condition + 'static>(
         self,
         cond: impl IntoCondition<I2, Condition = C>,
@@ -1089,8 +1092,11 @@ impl IntoSystem<()> for SystemGroup {
 
 // ─── IntoScheduledSystem — accepts fn / ConditionalSystem / SystemDescriptor ──
 
+/// Disambiguation marker for the plain-function [`IntoScheduledSystem`] impl.
 pub struct FnMarker<I>(PhantomData<I>);
+/// Disambiguation marker for the [`ConditionalSystem`] [`IntoScheduledSystem`] impl.
 pub struct CondMarker;
+/// Disambiguation marker for the [`SystemDescriptor`] [`IntoScheduledSystem`] impl.
 pub struct DescMarker;
 
 /// Converts into a `StoredSystemEntry` (boxed system + optional ordering metadata).
@@ -1308,6 +1314,7 @@ pub struct InStateCondition<S: Clone + PartialEq + 'static> {
     index: usize,
 }
 
+/// Disambiguation marker for the [`InStateCondition`] [`IntoCondition`] impl.
 pub struct InStateMarker;
 
 impl<S: Clone + PartialEq + 'static> Condition for InStateCondition<S> {
@@ -1370,6 +1377,7 @@ pub struct OnEnterStateCondition<S: Clone + PartialEq + 'static> {
     was_active: bool,
 }
 
+/// Disambiguation marker for the [`OnEnterStateCondition`] [`IntoCondition`] impl.
 pub struct OnEnterStateMarker;
 
 impl<S: Clone + PartialEq + 'static> Condition for OnEnterStateCondition<S> {
@@ -1464,6 +1472,7 @@ pub struct InStageCondition {
     index: usize,
 }
 
+/// Disambiguation marker for the [`InStageCondition`] [`IntoCondition`] impl.
 pub struct InStageMarker;
 
 impl Condition for InStageCondition {
@@ -1522,6 +1531,7 @@ pub struct OnEnterStageCondition {
     was_active: bool,
 }
 
+/// Disambiguation marker for the [`OnEnterStageCondition`] [`IntoCondition`] impl.
 pub struct OnEnterStageMarker;
 
 impl Condition for OnEnterStageCondition {
@@ -1584,6 +1594,7 @@ pub struct FirstStageOnlyCondition {
     index: usize,
 }
 
+/// Disambiguation marker for the [`FirstStageOnlyCondition`] [`IntoCondition`] impl.
 pub struct FirstStageOnlyMarker;
 
 impl Condition for FirstStageOnlyCondition {
@@ -2589,6 +2600,10 @@ impl Scheduler {
         self.system_visible_in_stage(entry, stage_idx)
     }
 
+    /// Writes the organized schedule to `path` as a Graphviz DOT file.
+    ///
+    /// Render with `dot -Tpng schedule.dot -o schedule.png`. Usually invoked
+    /// indirectly via [`Scheduler::enable_schedule_print`] rather than directly.
     pub fn write_dot(&self, path: &str) {
         use std::io::Write;
         let mut out = String::new();
@@ -3339,6 +3354,8 @@ impl Default for SchedulerManager {
 }
 
 impl SchedulerManager {
+    /// Creates a `SchedulerManager` in the initial `Setup` state at stage 0.
+    /// Equivalent to [`SchedulerManager::default`].
     pub fn new() -> Self {
         Self::default()
     }
@@ -3346,6 +3363,12 @@ impl SchedulerManager {
 
 // ─── Prelude ──────────────────────────────────────────────────────────────────
 
+/// The `grass_scheduler` prelude.
+///
+/// Re-exports the scheduler types most systems need — [`Res`], [`ResMut`],
+/// [`Local`], [`ScheduleSet`], the state/stage run conditions, and
+/// [`Scheduler`] itself — so a solver can pull them in with a single
+/// `use grass_scheduler::prelude::*;`.
 pub mod prelude {
     pub use crate::{
         apply_state_transitions,
