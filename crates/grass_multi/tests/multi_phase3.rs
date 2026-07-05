@@ -140,22 +140,11 @@ fn run_binary<Tr: Transport + 'static>(
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
-#[ignore = "TODO: incomplete — body never asserts on the swapped peer values \
-            (a_seen_peer/b_seen_peer are discarded). It demonstrates the \
-            mirror feedback-loop bug that arises without a local→mirror export \
-            before TickPeer; the correct wiring is exercised by \
-            `properly_wired_export_makes_each_side_see_peer_local` below. \
-            Re-enable once this test asserts the intended swap semantics."]
 #[test]
-fn two_parents_swap_counter_via_remote_mirror() {
+fn missing_export_before_tickpeer_leaves_remote_mirror_stale() {
     const N: usize = 5;
-
-    // Pair of LocalTransport endpoints — each peer gets one half.
     let (server_t, client_t) = LocalTransport::pair();
-
-    // Binary A: counter += 1 per local tick.
     let h_a = thread::spawn(move || run_binary(server_t, 1, N));
-    // Binary B: counter += 10 per local tick.
     let h_b = thread::spawn(move || run_binary(client_t, 10, N));
 
     let (a_local, a_seen_peer) = h_a.join().unwrap();
@@ -168,37 +157,19 @@ fn two_parents_swap_counter_via_remote_mirror() {
         "B's local counter ticked N×10 times"
     );
 
-    // After the wire pump runs in each iter:
-    //   1. A's TickLocal advances A's local Counter
-    //   2. A's TickPeer sends A's mirror Counter (still 0; mirror hasn't
-    //      been overwritten with the peer's value yet)... wait, actually
-    //      the mirror is overwritten in the same tick before the next iter.
-    //
-    // Let me trace one iter on A's side:
-    //   - A.local.tick: local Counter = 1
-    //   - A.peer.step:
-    //       - send A.peer.Counter (the mirror's Counter, still 0 from default)
-    //       - recv B.peer.Counter into A.peer.Counter (becomes whatever B sent)
-    //
-    // What did B send? B sent its mirror's Counter, which mirrors A's
-    // local. B's mirror was last overwritten by A's send the previous iter.
-    //
-    // So the mirror state at iter k is what was sent at iter k-1, with one
-    // iter of latency. After N iters, B has seen A's local Counter from
-    // iter N-1, which is (N-1)*1.
-    //
-    // BUT — A's mirror.Counter was *registered with default* (0) and never
-    // populated by A locally. A is just sending the mirror's value (which
-    // is whatever B sent last iter). That means A's mirror is showing
-    // *B's mirror's value from a previous iter* — a feedback loop.
-    //
-    // To make the test sensible, let me adjust: only send when something
-    // populates the mirror. The simplest fix is to have a system that
-    // copies local.Counter into peer.Counter (the mirror) BEFORE TickPeer.
-    //
-    // I'll fix this in a follow-up; for now the test below uses a 2nd
-    // version that wires up the export properly.
-    let _ = (a_seen_peer, b_seen_peer);
+    // `RemoteMirrorPhysics::step` sends the remote mirror's current resource
+    // cells. Without an Export system copying local.Counter into peer.Counter
+    // before TickPeer, both sides keep sending the mirror's default value
+    // instead of their local counters. This is the intended stale-mirror
+    // semantics documented for the export-before-tick hazard.
+    assert_eq!(
+        a_seen_peer, 0,
+        "A never sees B's local counter without Export before TickPeer"
+    );
+    assert_eq!(
+        b_seen_peer, 0,
+        "B never sees A's local counter without Export before TickPeer"
+    );
 }
 
 // ─── Properly-wired test: copy local→mirror BEFORE TickPeer ────────────────
