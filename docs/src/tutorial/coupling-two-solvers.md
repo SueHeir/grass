@@ -152,6 +152,63 @@ long as no two touch the *same* `(T, NS)` cell.
 > the `SubApps` cell and panics at run time. That is exactly why ticking and
 > coupling live in separate phases (Tick vs Couple). Keep them apart.
 
+## 6b. The coupling contract: exchange ports
+
+The coupler above works, but notice what it costs: the `Mass` side of the
+system signature names `SpringState` — the *producer's own* resource type. The
+two solvers are now coupled at the source level. Swap the spring for a
+different driver and every consumer that read `SpringState` must change.
+
+The **exchange port** removes that. A `Port<T>` is a typed slot on the parent
+that a producer *exposes* a value into and a consumer *consumes*. The only
+thing the two solvers share is the contract type `T` — never each other's
+internal structs. `T` is whatever the physics needs: a scalar source term, a
+boundary value, a sampled field `Vec<f64>`, particle data — anything. That is
+what makes coupling *paradigm-agnostic*: it works whether the two solvers are
+particle, mesh, or neither.
+
+Define the contract type, register a port, and wire producer → port → consumer:
+
+```rust,ignore
+use grass_multi::{consume_field, expose_field, MultiAppExt};
+
+// The whole contract: a scalar force. Only this type is shared.
+struct Force(f64);
+
+parent.add_port::<Force>();
+
+// Producer exposes a value it derives from its OWN state (`SpringState`):
+parent.add_update_system(
+    expose_field::<SpringState, Force>("spring", |s| Force(s.extension * K)),
+    Phase::Couple,
+);
+// Consumer applies the value into its OWN state (`MassState`):
+parent.add_update_system(
+    consume_field::<MassState, Force>("mass", |m, f| m.force = f.0),
+    Phase::Couple,
+);
+```
+
+`expose_field` reads the producer's resource and publishes `T`;
+`consume_field` reads `T` and writes the consumer's resource, and is a
+**no-op until the port has been published**, so it is safe to schedule
+unconditionally. Order them the usual way — expose after the producer's tick,
+consume before the consumer's tick:
+
+```text
+TickProducer → expose_field (→ Port) → consume_field (→ consumer) → TickConsumer → Check
+```
+
+Because the consumer now depends only on `Port<Force>`, any producer that
+publishes a `Force` can drive it, and any consumer that reads `Force` can be
+added — ports compose, and each solver compiles without the others. Prefer a
+port when the exchange is a stable interface; a bare `Multi` coupler is fine
+for a one-off, tightly-bound pair.
+
+A full runnable example that couples a mesh-style field solver to a
+point-particle solver through a port — and checks the coupled physics against a
+closed form — lives in `grass_multi/tests/coupling_port.rs`.
+
 ## 7. Stop after a fixed number of iterations
 
 `OuterIterStopPlugin` counts outer iterations and signals the scheduler to end

@@ -376,6 +376,20 @@ pub trait MultiAppExt {
         self.add_subapp(NS::NAME, app)
     }
 
+    /// Register a coupling [`Port<T>`](crate::Port) on the parent App.
+    ///
+    /// A port is the exchange slot of the minimal coupling contract: a
+    /// producer solver publishes a `T` into it (via
+    /// [`expose_field`](crate::expose_field)) and a consumer reads it (via
+    /// [`consume_field`](crate::consume_field)), so the two solvers share only
+    /// the contract type `T` — not each other's internal resource types. The
+    /// port starts empty; consumers no-op until the first publish.
+    ///
+    /// ```rust,ignore
+    /// parent.add_port::<Flux>();
+    /// ```
+    fn add_port<T: 'static>(&mut self) -> &mut Self;
+
     /// Register a remote (cross-process) sub-App backed by a [`Transport`].
     /// Returns a [`RemoteSubAppBuilder`] for declaring which resource types
     /// cross the wire, in which direction, and at what cadence:
@@ -419,6 +433,11 @@ impl MultiAppExt for App {
     fn add_subapp(&mut self, name: &str, app: App) -> &mut Self {
         let physics: Box<dyn Physics> = Box::new(AppPhysics::new(name.to_string(), app));
         register_physics(self, physics);
+        self
+    }
+
+    fn add_port<T: 'static>(&mut self) -> &mut Self {
+        self.add_resource(crate::port::Port::<T>::default());
         self
     }
 
