@@ -132,7 +132,7 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
   ├─ SOIL    substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
   │    └─ DIRT   physics: Discrete Element Method
   └─ FIELD   substrate: Mesh, FieldData, halo, AMR                         (no equations)
-       └─ dev_cfd   physics: compressible CFD (Riemann/EOS/IBM)  - in progress
+       └─ dev_field_efvm   physics: compressible CFD (Riemann/EOS/IBM)  - in progress
 ```
 
 - **GRASS** (this repo) — App + Plugin + dependency-injection scheduler, I/O,
@@ -146,18 +146,18 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
 - **[FIELD](https://github.com/SueHeir/field)** — the mesh/Eulerian substrate on
   GRASS (`UniformMesh`, `FieldData`, halo), equation-agnostic the way SOIL is
   method-agnostic. It already hosts the `fem_poisson` implicit-solve proof; its
-  compressible-CFD physics tier (**dev_cfd**) is in progress.
+  compressible-CFD physics tier (**dev_field_efvm**) is in progress.
 
 Several development-stage tiers also ride the stack as demonstrations of the
 same substrate boundaries. They are not peer-reviewed or presented as
 domain-validated; `dev_` marks that status plainly:
 
-- **[dev_sph](https://github.com/SueHeir/dev_sph)** — granular SPH (`mu(I)`
-  continuum) on SOIL.
-- **[dev_pond](https://github.com/SueHeir/dev_pond)** — bond-based
-  peridynamics on SOIL.
-- **[dev_cfd](https://github.com/SueHeir/dev_cfd)** — compressible CFD on the
-  sibling FIELD mesh substrate.
+- **[dev_soil_sph](http://192.168.0.170:8082/SueHeir/dev_soil_sph)** —
+  granular SPH (`mu(I)` continuum) on SOIL.
+- **[dev_soil_peri](http://192.168.0.170:8082/SueHeir/dev_soil_peri)** —
+  bond-based peridynamics on SOIL.
+- **[dev_field_efvm](http://192.168.0.170:8082/SueHeir/dev_field_efvm)** —
+  compressible CFD on the sibling FIELD mesh substrate.
 
 Those examples keep GRASS honest about the abstraction: the framework is not a
 particle code or a mesh code, it is the scheduler, plugin, I/O, and coupling
