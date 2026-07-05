@@ -13,7 +13,7 @@ retired by construction. Here is what replaced it.
 ## A mesh solver: 1-D heat diffusion
 
 [`heat_diffusion_1d`](https://github.com/SueHeir/grass) (in
-`crates/grass_scheduler/examples`) is a structured-grid **finite-difference**
+`examples/heat_diffusion_1d`) is a structured-grid **finite-difference**
 solver of `∂T/∂t = α ∂²T/∂x²`. There is no particle, atom, neighbor list,
 position, or pairwise interaction anywhere in it — only a field sampled on a
 fixed grid and a local stencil. The FTCS update is expressed as two ordered
@@ -30,8 +30,8 @@ Two analytical checks gate it:
   `O(Δx²)` truncation error.
 
 ```console
-cargo run  -p grass_scheduler --example heat_diffusion_1d
-cargo test -p grass_scheduler --example heat_diffusion_1d
+cargo run  --example heat_diffusion_1d
+cargo test --example heat_diffusion_1d
 ```
 
 That covers the *explicit mesh* case. The harder claim is implicit.

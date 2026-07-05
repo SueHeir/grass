@@ -22,8 +22,8 @@
 //!     We assert the numerical amplitude tracks that rate to within the
 //!     scheme's `O(Δx²)` truncation error.
 //!
-//! Run with:   `cargo run -p grass_scheduler --example heat_diffusion_1d`
-//! Test with:  `cargo test -p grass_scheduler --example heat_diffusion_1d`
+//! Run with:   `cargo run --example heat_diffusion_1d`
+//! Test with:  `cargo test --example heat_diffusion_1d`
 
 use grass_scheduler::prelude::*;
 

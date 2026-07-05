@@ -14,7 +14,7 @@
 //! `Config::from_str` so the example is self-contained — adding `InputPlugin`
 //! afterwards is a no-op because a `Config` is already present.
 //!
-//! Run with: `cargo run -p grass_io --example observed_oscillator`
+//! Run with: `cargo run --example observed_oscillator`
 //!
 //! The config below has two `[[run]]` stages (`settle`, then `production`).
 //! Each stage's extra keys are deep-merged over the global config into the
@@ -42,7 +42,7 @@ columns = ["step", "time", "x", "v"]
 
 [dump]
 interval = 25                      # write a frame every 25 steps
-path_template = "frames/osc_{step:05}.json"
+path_template = "examples/observed_oscillator/out/frames/osc_{step:05}.json"
 
 # Multi-stage run: a short settle stage, then a longer production stage.
 # Per-stage `[run.<section>]` tables deep-merge over the global config into

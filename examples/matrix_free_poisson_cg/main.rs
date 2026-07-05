@@ -5,8 +5,8 @@
 //! the example; the core crate only sees a generic [`LinearOperator`] and a
 //! convergence predicate.
 //!
-//! Run with:   `cargo run -p grass_scheduler --example matrix_free_poisson_cg`
-//! Test with:  `cargo test -p grass_scheduler --example matrix_free_poisson_cg`
+//! Run with:   `cargo run --example matrix_free_poisson_cg`
+//! Test with:  `cargo test --example matrix_free_poisson_cg`
 
 use grass_scheduler::prelude::*;
 

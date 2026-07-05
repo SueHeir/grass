@@ -4,7 +4,7 @@
 //! of resources and systems.
 //!
 //! A complete, runnable starting point lives in
-//! `examples/hello_app.rs` (`cargo run -p grass_app --example hello_app`):
+//! `examples/hello_app/main.rs` (`cargo run --example hello_app`):
 //! a `ScheduleSet`, a resource, a system, a `Plugin`, and a done-condition,
 //! driven by `App::new().add_plugins(..).start()`.
 //!

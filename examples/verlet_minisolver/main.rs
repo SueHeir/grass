@@ -7,7 +7,7 @@
 //!   - a finite `run()` loop,
 //!   - a final-state assertion.
 //!
-//! Run with: `cargo run -p grass_scheduler --example verlet_minisolver`
+//! Run with: `cargo run --example verlet_minisolver`
 
 use grass_scheduler::prelude::*;
 
