@@ -24,7 +24,10 @@
 //!     into the same `SubApps` machinery as local sub-Apps
 //!   - [`Wire`] / [`Transport`] / `MpiInterCommTransport` (behind the
 //!     `mpi` feature) for cross-process coupling
-//!   - [`OuterIterStopPlugin`] for fixed-iter termination
+//!   - [`OuterIterStopPlugin`] for fixed-iter termination, or the
+//!     [`OuterIteration`] + [`converge_outer_iter`] combinator for a
+//!     Picard/Aitken-accelerated outer loop that stops on a convergence test
+//!     (strong two-way coupling / FSI)
 //!   - [`snapshot_subapp_resource`] / [`restore_subapp_resource`] for opt-in
 //!     reversibility (Picard / adaptive retries)
 //!
@@ -137,6 +140,7 @@ mod multi;
 mod outer_iter;
 mod physics;
 mod port;
+mod relax;
 mod remote;
 mod snapshot;
 mod transport;
@@ -154,6 +158,7 @@ pub use multi::{
 pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlugin};
 pub use physics::{AppPhysics, Physics, StepResult};
 pub use port::{consume_field, expose_field, Port};
+pub use relax::{converge_outer_iter, OuterIteration, Relaxation};
 pub use remote::RemoteMirrorPhysics;
 pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};
 #[cfg(feature = "mpi")]
