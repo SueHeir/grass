@@ -56,9 +56,12 @@ app.add_update_system(advance_clock, Step::Update);
 
 Resources live in `RefCell`s, so borrows are checked at **run time**, not
 compile time. Because a run executes systems in sequence, two systems never race
-— but a *single* system that takes the same resource as both `Res` and `ResMut`
-double-borrows and panics. Split such work into two systems. That trade-off is
-the whole borrow model.
+— and two systems in the same phase that touch the same resource are not rejected
+by `organize_systems()`. If their data order matters, make it explicit with
+`.before()` / `.after()`. A *single* system that takes the same resource as both
+`Res` and `ResMut` double-borrows the `RefCell` and panics with
+`already mutably borrowed: BorrowError` or `already borrowed: BorrowMutError`.
+Split that work into separate systems. That trade-off is the whole borrow model.
 
 ## Minute 3 — phases and order
 

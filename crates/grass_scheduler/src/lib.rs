@@ -317,6 +317,37 @@ mod tests {
     }
 
     #[test]
+    fn same_phase_res_resmut_conflict_is_ordered_not_rejected() {
+        #[derive(Default)]
+        struct Shared(i32);
+        #[derive(Default)]
+        struct BorrowLog(Vec<i32>);
+
+        fn write_shared(mut shared: ResMut<Shared>) {
+            shared.0 = 7;
+        }
+
+        fn read_shared(shared: Res<Shared>, mut log: ResMut<BorrowLog>) {
+            log.0.push(shared.0);
+        }
+
+        let mut scheduler = Scheduler::default();
+        scheduler.add_resource(Shared::default());
+        scheduler.add_resource(BorrowLog::default());
+        scheduler.add_update_system(write_shared.label("write_shared"), TestSchedule::Force);
+        scheduler.add_update_system(read_shared.after("write_shared"), TestSchedule::Force);
+
+        scheduler.organize_systems();
+        scheduler.run();
+
+        let cell = scheduler
+            .resource_cell(TypeId::of::<BorrowLog>())
+            .expect("BorrowLog should be registered");
+        let guard = cell.borrow();
+        assert_eq!(guard.downcast_ref::<BorrowLog>().unwrap().0, vec![7]);
+    }
+
+    #[test]
     fn optional_resource_works_when_present() {
         let mut scheduler = Scheduler::default();
         scheduler.add_resource(MyResource(42));

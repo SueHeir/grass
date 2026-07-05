@@ -42,11 +42,11 @@ app.add_resource(SimClock { t: 0.0, dt: 1e-3 });
 A *system* is a function whose parameters are `SystemParam`s — most commonly
 `Res<T>` (shared read) and `ResMut<T>` (exclusive write). The scheduler injects
 them from the resource store and runs every system on a single thread, one after
-another, in a fully deterministic order (`run_flat`,
-`grass_scheduler/src/lib.rs:1920`). There is no parallel execution: "ordering"
-means the *sequence* in which systems run, never simultaneous execution. The
-read/write sets a system declares are used to compute that sequence and to inject
-borrows, not to dispatch work across cores.
+another, in a fully deterministic order. There is no parallel execution:
+"ordering" means the *sequence* in which systems run, never simultaneous
+execution. The read/write sets a system declares are exposed for diagnostics and
+coherence hooks; ordinary flat scheduling still uses phase order plus explicit
+`.before()` / `.after()` constraints.
 
 ```rust
 fn advance_clock(mut clock: ResMut<SimClock>) {
@@ -58,16 +58,20 @@ Resources live in a `Vec<RefCell<Box<dyn Any>>>`, so borrow rules are checked at
 **run time, not compile time**. `Res<T>` calls `borrow()` and `ResMut<T>` calls
 `borrow_mut()` on the same cell.
 
-> **Warning: conflicting borrows of the same resource panic at run time.**
-> If two systems that overlap in the same timestep both hold a `ResMut<T>` for
-> the same `T` — or one holds `Res<T>` while another holds `ResMut<T>` — the
-> second borrow panics with a `BorrowMutError`. The scheduler does **no** static
-> conflict detection. Because a flat run executes systems strictly in sequence,
-> two systems never literally run at once; the hazard is a *single* system that
-> takes the same resource twice (e.g. `ResMut<T>` and `Res<T>` of the same `T`
-> in its parameter list), or a custom `SystemParam` that re-borrows a cell its
-> own system already holds. Split such work into separate systems, or order them
-> with `.before()` / `.after()` so the borrows never coexist.
+> **Warning: same-phase access conflicts are ordering concerns, not validation
+> errors.** `organize_systems()` validates missing resources and label
+> constraints, but it does not reject two systems in the same phase just because
+> one reads `Res<T>` and another writes `ResMut<T>` (or both write `ResMut<T>`).
+> In the flat scheduler those systems run sequentially, with registration order
+> as the tie-break unless you add `.before()` / `.after()`. Use those ordering
+> constraints whenever the reader must see a particular writer's value.
+>
+> A true overlapping borrow still panics at run time. The common shape is a
+> *single* system that takes the same resource twice, such as `Res<T>` and
+> `ResMut<T>`, or a custom `SystemParam` that re-borrows a cell its own system
+> already holds. Depending on which borrow happens second, the `RefCell` panic is
+> `already mutably borrowed: BorrowError` or `already borrowed: BorrowMutError`.
+> Split that work into separately ordered systems.
 
 ## The schedule tree
 
@@ -75,7 +79,7 @@ Systems are placed into a schedule built from four node kinds:
 
 | node | meaning |
 |---|---|
-| `Phase` | a named set of systems that run together (ordered by data deps) |
+| `Phase` | a named set of systems that run together (ordered by `.before()` / `.after()` constraints, then registration order) |
 | `Sequence` | child schedules run in order |
 | `Loop` | a child schedule repeated (e.g. the per-timestep loop) |
 | `Branch` | conditional sub-schedules |
