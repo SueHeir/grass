@@ -120,22 +120,13 @@ the shape of a particle code, a finite-volume sweep, a cellular update, *and*
 (as it turns out) an implicit assemble-and-solve: the payoff is that you write
 the physics, not the plumbing, and you can couple your solver to someone else's.
 
-**Implicit global solves work too — and it's proven.** These docs used to say
-GRASS was "not proven for implicit global solvers (FEM, spectral, Newton–Krylov)".
-That caveat is retired. FIELD's [`fem_poisson`](https://github.com/SueHeir/field)
-example solves steady-state Poisson with P1 finite elements as a **single global
-sparse solve** `K u = b` — every unknown coupled through one matrix, no
-timestepping — expressed as an ordinary `Assemble → Solve → Validate` schedule on
-GRASS. It converges at the theoretical 2nd order (observed mean L² order **1.995**
-vs. theory 2.000). What GRASS gives you there is the schedule and the resources;
-**you bring the sparse solver** (`fem_poisson` uses `nalgebra-sparse`). See
-[Non-Particle Solvers on GRASS](https://sueheir.github.io/grass/model/non-particle-solvers.html).
-
-**Still honestly scoped:** the landed proof is one *linear, symmetric,
-single-solve* problem. Nonlinear Newton–Krylov iteration, spectral methods, and
-large distributed sparse solves are consistent with the design but not yet
-demonstrated with a validated example — we'll cite them here when they land, not
-before.
+**Mesh and implicit/global solves fit the same shape** — an assemble-and-solve
+step (a sparse `K u = b`, a mesh sweep) is just another schedule of systems and
+resources, so GRASS is designed to be agnostic to the discretization, not only to
+particles. The mesh side of the ecosystem (**FIELD**) is still being built out, so
+treat non-particle support as **in progress** rather than a finished, broadly
+validated capability — we'll point to concrete validated examples here as they
+land.
 
 ## The stack
 
@@ -266,7 +257,6 @@ The book is the primary docs; it builds from `docs/` with `mdbook build`.
 - [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html) — a complete time-stepping solver, from scratch.
 - [The Scheduler](https://sueheir.github.io/grass/model/scheduler.html) — resources, systems, the schedule tree, and the borrow rules.
 - [MPI and Coupling](https://sueheir.github.io/grass/model/mpi-coupling.html) — running across processes and coupling several solvers.
-- [Non-Particle Solvers on GRASS](https://sueheir.github.io/grass/model/non-particle-solvers.html) — the mesh and implicit-FEM proofs that GRASS is discretization-agnostic.
 
 ## License
 

@@ -91,22 +91,20 @@ so a mesh/Eulerian substrate rides it the same way SOIL does.
   exchange, and AMR, and is **agnostic to the equations** — it knows nothing about
   fluxes, EOS, or boundary conditions, exactly as SOIL knows nothing about force
   laws. That symmetry is the point: the two substrates are siblings, not layers.
-- **The landed proof — `fem_poisson`.** For a long time these docs carried a
-  caveat that GRASS was "not proven for implicit global solvers (FEM, spectral,
-  Newton–Krylov)". **That caveat is retired.** FIELD's `fem_poisson` example
-  solves steady-state Poisson with continuous P1 finite elements as a *single
-  global sparse solve* `K u = b` — every unknown coupled through one matrix, no
+- **An early mesh example — `fem_poisson`.** FIELD's `fem_poisson` example solves
+  steady-state Poisson with continuous P1 finite elements as a *single global
+  sparse solve* `K u = b` — every unknown coupled through one matrix, no
   timestepping — expressed as an ordinary `Assemble → Solve → Validate` schedule
   on GRASS. Method of manufactured solutions gives a mean observed L² order of
   **1.995** against the theoretical 2.000. GRASS supplies the schedule and
   resources; *you* bring the sparse solver (`fem_poisson` uses `nalgebra-sparse`).
-  The full walkthrough is in
-  [Non-Particle Solvers on GRASS](../model/non-particle-solvers.html).
+  The mesh side of the ecosystem is still being built out, so this is an early
+  worked example, not a claim of broad discretization coverage.
 - **test-cfd — the mesh physics tier (in progress).** The particle branch's
   physics tier is DIRT; the mesh branch's counterpart is **test-cfd**,
   compressible CFD (Riemann solvers, EOS, immersed boundaries) as GRASS plugins
   riding FIELD. It is being ported — named here as direction, not yet as
-  validated evidence. `fem_poisson` is the standing proof the mesh path works;
+  validated evidence. `fem_poisson` is an early worked example on the mesh path;
   test-cfd is the physics that will ride it.
 
 ## Where to start
@@ -126,7 +124,6 @@ so a mesh/Eulerian substrate rides it the same way SOIL does.
   where `fem_poisson` is a worked implicit-solve example. For something with no
   substrate at all, start straight at [GRASS](https://github.com/SueHeir/grass):
   the App/Plugin/scheduler model and coupling primitives are all you need. See
-  [Non-Particle Solvers on GRASS](../model/non-particle-solvers.html) and
   [Write Your Own Solver](../tutorial/write-your-own-solver.html).
 
 ## Why split it this way

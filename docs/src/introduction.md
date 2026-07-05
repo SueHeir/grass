@@ -2,10 +2,9 @@
 
 **GRASS** — the General Rust App System Scheduler — is a Bevy-style `App` +
 `Plugin` framework for solvers whose step is a sequence of systems: explicit
-time-stepping methods, and — as the [FEM proof](./model/non-particle-solvers.md)
-shows — implicit assemble-and-solve methods too. It also ships a small toolkit
-for coupling several App-shaped solvers together (in-process or across MPI
-binaries).
+time-stepping methods, and implicit assemble-and-solve methods too. It also ships
+a small toolkit for coupling several App-shaped solvers together (in-process or
+across MPI binaries).
 
 The framework knows nothing about particles or physics. It is the App,
 scheduler, I/O, MPI, and coupling layer that domain crates build on:
@@ -43,14 +42,12 @@ GRASS suits solvers whose step decomposes into **systems with separable
 read/write sets** — each stage reads some resources and writes others. That is
 the shape of a particle code, a finite-volume sweep, or a cellular update.
 
-It also fits **implicit global solves** — an FEM Poisson solver that assembles a
-sparse `K` and does one global `K u = b` solve rides GRASS as an ordinary
-`Assemble → Solve → Validate` schedule, validated at 2nd-order convergence
-(FIELD's `fem_poisson`). Earlier drafts of this book said GRASS was "not proven"
-for that shape; that caveat is retired — see
-[Non-Particle Solvers on GRASS](./model/non-particle-solvers.md). What is still
-lightly exercised (and honestly flagged there): nonlinear Newton–Krylov, spectral
-methods, and large distributed sparse solves.
+It is designed to fit **implicit global solves** too — an FEM Poisson solver that
+assembles a sparse `K` and does one global `K u = b` solve rides GRASS as an
+ordinary `Assemble → Solve → Validate` schedule (FIELD's `fem_poisson`). The mesh
+side of the ecosystem is still being built out, so treat that as an early worked
+example rather than broad validation; nonlinear Newton–Krylov, spectral methods,
+and large distributed sparse solves remain lightly exercised.
 
 ## The core idea
 
@@ -92,9 +89,6 @@ app.start();
   (config, clock, terminal output, dump, run loop) and their namespace ordering.
 - **[MPI and Coupling](./model/mpi-coupling.md)** — running across processes
   (`grass_mpi`) and coupling several solvers (`grass_multi`).
-- **[Non-Particle Solvers on GRASS](./model/non-particle-solvers.md)** — the mesh
-  (`heat_diffusion_1d`) and implicit-FEM (`fem_poisson`) proofs that GRASS is
-  agnostic to the whole discretization paradigm.
 - **[Write Your Own Solver](./tutorial/write-your-own-solver.md)** — assemble a
   complete time-stepping solver from scratch.
 - **[Derive Macros](./reference/derives.md)** — `ScheduleSet`, `StageEnum`, and
