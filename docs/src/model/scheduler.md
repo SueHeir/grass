@@ -5,6 +5,27 @@ crate is the engine `App` wraps. It is a typed-resource, dependency-injection
 scheduler: systems declare what they touch by argument type, and the scheduler
 orders and runs them accordingly.
 
+## Architecture at a glance
+
+The scheduler has two layers: a declarative execution shape, and a runtime that
+owns resources and walks that shape one system at a time.
+
+| structure | where | responsibility |
+|---|---|---|
+| `Schedule` / `ScheduleNode` | `crates/grass_scheduler/src/schedule.rs` | Holds the optional tree form of a timestep. `Phase` nodes select registered systems, `Sequence` runs child nodes in order, `Loop` repeats a subtree until a dependency-injected condition passes, and `Branch` runs the first matching conditional subtree. |
+| `SystemParam` | `crates/grass_scheduler/src/lib.rs` | Defines how a system argument is resolved from scheduler storage. `Res<T>` and `ResMut<T>` look up a typed resource slot and borrow it; `Local<T>` creates per-system private state; optional params report missing resources as `None` instead of validation errors. |
+| `Scheduler` | `crates/grass_scheduler/src/lib.rs` | Owns the resource table, setup/update system lists, phase namespace assignments, the optional `Schedule`, timing state, and coherence hooks. `organize_systems()` sorts and prepares systems; `run()` chooses flat execution or the schedule-tree walker. |
+| `SchedulerManager` | `crates/grass_scheduler/src/lib.rs` | A normal resource that carries lifecycle state (`Setup`, `Run`, `End`) plus the current run-stage index/name. `start()` installs it and polls it so systems or plugins can advance stages or end the run without hard-coding scheduler control flow. |
+| execution log resources | scheduler tests | Small resources such as `EventLog` / `ExecutionLog` are not framework machinery; they are test fixtures. Systems push markers into them so tests can assert tree order, phase sorting, looping, rollback, and group behavior from the observable execution trace. |
+
+Installing a `Schedule` is a lowering step. `Scheduler::set_schedule()` walks the
+tree, assigns namespaces to every `Phase`, rewrites matching registered systems'
+stored phases, and prepares every loop/branch condition against the current
+resource index. During `run()`, a scheduler with no installed tree uses the flat
+`(namespace, index)` order. A scheduler with a tree recursively walks
+`ScheduleNode`s and dispatches `Phase` nodes by namespace; the systems
+themselves still run from the same prepared update-system list.
+
 ## Resources
 
 A *resource* is a piece of global state, stored by type. You register one and
