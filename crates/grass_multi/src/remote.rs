@@ -45,15 +45,120 @@
 
 use crate::physics::{Physics, StepResult};
 use crate::transport::Transport;
-use crate::wire::Wire;
+use crate::wire::{Wire, WireUnpackError};
 use grass_app::App;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
+use std::fmt;
 
 /// Type-erased "pack T from this App's resource into bytes" closure.
 type PackFn = Box<dyn Fn(&App) -> Vec<u8> + Send + Sync>;
 /// Type-erased "unpack bytes into this App's T resource" closure.
-type UnpackFn = Box<dyn Fn(&mut App, &[u8]) + Send + Sync>;
+type UnpackFn = Box<
+    dyn Fn(&mut App, &[u8], &str, RemotePumpPhase, usize) -> Result<(), RemoteUnpackError>
+        + Send
+        + Sync,
+>;
+
+/// Whether a failed remote decode happened during setup or an iteration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePumpPhase {
+    /// The one-shot setup pump driven by [`RemoteMirrorPhysics::prepare`].
+    Setup,
+    /// The per-iteration pump driven by [`RemoteMirrorPhysics::step`].
+    EachIter,
+}
+
+impl fmt::Display for RemotePumpPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Setup => f.write_str("setup"),
+            Self::EachIter => f.write_str("each-iter"),
+        }
+    }
+}
+
+/// Contextual error returned when a remote payload cannot be decoded into the
+/// resource registered for that receive slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteUnpackError {
+    mirror_name: String,
+    phase: RemotePumpPhase,
+    recv_index: usize,
+    resource_type: &'static str,
+    payload_len: usize,
+    source: WireUnpackError,
+}
+
+impl RemoteUnpackError {
+    fn new<T: 'static>(
+        mirror_name: &str,
+        phase: RemotePumpPhase,
+        recv_index: usize,
+        payload_len: usize,
+        source: WireUnpackError,
+    ) -> Self {
+        Self {
+            mirror_name: mirror_name.to_string(),
+            phase,
+            recv_index,
+            resource_type: std::any::type_name::<T>(),
+            payload_len,
+            source,
+        }
+    }
+
+    /// Name of the remote mirror sub-App that received the payload.
+    pub fn mirror_name(&self) -> &str {
+        &self.mirror_name
+    }
+
+    /// Pump phase where the decode failed.
+    pub fn phase(&self) -> RemotePumpPhase {
+        self.phase
+    }
+
+    /// Zero-based index within the phase's registered receive list.
+    pub fn recv_index(&self) -> usize {
+        self.recv_index
+    }
+
+    /// Rust resource type expected by this receive slot.
+    pub fn resource_type(&self) -> &'static str {
+        self.resource_type
+    }
+
+    /// Number of bytes received from the transport.
+    pub fn payload_len(&self) -> usize {
+        self.payload_len
+    }
+
+    /// Lower-level wire decode error.
+    pub fn source(&self) -> &WireUnpackError {
+        &self.source
+    }
+}
+
+impl fmt::Display for RemoteUnpackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "RemoteMirrorPhysics `{}` failed to unpack {} recv slot #{} as `{}` from {} bytes: {}",
+            self.mirror_name,
+            self.phase,
+            self.recv_index,
+            self.resource_type,
+            self.payload_len,
+            self.source.detail()
+        )
+    }
+}
+
+impl std::error::Error for RemoteUnpackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 /// A sub-App backed by a [`Transport`] to a peer process.
 ///
@@ -136,6 +241,49 @@ impl RemoteMirrorPhysics {
             self.inner.add_resource(T::default());
         }
     }
+
+    /// Fallible form of [`Physics::prepare`], returning contextual wire
+    /// diagnostics instead of panicking on malformed received payloads.
+    pub fn try_prepare(&mut self) -> Result<(), RemoteUnpackError> {
+        // One-shot handshake. Sends first, then recvs — the peer mirrors
+        // this so both sides' sends complete before either side blocks on
+        // recv. Buffering assumption documented at module level.
+        for pack in &self.senders_at_setup {
+            let payload = pack(&self.inner);
+            self.transport.send(&payload);
+        }
+        for (recv_index, unpack) in self.receivers_at_setup.iter().enumerate() {
+            let body = self.transport.recv();
+            unpack(
+                &mut self.inner,
+                &body,
+                &self.name,
+                RemotePumpPhase::Setup,
+                recv_index,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Fallible form of [`Physics::step`], returning contextual wire
+    /// diagnostics instead of panicking on malformed received payloads.
+    pub fn try_step(&mut self) -> Result<StepResult, RemoteUnpackError> {
+        for pack in &self.senders_each_iter {
+            let payload = pack(&self.inner);
+            self.transport.send(&payload);
+        }
+        for (recv_index, unpack) in self.receivers_each_iter.iter().enumerate() {
+            let body = self.transport.recv();
+            unpack(
+                &mut self.inner,
+                &body,
+                &self.name,
+                RemotePumpPhase::EachIter,
+                recv_index,
+            )?;
+        }
+        Ok(StepResult::default())
+    }
 }
 
 impl Physics for RemoteMirrorPhysics {
@@ -144,29 +292,11 @@ impl Physics for RemoteMirrorPhysics {
     }
 
     fn prepare(&mut self) {
-        // One-shot handshake. Sends first, then recvs — the peer mirrors
-        // this so both sides' sends complete before either side blocks on
-        // recv. Buffering assumption documented at module level.
-        for pack in &self.senders_at_setup {
-            let payload = pack(&self.inner);
-            self.transport.send(&payload);
-        }
-        for unpack in &self.receivers_at_setup {
-            let body = self.transport.recv();
-            unpack(&mut self.inner, &body);
-        }
+        self.try_prepare().unwrap_or_else(|err| panic!("{err}"));
     }
 
     fn step(&mut self) -> StepResult {
-        for pack in &self.senders_each_iter {
-            let payload = pack(&self.inner);
-            self.transport.send(&payload);
-        }
-        for unpack in &self.receivers_each_iter {
-            let body = self.transport.recv();
-            unpack(&mut self.inner, &body);
-        }
-        StepResult::default()
+        self.try_step().unwrap_or_else(|err| panic!("{err}"))
     }
 
     fn is_done(&self) -> bool {
@@ -202,8 +332,16 @@ fn pack_resource<T: Wire + 'static>(app: &App) -> Vec<u8> {
     value.pack()
 }
 
-fn unpack_into_resource<T: Wire + 'static>(app: &mut App, buf: &[u8]) {
-    let unpacked = T::unpack(buf);
+fn unpack_into_resource<T: Wire + 'static>(
+    app: &mut App,
+    buf: &[u8],
+    mirror_name: &str,
+    phase: RemotePumpPhase,
+    recv_index: usize,
+) -> Result<(), RemoteUnpackError> {
+    let unpacked = T::try_unpack(buf).map_err(|source| {
+        RemoteUnpackError::new::<T>(mirror_name, phase, recv_index, buf.len(), source)
+    })?;
     let cell = app.get_mut_resource(TypeId::of::<T>()).unwrap_or_else(|| {
         panic!(
             "RemoteMirrorPhysics: no resource of type `{}` registered on the inner App",
@@ -215,4 +353,5 @@ fn unpack_into_resource<T: Wire + 'static>(app: &mut App, buf: &[u8]) {
         .downcast_mut::<T>()
         .expect("RemoteMirrorPhysics: inner resource type mismatch (impossible)");
     *slot = unpacked;
+    Ok(())
 }
