@@ -1172,7 +1172,8 @@ macro_rules! chain_namespaces {
 ///
 /// # Panics
 ///
-/// Panics if a cycle is detected in the `before`/`after` ordering constraints.
+/// Panics with a diagnostic naming the involved systems, labels, and phase if
+/// a cycle is detected in the `before`/`after` ordering constraints.
 pub(crate) fn topo_sort_group(group: &mut Vec<(StoredSystemEntry, StoredPhase)>) {
     let n = group.len();
     if n <= 1 {
@@ -1221,7 +1222,7 @@ pub(crate) fn topo_sort_group(group: &mut Vec<(StoredSystemEntry, StoredPhase)>)
     }
 
     if order.len() != n {
-        panic!("Cycle detected in system ordering constraints within a ScheduleSet");
+        panic!("{}", format_cycle_diagnostic(group, &in_degree));
     }
 
     let mut temp: Vec<Option<(StoredSystemEntry, StoredPhase)>> =
@@ -1233,4 +1234,43 @@ pub(crate) fn topo_sort_group(group: &mut Vec<(StoredSystemEntry, StoredPhase)>)
                 .expect("topo_sort_group: duplicate index in topological order"),
         );
     }
+}
+
+fn format_cycle_diagnostic(
+    group: &[(StoredSystemEntry, StoredPhase)],
+    in_degree: &[usize],
+) -> String {
+    let phase = group
+        .first()
+        .map(|(_, phase)| phase.phase_name())
+        .unwrap_or("<unknown>");
+
+    let mut lines = vec![format!(
+        "Cycle detected in system ordering constraints within ScheduleSet phase \"{phase}\""
+    )];
+
+    for (idx, (entry, _)) in group.iter().enumerate() {
+        if in_degree.get(idx).copied().unwrap_or_default() == 0 {
+            continue;
+        }
+
+        let label = entry.label.as_deref().unwrap_or("<none>");
+        let before = if entry.befores.is_empty() {
+            "<none>".to_string()
+        } else {
+            entry.befores.join(", ")
+        };
+        let after = if entry.afters.is_empty() {
+            "<none>".to_string()
+        } else {
+            entry.afters.join(", ")
+        };
+
+        lines.push(format!(
+            "  System \"{}\" (label: \"{}\", phase: \"{}\") before [{}] after [{}]",
+            entry.name, label, phase, before, after
+        ));
+    }
+
+    lines.join("\n")
 }
