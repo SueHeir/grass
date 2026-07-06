@@ -56,12 +56,13 @@ Key methods on `CommBackend`:
 
 | Function | Line | Notes |
 |---|---|---|
-| `get_mpi_world()` | `src/lib.rs:286` | Returns intra-comm (color-split) if `init_app_color` ran, else raw WORLD. |
-| `get_mpi_world_raw()` | `src/lib.rs:347` | Always raw `MPI_COMM_WORLD`. |
-| `init_app_color(color: i32)` | `src/lib.rs:315` | MPMD bootstrap: splits WORLD by color. Call once, before `get_mpi_world`. |
-| `finalize_mpi()` | `src/lib.rs:338` (mpi), `src/lib.rs:381` (no-op) | Drops Universe → `MPI_Finalize`. No-op stub always compiled in. |
-| `world_rank()` | `src/lib.rs:359` | Raw WORLD rank. |
-| `world_size()` | `src/lib.rs:371` | Raw WORLD size. |
+| `get_mpi_world()` | `src/lib.rs:391` | Returns intra-comm (color-split) if `init_app_color` ran, else raw WORLD. |
+| `try_init_app_color(color: i32)` | `src/lib.rs:414` | Fallible form of `init_app_color` for reporting lifecycle violations. |
+| `init_app_color(color: i32)` | `src/lib.rs:457` | MPMD bootstrap: splits WORLD by color. Same-color repeats are no-ops; different colors or calls after `get_mpi_world` are rejected. |
+| `finalize_mpi()` | `src/lib.rs:464` (mpi), `src/lib.rs:501` (no-op) | Drops Universe → `MPI_Finalize`. No-op stub always compiled in. |
+| `get_mpi_world_raw()` | `src/lib.rs:475` | Always raw `MPI_COMM_WORLD`. |
+| `world_rank()` | `src/lib.rs:484` | Raw WORLD rank. |
+| `world_size()` | `src/lib.rs:493` | Raw WORLD size. |
 
 ### Feature flags
 
@@ -175,11 +176,11 @@ A short tutorial section inside the "MPI and Coupling" chapter should cover:
   the struct-level doc (`src/lib.rs:84`) and the batch-fn doc (`src/lib.rs:149`).
   A shared "disabled half" note at the `SendRecvOp` struct itself would reduce
   repeated reading.
-- **`init_app_color` idempotence caveat** (`src/lib.rs:312`: "Idempotent if
-  called twice with the same color"): the implementation does *not* check
-  whether the stored intra-comm used the same color — it unconditionally
-  overwrites `MPI_INTRA` (`src/lib.rs:331`). The doc comment overstates the
-  safety; a second call with a different color silently replaces the first.
+- **`init_app_color` lifecycle enforcement**: implemented in
+  `try_init_app_color`, which accepts same-color repeats and rejects both
+  different-color repeats and calls after `get_mpi_world` has handed out raw
+  WORLD. `init_app_color` panics with that actionable error for callers that do
+  not need to recover.
 - **No `CommPlugin`**: the module doc (`src/lib.rs:13`) notes there is no
   plugin, but there is no explanation of *why* (the wiring is intentionally
   left to the consumer so different App setups can choose backends). A short

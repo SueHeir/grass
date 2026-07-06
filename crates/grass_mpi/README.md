@@ -15,7 +15,8 @@ the `mpi_backend` feature.
 | [`MpiCommBackend`](src/lib.rs) | real MPI backend via [`mpi`](https://crates.io/crates/mpi) crate; behind the `mpi_backend` feature |
 | [`get_mpi_world`](src/lib.rs) | returns this app's communicator: the color-split intra-comm if [`init_app_color`](src/lib.rs) was called (MPMD bootstrap), otherwise raw `MPI_COMM_WORLD` |
 | [`get_mpi_world_raw`](src/lib.rs) | always returns raw `MPI_COMM_WORLD`, even after a color split — for MPMD couplings that address peers in other binaries by absolute world rank |
-| [`init_app_color`](src/lib.rs) | MPMD bootstrap: split `MPI_COMM_WORLD` by `color` so each binary in `mpirun -np N1 a : -np N2 b` sees only its own ranks |
+| [`init_app_color`](src/lib.rs) | MPMD bootstrap: split `MPI_COMM_WORLD` by `color`; same-color repeats are no-ops, different colors or calls after `get_mpi_world` are rejected |
+| [`try_init_app_color`](src/lib.rs) | fallible form of `init_app_color` for callers that want to handle lifecycle violations |
 | [`finalize_mpi`](src/lib.rs) | drop the MPI universe; call after all `Comm` resources have been dropped |
 | [`world_rank`](src/lib.rs) / [`world_size`](src/lib.rs) | this rank / total ranks in raw `MPI_COMM_WORLD` |
 

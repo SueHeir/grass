@@ -43,8 +43,9 @@
 //! 1. **`init_app_color(color)` once, before the first `get_mpi_world()`.**
 //!    It color-splits `MPI_COMM_WORLD` for MPMD launches
 //!    (`mpirun -np N1 ./a : -np N2 ./b`); calling it after a backend already
-//!    captured the world is too late. Skip it entirely for SPMD/single-binary
-//!    runs.
+//!    captured the world is too late and is rejected. Repeating the call with
+//!    the same color is a no-op; repeating it with a different color is rejected.
+//!    Skip it entirely for SPMD/single-binary runs.
 //! 2. **Two communicator views:**
 //!    - [`get_mpi_world`] returns the **color-split intra-comm** (this binary's
 //!      own ranks) when `init_app_color` ran, else raw WORLD. This is what a
@@ -295,7 +296,10 @@ static MPI_UNIVERSE: Mutex<Option<mpi::environment::Universe>> = Mutex::new(None
 /// The wrapper makes `SimpleCommunicator` `Sync` for static storage. Same
 /// hand-promise as `MpiCommBackend` below — single-threaded MPI use only.
 #[cfg(feature = "mpi_backend")]
-struct IntraComm(mpi::topology::SimpleCommunicator);
+struct IntraComm {
+    color: i32,
+    comm: mpi::topology::SimpleCommunicator,
+}
 
 #[cfg(feature = "mpi_backend")]
 unsafe impl Send for IntraComm {}
@@ -303,7 +307,62 @@ unsafe impl Send for IntraComm {}
 unsafe impl Sync for IntraComm {}
 
 #[cfg(feature = "mpi_backend")]
-static MPI_INTRA: Mutex<Option<IntraComm>> = Mutex::new(None);
+#[derive(Default)]
+struct MpiLifecycle {
+    intra: Option<IntraComm>,
+    raw_world_fixed: bool,
+}
+
+#[cfg(feature = "mpi_backend")]
+static MPI_LIFECYCLE: Mutex<MpiLifecycle> = Mutex::new(MpiLifecycle {
+    intra: None,
+    raw_world_fixed: false,
+});
+
+/// Error returned when [`try_init_app_color`] would violate the MPI bootstrap
+/// lifecycle.
+#[cfg(feature = "mpi_backend")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitAppColorError {
+    /// `get_mpi_world()` already returned raw `MPI_COMM_WORLD`, so a later
+    /// color split would disagree with the communicator already handed to the
+    /// app.
+    CommunicatorAlreadyFixed {
+        /// The requested MPMD color.
+        requested: i32,
+    },
+    /// The process was already initialized with another color.
+    DifferentColor {
+        /// The color already used to split `MPI_COMM_WORLD`.
+        existing: i32,
+        /// The newly requested color.
+        requested: i32,
+    },
+}
+
+#[cfg(feature = "mpi_backend")]
+impl std::fmt::Display for InitAppColorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CommunicatorAlreadyFixed { requested } => write!(
+                f,
+                "init_app_color({requested}) must run before get_mpi_world(); \
+                 raw MPI_COMM_WORLD has already been handed out"
+            ),
+            Self::DifferentColor {
+                existing,
+                requested,
+            } => write!(
+                f,
+                "init_app_color({requested}) conflicts with the existing app color \
+                 {existing}; repeated calls are only idempotent for the same color"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "mpi_backend")]
+impl std::error::Error for InitAppColorError {}
 
 #[cfg(feature = "mpi_backend")]
 fn world_from_universe_or_external_init(
@@ -330,32 +389,45 @@ fn world_from_universe_or_external_init(
 /// sees only its own subset of ranks.
 #[cfg(feature = "mpi_backend")]
 pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
-    let mut guard = MPI_UNIVERSE.lock().unwrap();
-
-    // Hold the intra-comm guard separately to keep clean drop order.
-    let intra_guard = MPI_INTRA.lock().unwrap();
-    if let Some(intra) = intra_guard.as_ref() {
+    let mut lifecycle = MPI_LIFECYCLE.lock().unwrap();
+    if let Some(intra) = lifecycle.intra.as_ref() {
         // Clone the intra-comm handle for the caller. SimpleCommunicator's
         // CommunicatorHandle wraps an MPI_Comm raw handle that's safe to
         // duplicate; rsmpi handles the underlying refcount.
         use mpi::raw::AsRaw;
-        let raw = intra.0.as_raw();
+        let raw = intra.comm.as_raw();
         return unsafe { mpi::raw::FromRaw::from_raw(raw) };
     }
+
+    let mut guard = MPI_UNIVERSE.lock().unwrap();
+    lifecycle.raw_world_fixed = true;
     world_from_universe_or_external_init(&mut guard)
 }
 
-/// MPMD bootstrap: split `MPI_COMM_WORLD` by `color` so each binary in a
-/// `mpirun -np N1 ./a : -np N2 ./b` launch sees only its own intra-comm
-/// from [`get_mpi_world`]. Each color value yields a disjoint sub-communicator
-/// — by convention `color = 0` for the first binary, `1` for the second, etc.
+/// Fallible form of [`init_app_color`].
 ///
-/// Call **once**, **before** the first [`get_mpi_world`] (so the code that
-/// builds the [`CommResource`] picks up the intra-comm). Idempotent if called
-/// twice with the same color.
+/// This is idempotent only when called again with the same `color`. It returns
+/// [`InitAppColorError::DifferentColor`] for a second, different color and
+/// [`InitAppColorError::CommunicatorAlreadyFixed`] if [`get_mpi_world`] already
+/// returned raw `MPI_COMM_WORLD`.
 #[cfg(feature = "mpi_backend")]
-pub fn init_app_color(color: i32) {
+pub fn try_init_app_color(color: i32) -> Result<(), InitAppColorError> {
     use mpi::topology::Communicator;
+    let mut lifecycle = MPI_LIFECYCLE.lock().unwrap();
+    if let Some(intra) = lifecycle.intra.as_ref() {
+        return if intra.color == color {
+            Ok(())
+        } else {
+            Err(InitAppColorError::DifferentColor {
+                existing: intra.color,
+                requested: color,
+            })
+        };
+    }
+    if lifecycle.raw_world_fixed {
+        return Err(InitAppColorError::CommunicatorAlreadyFixed { requested: color });
+    }
+
     let world = {
         let mut universe_guard = MPI_UNIVERSE.lock().unwrap();
         world_from_universe_or_external_init(&mut universe_guard)
@@ -367,14 +439,31 @@ pub fn init_app_color(color: i32) {
             key as mpi::topology::Key,
         )
         .expect("init_app_color: split_by_color returned no communicator (color undefined?)");
-    let mut intra_guard = MPI_INTRA.lock().unwrap();
-    *intra_guard = Some(IntraComm(intra));
+    lifecycle.intra = Some(IntraComm { color, comm: intra });
+    Ok(())
+}
+
+/// MPMD bootstrap: split `MPI_COMM_WORLD` by `color` so each binary in a
+/// `mpirun -np N1 ./a : -np N2 ./b` launch sees only its own intra-comm
+/// from [`get_mpi_world`]. Each color value yields a disjoint sub-communicator
+/// — by convention `color = 0` for the first binary, `1` for the second, etc.
+///
+/// Call **once**, **before** the first [`get_mpi_world`] (so the code that
+/// builds the [`CommResource`] picks up the intra-comm). Idempotent if called
+/// twice with the same color. Panics with an actionable message if called with a
+/// different color, or after [`get_mpi_world`] already returned raw
+/// `MPI_COMM_WORLD`. Use [`try_init_app_color`] to handle those violations.
+#[cfg(feature = "mpi_backend")]
+pub fn init_app_color(color: i32) {
+    try_init_app_color(color).expect("init_app_color lifecycle violation");
 }
 
 /// Drop the MPI universe, calling MPI_Finalize. Must be called after all
 /// `Comm` resources have been dropped (i.e. after the last `App` is done).
 #[cfg(feature = "mpi_backend")]
 pub fn finalize_mpi() {
+    let mut lifecycle = MPI_LIFECYCLE.lock().unwrap();
+    *lifecycle = MpiLifecycle::default();
     let mut guard = MPI_UNIVERSE.lock().unwrap();
     *guard = None;
 }
@@ -408,6 +497,7 @@ pub fn world_size() -> i32 {
 }
 
 #[cfg(not(feature = "mpi_backend"))]
+/// No-op MPI finalizer used when the real MPI backend is disabled.
 pub fn finalize_mpi() {}
 
 #[cfg(feature = "mpi_backend")]
