@@ -157,11 +157,12 @@ fn missing_export_before_tickpeer_leaves_remote_mirror_stale() {
         "B's local counter ticked N×10 times"
     );
 
-    // `RemoteMirrorPhysics::step` sends the remote mirror's current resource
-    // cells. Without an Export system copying local.Counter into peer.Counter
-    // before TickPeer, both sides keep sending the mirror's default value
-    // instead of their local counters. This is the intended stale-mirror
-    // semantics documented for the export-before-tick hazard.
+    // Keep this regression runnable: it is the CI guard for the no-export
+    // path. `RemoteMirrorPhysics::step` sends the remote mirror's current
+    // resource cells. Without an Export system copying local.Counter into
+    // peer.Counter before TickPeer, both sides keep sending the mirror's
+    // default value instead of their local counters. This is the intended
+    // stale-mirror semantics documented for the export-before-tick hazard.
     assert_eq!(
         a_seen_peer, 0,
         "A never sees B's local counter without Export before TickPeer"
