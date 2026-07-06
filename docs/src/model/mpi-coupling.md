@@ -51,7 +51,9 @@ scheduler.add_resource(comm);
 1. **`init_app_color(color)` once, before the first `get_mpi_world()`.** It
    color-splits `MPI_COMM_WORLD` for MPMD launches
    (`mpirun -np N1 ./a : -np N2 ./b`); calling it after a backend already
-   captured the world is too late. Skip it entirely for SPMD/single-binary runs.
+   captured the world is too late and is rejected. Repeating it with the same
+   color is a no-op; repeating it with a different color is rejected. Skip it
+   entirely for SPMD/single-binary runs.
 2. **Two communicator views:**
    - `get_mpi_world` returns the **color-split intra-comm** (this binary's own
      ranks) when `init_app_color` ran, else raw WORLD. This is what a backend
@@ -69,10 +71,11 @@ scheduler.add_resource(comm);
 > undefined behaviour. Nothing in the type system enforces this — it falls out of
 > Rust's drop order, so register `finalize_mpi` as the *last* resource-free
 > cleanup (it runs after the resource-aware cleanups that still touch live
-> resources). And `init_app_color(color)` is **not** idempotent despite its doc
-> comment: a second call unconditionally overwrites the stored intra-comm, so a
-> second call with a *different* color silently replaces the first split. Call it
-> exactly once, before the first `get_mpi_world()`.
+> resources). `init_app_color(color)` is idempotent only for the same color; a
+> second different color panics, and the fallible `try_init_app_color(color)`
+> returns an error that reports both the existing and requested colors. A first
+> call after `get_mpi_world()` is also rejected because raw `MPI_COMM_WORLD` has
+> already been handed to the app.
 
 ### The `unsafe impl Send/Sync` promise
 
