@@ -159,11 +159,11 @@ Several development-stage tiers also ride the stack as demonstrations of the
 same substrate boundaries. They are not peer-reviewed or presented as
 domain-validated; `dev_` marks that status plainly:
 
-- **[dev_soil_sph](http://192.168.0.170:8082/SueHeir/dev_soil_sph)** —
+- **[dev_soil_sph](https://github.com/SueHeir/dev_soil_sph)** —
   granular SPH (`mu(I)` continuum) on SOIL.
-- **[dev_soil_peri](http://192.168.0.170:8082/SueHeir/dev_soil_peri)** —
+- **[dev_soil_peri](https://github.com/SueHeir/dev_soil_peri)** —
   bond-based peridynamics on SOIL.
-- **[dev_field_efvm](http://192.168.0.170:8082/SueHeir/dev_field_efvm)** —
+- **[dev_field_efvm](https://github.com/SueHeir/dev_field_efvm)** —
   compressible CFD on the sibling FIELD mesh substrate.
 
 Those examples keep GRASS honest about the abstraction: the framework is not a
