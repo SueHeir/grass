@@ -159,10 +159,10 @@ pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlug
 pub use physics::{AppPhysics, Physics, StepResult};
 pub use port::{consume_field, expose_field, Port};
 pub use relax::{converge_outer_iter, OuterIteration, Relaxation};
-pub use remote::RemoteMirrorPhysics;
+pub use remote::{RemoteMirrorPhysics, RemotePumpPhase, RemoteUnpackError};
 pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};
 #[cfg(feature = "mpi")]
 pub use transport::MpiInterCommTransport;
 pub use transport::{LocalTransport, Transport};
 pub use typed_multi::{MultiRes, MultiResMut};
-pub use wire::Wire;
+pub use wire::{Wire, WireUnpackError};

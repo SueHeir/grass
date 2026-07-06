@@ -7,7 +7,7 @@
 
 use grass_app::prelude::*;
 use grass_multi::{tick_subapp, Multi, MultiAppExt, SubApps, Wire};
-use grass_multi::{LocalTransport, Transport};
+use grass_multi::{LocalTransport, RemoteMirrorPhysics, RemotePumpPhase, Transport};
 use grass_scheduler::prelude::*;
 use std::thread;
 
@@ -702,4 +702,47 @@ fn in_process_and_remote_transport_coupling_are_equivalent() {
 
     assert_equivalence_result(remote.0, expected.0, "side A");
     assert_equivalence_result(remote.1, expected.1, "side B");
+}
+
+#[test]
+fn remote_mirror_reports_truncated_string_payload_with_context() {
+    let (peer_t, mirror_t) = LocalTransport::pair();
+    let mut payload = 5u32.to_le_bytes().to_vec();
+    payload.extend_from_slice(b"abc");
+    peer_t.send(&payload);
+
+    let mut mirror = RemoteMirrorPhysics::new("peer", Box::new(mirror_t));
+    mirror.add_recv_each_iter::<String>();
+
+    let err = mirror.try_step().unwrap_err();
+
+    assert_eq!(err.mirror_name(), "peer");
+    assert_eq!(err.phase(), RemotePumpPhase::EachIter);
+    assert_eq!(err.recv_index(), 0);
+    assert_eq!(err.resource_type(), "alloc::string::String");
+    assert_eq!(err.payload_len(), 7);
+    assert!(err.source().detail().contains("declares 5 UTF-8 bytes"));
+    assert!(err
+        .to_string()
+        .contains("RemoteMirrorPhysics `peer` failed to unpack each-iter recv slot #0"));
+}
+
+#[test]
+fn remote_mirror_reports_non_utf8_string_payload_with_context() {
+    let (peer_t, mirror_t) = LocalTransport::pair();
+    let mut payload = 2u32.to_le_bytes().to_vec();
+    payload.extend_from_slice(&[0xff, 0xff]);
+    peer_t.send(&payload);
+
+    let mut mirror = RemoteMirrorPhysics::new("peer", Box::new(mirror_t));
+    mirror.add_recv_each_iter::<String>();
+
+    let err = mirror.try_step().unwrap_err();
+
+    assert_eq!(err.mirror_name(), "peer");
+    assert_eq!(err.phase(), RemotePumpPhase::EachIter);
+    assert_eq!(err.recv_index(), 0);
+    assert_eq!(err.resource_type(), "alloc::string::String");
+    assert_eq!(err.payload_len(), 6);
+    assert!(err.source().detail().contains("not UTF-8"));
 }
