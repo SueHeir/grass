@@ -283,10 +283,10 @@ chapter.
    The model page ends after the basic example. Users who need fixed-iter
    termination or Picard rollback have no docs.
 
-5. **`StepResult`, `Physics::time/max_stable_dt/set_dt` are reserved but
-   undocumented as such.** A doc reader might think these are callable contracts.
-   A brief "reserved, not yet consumed" note should appear wherever they're
-   mentioned.
+5. **`StepResult`, `Physics::time/max_stable_dt/set_dt` reserved notes are now
+   represented in mdBook.** The coupling tutorial and MPI/model coupling page
+   mark these hooks as reserved / not consumed and point users at scheduler
+   done-state (local) or an explicit exchanged flag (remote) for termination.
 
 6. **The `namespace!` macro is undocumented in the mdBook.** `#[derive(Namespace)]`
    is covered in `reference/derives.md`; the macro equivalent is not.

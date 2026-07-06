@@ -226,6 +226,14 @@ use grass_multi::OuterIterStopPlugin;
 parent.add_plugins(OuterIterStopPlugin { n_iters: 1000, phase: Phase::Check });
 ```
 
+The load-bearing termination signal for a local sub-App is
+`Physics::is_done()`, which `AppPhysics` reads from the wrapped `App`'s
+scheduler state. In practice, a local solver ends by running a check system that
+sets `SchedulerManager::state = End`, or by using `OuterIterStopPlugin` on the
+parent loop. `StepResult::completed_full_step` is reserved for a future
+full-step/substep distinction; `grass_multi` does not currently read it, and the
+built-in local and remote physics adapters return `true` for every step.
+
 ## 8. Run it
 
 `parent.start()` drives the whole thing:
@@ -392,6 +400,11 @@ The parent schedule is the only driver — there is no hidden loop inside
   peer's end-of-run cannot propagate back — so terminate a cross-process
   coupling with an explicit flag (e.g. `recv_each_iter::<bool>()`), never by
   waiting on the mirror.
+- [ ] **Treat `StepResult::completed_full_step` as reserved.** It is public on
+  `Physics::step` for a future scheduler that distinguishes full steps from
+  internal substeps, but `grass_multi` does not consume it today. Do not use it
+  as a termination signal; for local sub-Apps use scheduler done-state, and for
+  remote peers exchange an explicit done flag.
 - [ ] **Cleanup is not automatic across the sub-App boundary.** The parent's
   `run_cleanup` does not descend into sub-Apps; call `SubApps::cleanup_all`
   yourself (register it as a cleanup-with-app on `start()`, or after your own
@@ -400,6 +413,10 @@ The parent schedule is the only driver — there is no hidden loop inside
   `send_each_iter::<T>` ships whatever the mirror's `T` cell holds at tick time;
   without a copy-in system ordered before the mirror tick you send a stale
   value — `TickLocal → Export(local→mirror) → TickPeer → Import`.
+- [ ] **Treat `Physics::time`, `Physics::max_stable_dt`, and `Physics::set_dt`
+  as reserved.** They are interface hooks for future adaptive-dt orchestration.
+  The current `grass_multi` driver never calls them; multi-rate behavior is the
+  explicit `n` passed to `tick_subapp` / `tick_n_times`.
 
 ### C. Borrow rules
 

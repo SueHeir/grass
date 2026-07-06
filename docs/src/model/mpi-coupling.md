@@ -169,6 +169,16 @@ You wire those phases yourself with `add_update_system(sys, Phase::Tick)` etc.;
 nothing forces this exact shape, but couplers must run *after* the ticks that
 produce the data they read, so phase ordering is the contract.
 
+`Physics::step` returns a `StepResult`, but
+`StepResult::completed_full_step` is reserved for a future scheduler that needs
+to distinguish an internal substep from a full timestep boundary. The current
+`grass_multi` code does not consume it; `AppPhysics` and `RemoteMirrorPhysics`
+return `true` for every step. Likewise, `Physics::time`,
+`Physics::max_stable_dt`, and `Physics::set_dt` are reserved adaptive-timestep
+hooks. The present driver never calls them. Fixed-rate and multi-rate coupling
+is expressed by how many times the parent schedule ticks each sub-App with
+`tick_subapp(name, n)` / `tick_n_times::<NS>(n)`.
+
 ### Borrow rules (read before writing a coupler)
 
 Per-resource isolation comes from a `RefCell` on **each** sub-App resource,
@@ -389,7 +399,11 @@ Two requirements make or break a remote coupling:
 > is `TickLocal → Export → TickPeer → Import`. Note also that
 > `RemoteMirrorPhysics::is_done` always returns `false` — a remote peer cannot
 > signal completion through `Physics`; coordinate the end of the run with an
-> explicit flag (e.g. `recv_each_iter::<bool>()`).
+> explicit exchanged value (for example, `recv_each_iter::<bool>()`). For local
+> sub-Apps, the load-bearing completion path is the wrapped `App`'s scheduler
+> done-state as reported by `AppPhysics::is_done`; neither
+> `StepResult::completed_full_step` nor the reserved time/dt hooks drive
+> termination today.
 
 `MpiInterCommTransport::new(peer_rank)` always addresses **absolute
 `MPI_COMM_WORLD` ranks** (it uses `get_mpi_world_raw()`), even after
