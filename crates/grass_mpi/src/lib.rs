@@ -305,6 +305,23 @@ unsafe impl Sync for IntraComm {}
 #[cfg(feature = "mpi_backend")]
 static MPI_INTRA: Mutex<Option<IntraComm>> = Mutex::new(None);
 
+#[cfg(feature = "mpi_backend")]
+fn world_from_universe_or_external_init(
+    guard: &mut Option<mpi::environment::Universe>,
+) -> mpi::topology::SimpleCommunicator {
+    if guard.is_none() {
+        if let Some(universe) = mpi::initialize() {
+            *guard = Some(universe);
+        } else {
+            // MPI was initialized outside rsmpi (for example by a C library such
+            // as p4est). In that case rsmpi cannot own a `Universe`, but it can
+            // still wrap the live system communicator.
+            return mpi::topology::SimpleCommunicator::world();
+        }
+    }
+    guard.as_ref().unwrap().world()
+}
+
 /// Returns this app's communicator: the intra-comm registered by
 /// [`init_app_color`] if MPMD-style bootstrap was performed, otherwise raw
 /// `MPI_COMM_WORLD`. The code that builds the [`CommResource`] (typically a
@@ -314,10 +331,6 @@ static MPI_INTRA: Mutex<Option<IntraComm>> = Mutex::new(None);
 #[cfg(feature = "mpi_backend")]
 pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
     let mut guard = MPI_UNIVERSE.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(mpi::initialize().unwrap());
-    }
-    let universe = guard.as_ref().unwrap();
 
     // Hold the intra-comm guard separately to keep clean drop order.
     let intra_guard = MPI_INTRA.lock().unwrap();
@@ -329,7 +342,7 @@ pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
         let raw = intra.0.as_raw();
         return unsafe { mpi::raw::FromRaw::from_raw(raw) };
     }
-    universe.world()
+    world_from_universe_or_external_init(&mut guard)
 }
 
 /// MPMD bootstrap: split `MPI_COMM_WORLD` by `color` so each binary in a
@@ -345,10 +358,7 @@ pub fn init_app_color(color: i32) {
     use mpi::topology::Communicator;
     let world = {
         let mut universe_guard = MPI_UNIVERSE.lock().unwrap();
-        if universe_guard.is_none() {
-            *universe_guard = Some(mpi::initialize().unwrap());
-        }
-        universe_guard.as_ref().unwrap().world()
+        world_from_universe_or_external_init(&mut universe_guard)
     };
     let key = world.rank();
     let intra = world
@@ -375,10 +385,7 @@ pub fn finalize_mpi() {
 #[cfg(feature = "mpi_backend")]
 pub fn get_mpi_world_raw() -> mpi::topology::SimpleCommunicator {
     let mut guard = MPI_UNIVERSE.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(mpi::initialize().unwrap());
-    }
-    guard.as_ref().unwrap().world()
+    world_from_universe_or_external_init(&mut guard)
 }
 
 /// This rank's absolute position in `MPI_COMM_WORLD` — always raw WORLD,
@@ -388,10 +395,7 @@ pub fn get_mpi_world_raw() -> mpi::topology::SimpleCommunicator {
 pub fn world_rank() -> i32 {
     use mpi::topology::Communicator;
     let mut guard = MPI_UNIVERSE.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(mpi::initialize().unwrap());
-    }
-    guard.as_ref().unwrap().world().rank()
+    world_from_universe_or_external_init(&mut guard).rank()
 }
 
 /// Total ranks in `MPI_COMM_WORLD` (raw WORLD, not the intra-comm). See
@@ -400,10 +404,7 @@ pub fn world_rank() -> i32 {
 pub fn world_size() -> i32 {
     use mpi::topology::Communicator;
     let mut guard = MPI_UNIVERSE.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(mpi::initialize().unwrap());
-    }
-    guard.as_ref().unwrap().world().size()
+    world_from_universe_or_external_init(&mut guard).size()
 }
 
 #[cfg(not(feature = "mpi_backend"))]
