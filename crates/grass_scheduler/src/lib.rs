@@ -409,6 +409,37 @@ mod tests {
         scheduler.organize_systems();
     }
 
+    #[test]
+    fn ordering_cycle_panic_names_systems_labels_and_phase() {
+        let mut scheduler = Scheduler::default();
+        scheduler.suppress_warnings = true;
+        scheduler.add_update_system(
+            force_a.label("force_a").before("force_b").after("force_b"),
+            TestSchedule::Force,
+        );
+        scheduler.add_update_system(force_b.label("force_b"), TestSchedule::Force);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.organize_systems();
+        }))
+        .expect_err("cycle should panic during schedule validation");
+
+        let msg = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .expect("panic payload should be a string");
+
+        assert!(msg.contains("Cycle detected"));
+        assert!(msg.contains("phase \"Force\""), "{msg}");
+        assert!(msg.contains("force_a"), "{msg}");
+        assert!(msg.contains("force_b"), "{msg}");
+        assert!(msg.contains("label: \"force_a\""), "{msg}");
+        assert!(msg.contains("label: \"force_b\""), "{msg}");
+        assert!(msg.contains("before [force_b]"), "{msg}");
+        assert!(msg.contains("after [force_b]"), "{msg}");
+    }
+
     fn always_true() -> bool {
         true
     }
