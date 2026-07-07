@@ -7,7 +7,10 @@
 
 use grass_app::prelude::*;
 use grass_multi::{tick_subapp, Multi, MultiAppExt, SubApps, Wire};
-use grass_multi::{LocalTransport, RemoteMirrorPhysics, RemotePumpPhase, Transport};
+use grass_multi::{
+    LocalTransport, RemoteMirrorPhysics, RemotePumpDirection, RemotePumpError, RemotePumpPhase,
+    Transport, TransportError, TransportOperation,
+};
 use grass_scheduler::prelude::*;
 use std::thread;
 
@@ -706,6 +709,117 @@ fn in_process_and_remote_transport_coupling_are_equivalent() {
 }
 
 #[test]
+fn local_transport_peer_drop_returns_actionable_send_and_recv_errors() {
+    let (server_t, client_t) = LocalTransport::pair();
+    drop(client_t);
+
+    let send_err = server_t.try_send(b"payload").unwrap_err();
+    assert_eq!(send_err.transport(), "LocalTransport");
+    assert_eq!(send_err.operation(), TransportOperation::Send);
+    assert!(send_err.detail().contains("peer dropped"));
+    assert!(send_err.to_string().contains("LocalTransport send failed"));
+
+    let (server_t, client_t) = LocalTransport::pair();
+    drop(client_t);
+
+    let recv_err = server_t.try_recv().unwrap_err();
+    assert_eq!(recv_err.transport(), "LocalTransport");
+    assert_eq!(recv_err.operation(), TransportOperation::Recv);
+    assert!(recv_err.detail().contains("peer dropped"));
+    assert!(recv_err.to_string().contains("LocalTransport recv failed"));
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FailingTransportMode {
+    Send,
+    Recv,
+}
+
+struct FailingTransport {
+    mode: FailingTransportMode,
+}
+
+impl Transport for FailingTransport {
+    fn transport_name(&self) -> &str {
+        "FailingTransport"
+    }
+
+    fn try_send(&self, _payload: &[u8]) -> Result<(), TransportError> {
+        match self.mode {
+            FailingTransportMode::Send => Err(TransportError::new(
+                self.transport_name(),
+                TransportOperation::Send,
+                "synthetic peer drop while sending",
+            )),
+            FailingTransportMode::Recv => Ok(()),
+        }
+    }
+
+    fn try_recv(&self) -> Result<Vec<u8>, TransportError> {
+        match self.mode {
+            FailingTransportMode::Send => Ok(Vec::new()),
+            FailingTransportMode::Recv => Err(TransportError::new(
+                self.transport_name(),
+                TransportOperation::Recv,
+                "synthetic peer drop while receiving",
+            )),
+        }
+    }
+}
+
+#[test]
+fn remote_mirror_send_failure_reports_subapp_phase_and_direction() {
+    let mut mirror = RemoteMirrorPhysics::new(
+        "peer",
+        Box::new(FailingTransport {
+            mode: FailingTransportMode::Send,
+        }),
+    );
+    mirror.add_send_each_iter::<Counter>();
+
+    let err = mirror.try_step().unwrap_err();
+    let RemotePumpError::Transport(err) = err else {
+        panic!("expected transport error");
+    };
+
+    assert_eq!(err.mirror_name(), "peer");
+    assert_eq!(err.phase(), RemotePumpPhase::EachIter);
+    assert_eq!(err.direction(), RemotePumpDirection::Send);
+    assert_eq!(err.slot_index(), 0);
+    assert_eq!(err.payload_len(), Some(8));
+    assert_eq!(err.source().transport(), "FailingTransport");
+    assert!(err
+        .to_string()
+        .contains("RemoteMirrorPhysics `peer` failed to send each-iter send slot #0"));
+}
+
+#[test]
+fn remote_mirror_recv_failure_reports_subapp_phase_and_direction() {
+    let mut mirror = RemoteMirrorPhysics::new(
+        "peer",
+        Box::new(FailingTransport {
+            mode: FailingTransportMode::Recv,
+        }),
+    );
+    mirror.add_recv_each_iter::<Counter>();
+
+    let err = mirror.try_step().unwrap_err();
+    let RemotePumpError::Transport(err) = err else {
+        panic!("expected transport error");
+    };
+
+    assert_eq!(err.mirror_name(), "peer");
+    assert_eq!(err.phase(), RemotePumpPhase::EachIter);
+    assert_eq!(err.direction(), RemotePumpDirection::Recv);
+    assert_eq!(err.slot_index(), 0);
+    assert_eq!(err.payload_len(), None);
+    assert_eq!(err.source().transport(), "FailingTransport");
+    assert!(err
+        .to_string()
+        .contains("RemoteMirrorPhysics `peer` failed to recv each-iter recv slot #0"));
+}
+
+#[test]
 fn remote_mirror_reports_truncated_string_payload_with_context() {
     let (peer_t, mirror_t) = LocalTransport::pair();
     let mut payload = 5u32.to_le_bytes().to_vec();
@@ -716,6 +830,9 @@ fn remote_mirror_reports_truncated_string_payload_with_context() {
     mirror.add_recv_each_iter::<String>();
 
     let err = mirror.try_step().unwrap_err();
+    let RemotePumpError::Unpack(err) = err else {
+        panic!("expected unpack error");
+    };
 
     assert_eq!(err.mirror_name(), "peer");
     assert_eq!(err.phase(), RemotePumpPhase::EachIter);
@@ -739,6 +856,9 @@ fn remote_mirror_reports_non_utf8_string_payload_with_context() {
     mirror.add_recv_each_iter::<String>();
 
     let err = mirror.try_step().unwrap_err();
+    let RemotePumpError::Unpack(err) = err else {
+        panic!("expected unpack error");
+    };
 
     assert_eq!(err.mirror_name(), "peer");
     assert_eq!(err.phase(), RemotePumpPhase::EachIter);

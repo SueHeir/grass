@@ -44,7 +44,7 @@
 //! same order.
 
 use crate::physics::{Physics, StepResult};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportError};
 use crate::wire::{Wire, WireUnpackError};
 use grass_app::App;
 use std::any::{Any, TypeId};
@@ -160,6 +160,185 @@ impl std::error::Error for RemoteUnpackError {
     }
 }
 
+/// Direction of a remote transport pump slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePumpDirection {
+    /// Payload was being sent from this mirror to the peer.
+    Send,
+    /// Payload was being received from the peer into this mirror.
+    Recv,
+}
+
+impl fmt::Display for RemotePumpDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Send => f.write_str("send"),
+            Self::Recv => f.write_str("recv"),
+        }
+    }
+}
+
+/// Contextual error returned when a remote transport send or recv fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTransportError {
+    mirror_name: String,
+    phase: RemotePumpPhase,
+    direction: RemotePumpDirection,
+    slot_index: usize,
+    payload_len: Option<usize>,
+    source: TransportError,
+}
+
+impl RemoteTransportError {
+    fn send(
+        mirror_name: &str,
+        phase: RemotePumpPhase,
+        slot_index: usize,
+        payload_len: usize,
+        source: TransportError,
+    ) -> Self {
+        Self {
+            mirror_name: mirror_name.to_string(),
+            phase,
+            direction: RemotePumpDirection::Send,
+            slot_index,
+            payload_len: Some(payload_len),
+            source,
+        }
+    }
+
+    fn recv(
+        mirror_name: &str,
+        phase: RemotePumpPhase,
+        slot_index: usize,
+        source: TransportError,
+    ) -> Self {
+        Self {
+            mirror_name: mirror_name.to_string(),
+            phase,
+            direction: RemotePumpDirection::Recv,
+            slot_index,
+            payload_len: None,
+            source,
+        }
+    }
+
+    /// Name of the remote mirror sub-App whose transport failed.
+    pub fn mirror_name(&self) -> &str {
+        &self.mirror_name
+    }
+
+    /// Pump phase where transport failed.
+    pub fn phase(&self) -> RemotePumpPhase {
+        self.phase
+    }
+
+    /// Whether the failure happened while sending or receiving.
+    pub fn direction(&self) -> RemotePumpDirection {
+        self.direction
+    }
+
+    /// Zero-based index within the phase's registered send or receive list.
+    pub fn slot_index(&self) -> usize {
+        self.slot_index
+    }
+
+    /// Number of bytes in the outgoing payload, for send failures.
+    pub fn payload_len(&self) -> Option<usize> {
+        self.payload_len
+    }
+
+    /// Lower-level transport error.
+    pub fn source(&self) -> &TransportError {
+        &self.source
+    }
+}
+
+impl fmt::Display for RemoteTransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.payload_len {
+            Some(payload_len) => write!(
+                f,
+                "RemoteMirrorPhysics `{}` failed to {} {} {} slot #{} ({} bytes): {}",
+                self.mirror_name,
+                self.direction,
+                self.phase,
+                self.direction,
+                self.slot_index,
+                payload_len,
+                self.source
+            ),
+            None => write!(
+                f,
+                "RemoteMirrorPhysics `{}` failed to {} {} {} slot #{}: {}",
+                self.mirror_name,
+                self.direction,
+                self.phase,
+                self.direction,
+                self.slot_index,
+                self.source
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RemoteTransportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// Contextual error returned by fallible remote pump entry points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemotePumpError {
+    /// A transport send or recv failed.
+    Transport(RemoteTransportError),
+    /// A received payload could not be decoded into the registered resource.
+    Unpack(RemoteUnpackError),
+}
+
+impl RemotePumpError {
+    /// Returns the transport diagnostic when this is a transport failure.
+    pub fn transport(&self) -> Option<&RemoteTransportError> {
+        match self {
+            Self::Transport(err) => Some(err),
+            Self::Unpack(_) => None,
+        }
+    }
+
+    /// Returns the unpack diagnostic when this is a decode failure.
+    pub fn unpack(&self) -> Option<&RemoteUnpackError> {
+        match self {
+            Self::Transport(_) => None,
+            Self::Unpack(err) => Some(err),
+        }
+    }
+}
+
+impl fmt::Display for RemotePumpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transport(err) => fmt::Display::fmt(err, f),
+            Self::Unpack(err) => fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for RemotePumpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Transport(err) => Some(err),
+            Self::Unpack(err) => Some(err),
+        }
+    }
+}
+
+impl From<RemoteUnpackError> for RemotePumpError {
+    fn from(value: RemoteUnpackError) -> Self {
+        Self::Unpack(value)
+    }
+}
+
 /// A sub-App backed by a [`Transport`] to a peer process.
 ///
 /// Wraps an empty `App` whose resources mirror those of the peer's local
@@ -242,45 +421,79 @@ impl RemoteMirrorPhysics {
         }
     }
 
-    /// Fallible form of [`Physics::prepare`], returning contextual wire
-    /// diagnostics instead of panicking on malformed received payloads.
-    pub fn try_prepare(&mut self) -> Result<(), RemoteUnpackError> {
+    /// Fallible form of [`Physics::prepare`], returning contextual transport
+    /// and wire diagnostics instead of panicking on malformed received
+    /// payloads or disconnected peers.
+    pub fn try_prepare(&mut self) -> Result<(), RemotePumpError> {
         // One-shot handshake. Sends first, then recvs — the peer mirrors
         // this so both sides' sends complete before either side blocks on
         // recv. Buffering assumption documented at module level.
-        for pack in &self.senders_at_setup {
+        for (slot_index, pack) in self.senders_at_setup.iter().enumerate() {
             let payload = pack(&self.inner);
-            self.transport.send(&payload);
+            self.transport.try_send(&payload).map_err(|source| {
+                RemotePumpError::Transport(RemoteTransportError::send(
+                    &self.name,
+                    RemotePumpPhase::Setup,
+                    slot_index,
+                    payload.len(),
+                    source,
+                ))
+            })?;
         }
         for (recv_index, unpack) in self.receivers_at_setup.iter().enumerate() {
-            let body = self.transport.recv();
+            let body = self.transport.try_recv().map_err(|source| {
+                RemotePumpError::Transport(RemoteTransportError::recv(
+                    &self.name,
+                    RemotePumpPhase::Setup,
+                    recv_index,
+                    source,
+                ))
+            })?;
             unpack(
                 &mut self.inner,
                 &body,
                 &self.name,
                 RemotePumpPhase::Setup,
                 recv_index,
-            )?;
+            )
+            .map_err(RemotePumpError::Unpack)?;
         }
         Ok(())
     }
 
-    /// Fallible form of [`Physics::step`], returning contextual wire
-    /// diagnostics instead of panicking on malformed received payloads.
-    pub fn try_step(&mut self) -> Result<StepResult, RemoteUnpackError> {
-        for pack in &self.senders_each_iter {
+    /// Fallible form of [`Physics::step`], returning contextual transport and
+    /// wire diagnostics instead of panicking on malformed received payloads or
+    /// disconnected peers.
+    pub fn try_step(&mut self) -> Result<StepResult, RemotePumpError> {
+        for (slot_index, pack) in self.senders_each_iter.iter().enumerate() {
             let payload = pack(&self.inner);
-            self.transport.send(&payload);
+            self.transport.try_send(&payload).map_err(|source| {
+                RemotePumpError::Transport(RemoteTransportError::send(
+                    &self.name,
+                    RemotePumpPhase::EachIter,
+                    slot_index,
+                    payload.len(),
+                    source,
+                ))
+            })?;
         }
         for (recv_index, unpack) in self.receivers_each_iter.iter().enumerate() {
-            let body = self.transport.recv();
+            let body = self.transport.try_recv().map_err(|source| {
+                RemotePumpError::Transport(RemoteTransportError::recv(
+                    &self.name,
+                    RemotePumpPhase::EachIter,
+                    recv_index,
+                    source,
+                ))
+            })?;
             unpack(
                 &mut self.inner,
                 &body,
                 &self.name,
                 RemotePumpPhase::EachIter,
                 recv_index,
-            )?;
+            )
+            .map_err(RemotePumpError::Unpack)?;
         }
         Ok(StepResult::default())
     }
