@@ -45,6 +45,26 @@ macro_rules! type_ids {
     };
 }
 
+/// Convenience macro to build dependency display names matching [`type_ids!`].
+///
+/// Use this with [`Plugin::dependency_names`] when fallible plugin registration
+/// should report concrete missing dependency names instead of raw [`TypeId`]s.
+///
+/// ```rust,ignore
+/// fn dependencies(&self) -> Vec<TypeId> {
+///     type_ids![DemAtomPlugin, NeighborPlugin]
+/// }
+/// fn dependency_names(&self) -> Vec<&'static str> {
+///     dependency_names![DemAtomPlugin, NeighborPlugin]
+/// }
+/// ```
+#[macro_export]
+macro_rules! dependency_names {
+    ($($t:ty),* $(,)?) => {
+        vec![$(std::any::type_name::<$t>()),*]
+    };
+}
+
 /// A self-contained module that registers resources and systems with an [`App`].
 ///
 /// Every simulation feature — physics models, I/O, analysis — is implemented
@@ -113,6 +133,21 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// }
     /// ```
     fn dependencies(&self) -> Vec<TypeId> {
+        Vec::new()
+    }
+
+    /// Returns human-readable names for [`dependencies`](Self::dependencies).
+    ///
+    /// The list should have the same order as [`dependencies`](Self::dependencies).
+    /// These names are used only for diagnostics; dependency validation still
+    /// uses the [`TypeId`]s returned by [`dependencies`](Self::dependencies).
+    ///
+    /// ```rust,ignore
+    /// fn dependency_names(&self) -> Vec<&'static str> {
+    ///     dependency_names![DemAtomPlugin, NeighborPlugin]
+    /// }
+    /// ```
+    fn dependency_names(&self) -> Vec<&'static str> {
         Vec::new()
     }
 
@@ -211,15 +246,21 @@ impl PluginGroupBuilder {
     }
 
     /// Registers all collected plugins with the given [`App`].
+    pub(crate) fn try_finish(self, app: &mut App) -> Result<(), crate::app::AppError> {
+        for plugin in self.plugins {
+            app.add_boxed_plugin(plugin)?;
+        }
+        Ok(())
+    }
+
+    /// Registers all collected plugins with the given [`App`].
     ///
     /// # Panics
     ///
     /// Panics if any plugin fails registration (duplicate or missing dependencies).
     pub(crate) fn finish(self, app: &mut App) {
-        for plugin in self.plugins {
-            app.add_boxed_plugin(plugin)
-                .expect("failed to add plugin from PluginGroup — check for duplicates or missing dependencies");
-        }
+        self.try_finish(app)
+            .unwrap_or_else(|err| err.panic_with_context());
     }
 }
 
@@ -318,6 +359,9 @@ pub(crate) mod sealed {
     use crate::{App, Plugin, PluginGroup};
 
     pub trait Plugins<Marker> {
+        fn try_add_to_app(self, app: &mut App) -> Result<(), AppError>;
+
+        #[track_caller]
         fn add_to_app(self, app: &mut App);
     }
 
@@ -325,42 +369,23 @@ pub(crate) mod sealed {
     pub struct PluginGroupMarker;
 
     impl<P: Plugin> Plugins<PluginMarker> for P {
+        fn try_add_to_app(self, app: &mut App) -> Result<(), AppError> {
+            app.add_boxed_plugin(Box::new(self)).map(|_| ())
+        }
+
         #[track_caller]
         fn add_to_app(self, app: &mut App) {
-            match app.add_boxed_plugin(Box::new(self)) {
-                Err(AppError::DuplicatePlugin { plugin_name }) => {
-                    panic!(
-                        "Error adding plugin {plugin_name}: plugin was already added in application"
-                    )
-                }
-                Err(AppError::MissingDependencies {
-                    plugin_name,
-                    missing,
-                }) => {
-                    eprintln!();
-                    eprintln!(
-                        "ERROR: Plugin `{}` is missing required dependencies:",
-                        plugin_name
-                    );
-                    for dep in &missing {
-                        eprintln!("  - {:?}", dep);
-                    }
-                    eprintln!();
-                    eprintln!(
-                        "  Hint: Add the missing plugin(s) before `{}`.",
-                        plugin_name
-                    );
-                    panic!(
-                        "Missing plugin dependencies for `{}`: {:?}",
-                        plugin_name, missing
-                    );
-                }
-                Ok(_) => {}
-            }
+            self.try_add_to_app(app)
+                .unwrap_or_else(|err| err.panic_with_context());
         }
     }
 
     impl<G: PluginGroup> Plugins<PluginGroupMarker> for G {
+        fn try_add_to_app(self, app: &mut App) -> Result<(), AppError> {
+            self.build().try_finish(app)
+        }
+
+        #[track_caller]
         fn add_to_app(self, app: &mut App) {
             self.build().finish(app);
         }

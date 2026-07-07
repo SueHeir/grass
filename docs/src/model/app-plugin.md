@@ -48,7 +48,10 @@ Optional hooks let plugins declare ordering and requirements:
 
 A bare `Fn(&mut App)` closure also implements `Plugin`, so quick wiring needs no
 struct. Registration validates as it goes: a duplicate unique plugin or an unmet
-dependency panics with guidance.
+dependency is reported immediately. Use `add_plugins(...)` for fixed app wiring
+where a panic is the clearest failure mode; use `try_add_plugins(...) -> Result<_,
+AppError>` when an application, CLI, GUI, or test harness should catch duplicate-plugin
+or missing-dependency diagnostics and decide how to display them.
 
 ## PluginGroup
 
@@ -110,6 +113,9 @@ impl Plugin for ForceLawPlugin {
     fn build(&self, app: &mut App) { /* ... */ }
     fn dependencies(&self) -> Vec<std::any::TypeId> {
         type_ids![NeighborListPlugin]   // must already be registered
+    }
+    fn dependency_names(&self) -> Vec<&'static str> {
+        grass_app::dependency_names![NeighborListPlugin]
     }
 }
 ```

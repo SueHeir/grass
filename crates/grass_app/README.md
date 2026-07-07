@@ -22,8 +22,10 @@ lifecycle: organize systems → setup → run → cleanup.
 | [`ConfigSnippets`](src/app.rs) / [`GenerateConfigFlag`](src/app.rs) | plugins emit TOML fragments via `default_config`; adding `GenerateConfigFlag` makes `start()` print the assembled config and exit |
 
 Plugin registration validates as it goes: a duplicate unique plugin or an unmet TypeId
-dependency panics with guidance, and `start()` checks that every required capability tag
-has a provider.
+dependency is reported immediately, and `start()` checks that every required capability
+tag has a provider. Use `add_plugins(...)` for fixed app wiring where a panic is fine;
+use `try_add_plugins(...) -> Result<_, AppError>` when a CLI, GUI, or test harness should
+handle duplicate-plugin or missing-dependency diagnostics itself.
 
 ## Example shape
 

@@ -23,6 +23,11 @@
 //! supply `contact_forces`" requirements, where any provider in any order
 //! satisfies the need — the order-independence is the point.
 //!
+//! [`App::add_plugins`] remains the convenient path for fixed application
+//! wiring and panics with a diagnostic on duplicate plugins or missing TypeId
+//! dependencies. Use [`App::try_add_plugins`] when a CLI, GUI, or test harness
+//! should handle those registration failures as an [`AppError`] instead.
+//!
 //! # Two lifecycle paths
 //!
 //! - **Self-driving:** [`App::start`] runs the whole thing —
@@ -79,8 +84,8 @@ pub use sub_app::*;
 /// single `use grass_app::prelude::*;`.
 pub mod prelude {
     pub use crate::{
-        app::App, app::ConfigSnippets, app::GenerateConfigFlag, setup::ScheduleSetupSet,
-        sub_app::SubApp, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin, StageNames,
-        StatesPlugin,
+        app::App, app::AppError, app::ConfigSnippets, app::GenerateConfigFlag,
+        app::MissingPluginDependency, setup::ScheduleSetupSet, sub_app::SubApp, Plugin,
+        PluginGroup, PluginGroupBuilder, StageAdvancePlugin, StageNames, StatesPlugin,
     };
 }
