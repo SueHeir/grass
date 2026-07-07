@@ -106,15 +106,16 @@ with an actionable message.
 
 **Runtime check:** when a `StageAdvancePlugin` registers a `StageNames` resource,
 `grass_io`'s `RunPlugin` wires a setup system that cross-checks the `[[run]]`
-stage count and names against `stage_names()` at startup, panicking on a
-mismatch. Without that resource the check is skipped.
+stage count and names against `stage_names()` at startup. Mismatches fail with
+an actionable startup diagnostic, and every `[[run]]` stage must have a `name`
+when `StageAdvancePlugin` is active. Without that resource the check is skipped.
 
 > **Invariant: variant position is the stage index.** `from_index` is positional,
 > independent of the `#[stage("...")]` *name*. Reordering `StageEnum` variants
 > changes which TOML stage index triggers which variant. And because the
 > `#[stage("...")]` strings are a TOML contract, renaming one without updating
-> the matching `[[run]]` entry (or vice versa) compiles cleanly but panics at
-> startup — the only guard is that runtime check.
+> the matching `[[run]]` entry (or vice versa) compiles cleanly but fails at
+> startup with the runtime validation diagnostic.
 
 ## `Namespace`
 
