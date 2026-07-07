@@ -308,6 +308,73 @@ impl StageOverrides {
 #[derive(Default)]
 pub struct FirstStageOnlyConfigs(pub Vec<(String, String)>);
 
+/// Structured error returned when TOML `[[run]]` stages do not match the
+/// [`StageNames`] registered by `StageAdvancePlugin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageValidationError {
+    /// The number of TOML stages differs from the number of `StageEnum` variants.
+    StageCountMismatch {
+        /// Number of `[run]` / `[[run]]` stages parsed from TOML.
+        toml_count: usize,
+        /// Number of variants in the `StageEnum`.
+        enum_count: usize,
+        /// Stage names declared by `StageEnum`, in order.
+        expected_names: Vec<String>,
+        /// Stage names found in TOML, in order. `None` means missing `name`.
+        toml_names: Vec<Option<String>>,
+    },
+    /// A TOML stage has a `name`, but it does not match the enum at that index.
+    StageNameMismatch {
+        /// Zero-based stage index.
+        index: usize,
+        /// Name declared by `StageEnum` for this index.
+        expected: String,
+        /// Name found in TOML for this index.
+        actual: String,
+    },
+    /// A TOML stage is missing `name` while `StageAdvancePlugin` is active.
+    MissingStageName {
+        /// Zero-based stage index.
+        index: usize,
+        /// Name declared by `StageEnum` for this index.
+        expected: String,
+    },
+}
+
+impl fmt::Display for StageValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StageValidationError::StageCountMismatch {
+                toml_count,
+                enum_count,
+                expected_names,
+                toml_names,
+            } => write!(
+                f,
+                "stage count mismatch: {} [[run]] stages in TOML, but StageEnum has {} variants. \
+                 Expected stage names: {:?}. TOML stage names: {:?}.",
+                toml_count, enum_count, expected_names, toml_names
+            ),
+            StageValidationError::StageNameMismatch {
+                index,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "stage {} name mismatch: TOML has \"{}\", but StageEnum expects \"{}\".",
+                index, actual, expected
+            ),
+            StageValidationError::MissingStageName { index, expected } => write!(
+                f,
+                "stage {} is missing a name in TOML. Expected name: \"{}\".",
+                index, expected
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StageValidationError {}
+
 // ─── RunPlugin ──────────────────────────────────────────────────────────────
 
 /// Reads `[run]` / `[[run]]` from `Config`, installs [`RunConfig`],
@@ -505,10 +572,68 @@ pub fn update_cycle(
     }
 }
 
+/// Fallible validation that the count and order of TOML `[[run]]` stages match
+/// the `StageEnum` variants registered through [`StageNames`].
+pub fn try_validate_stages(
+    run_config: &RunConfig,
+    stage_names: &StageNames,
+) -> Result<(), StageValidationError> {
+    let expected = stage_names.0;
+    let actual: Vec<Option<String>> = run_config
+        .stages
+        .iter()
+        .map(|s| s.name.as_deref().map(str::to_string))
+        .collect();
+
+    if run_config.stages.len() != expected.len() {
+        return Err(StageValidationError::StageCountMismatch {
+            toml_count: run_config.stages.len(),
+            enum_count: expected.len(),
+            expected_names: expected.iter().map(|name| (*name).to_string()).collect(),
+            toml_names: actual,
+        });
+    }
+
+    for (i, (expected_name, stage)) in expected.iter().zip(run_config.stages.iter()).enumerate() {
+        match &stage.name {
+            Some(name) if name != expected_name => {
+                return Err(StageValidationError::StageNameMismatch {
+                    index: i,
+                    expected: (*expected_name).to_string(),
+                    actual: name.clone(),
+                });
+            }
+            None => {
+                return Err(StageValidationError::MissingStageName {
+                    index: i,
+                    expected: (*expected_name).to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn report_stage_validation_error(error: &StageValidationError) -> ! {
+    eprintln!();
+    eprintln!("ERROR: Failed to validate [[run]] stages against StageEnum.");
+    eprintln!("  {}", error);
+    eprintln!();
+    eprintln!(
+        "  Hint: when using StageAdvancePlugin, every [[run]] stage must have a \
+         `name`, and the stage count and names must match the #[stage(\"...\")] \
+         declarations in order."
+    );
+    eprintln!("  Run with --generate-config to inspect the expected run-stage shape.");
+    std::process::exit(1);
+}
+
 /// Setup system (registered only when [`StageNames`] is present):
 /// validates that the count and order of TOML `[[run]]` stages match
-/// the `StageEnum` variants. Panics with an actionable message on
-/// mismatch.
+/// the `StageEnum` variants. Reports an actionable diagnostic and exits
+/// on mismatch.
 pub fn validate_stages(
     run_config: Res<RunConfig>,
     stage_names: Res<StageNames>,
@@ -518,43 +643,8 @@ pub fn validate_stages(
         return;
     }
 
-    let expected = stage_names.0;
-    let actual: Vec<Option<&str>> = run_config
-        .stages
-        .iter()
-        .map(|s| s.name.as_deref())
-        .collect();
-
-    if run_config.stages.len() != expected.len() {
-        panic!(
-            "Stage count mismatch: {} [[run]] stages in TOML, but StageEnum has {} variants.\n\
-             Expected stage names: {:?}\n\
-             TOML stage names: {:?}",
-            run_config.stages.len(),
-            expected.len(),
-            expected,
-            actual,
-        );
-    }
-
-    for (i, (expected_name, stage)) in expected.iter().zip(run_config.stages.iter()).enumerate() {
-        match &stage.name {
-            Some(name) if name != expected_name => {
-                panic!(
-                    "Stage {} name mismatch: TOML has \"{}\", but StageEnum expects \"{}\"",
-                    i, name, expected_name,
-                );
-            }
-            None => {
-                panic!(
-                    "Stage {} is missing a name in TOML. Expected name: \"{}\"\n\
-                     All [[run]] stages must have a `name` when using StageAdvancePlugin.",
-                    i, expected_name,
-                );
-            }
-            _ => {}
-        }
-    }
+    try_validate_stages(&run_config, &stage_names)
+        .unwrap_or_else(|error| report_stage_validation_error(&error));
 }
 
 #[cfg(test)]
@@ -643,5 +733,106 @@ mod tests {
 
         let silent: SolverKnobs = overrides.section_or_default("solver");
         assert_eq!(silent, SolverKnobs::default());
+    }
+
+    fn run_config(toml: &str) -> RunConfig {
+        RunConfig::from_config(&Config::from_str(toml))
+    }
+
+    fn expected_stages() -> StageNames {
+        StageNames(&["settle", "flow"])
+    }
+
+    #[test]
+    fn stage_validation_reports_stage_count_mismatch() {
+        let run_config = run_config(
+            r#"
+            [[run]]
+            name = "settle"
+            steps = 100
+            "#,
+        );
+
+        let err = try_validate_stages(&run_config, &expected_stages()).unwrap_err();
+        assert_eq!(
+            err,
+            StageValidationError::StageCountMismatch {
+                toml_count: 1,
+                enum_count: 2,
+                expected_names: vec!["settle".to_string(), "flow".to_string()],
+                toml_names: vec![Some("settle".to_string())],
+            }
+        );
+        assert!(err.to_string().contains("stage count mismatch"));
+        assert!(err.to_string().contains("StageEnum has 2 variants"));
+    }
+
+    #[test]
+    fn stage_validation_reports_wrong_stage_name() {
+        let run_config = run_config(
+            r#"
+            [[run]]
+            name = "settle"
+            steps = 100
+
+            [[run]]
+            name = "production"
+            steps = 200
+            "#,
+        );
+
+        let err = try_validate_stages(&run_config, &expected_stages()).unwrap_err();
+        assert_eq!(
+            err,
+            StageValidationError::StageNameMismatch {
+                index: 1,
+                expected: "flow".to_string(),
+                actual: "production".to_string(),
+            }
+        );
+        assert!(err.to_string().contains("stage 1 name mismatch"));
+        assert!(err.to_string().contains("StageEnum expects \"flow\""));
+    }
+
+    #[test]
+    fn stage_validation_reports_missing_stage_name() {
+        let run_config = run_config(
+            r#"
+            [[run]]
+            name = "settle"
+            steps = 100
+
+            [[run]]
+            steps = 200
+            "#,
+        );
+
+        let err = try_validate_stages(&run_config, &expected_stages()).unwrap_err();
+        assert_eq!(
+            err,
+            StageValidationError::MissingStageName {
+                index: 1,
+                expected: "flow".to_string(),
+            }
+        );
+        assert!(err.to_string().contains("stage 1 is missing a name"));
+        assert!(err.to_string().contains("Expected name: \"flow\""));
+    }
+
+    #[test]
+    fn stage_validation_accepts_valid_multistage_run() {
+        let run_config = run_config(
+            r#"
+            [[run]]
+            name = "settle"
+            steps = 100
+
+            [[run]]
+            name = "flow"
+            steps = 200
+            "#,
+        );
+
+        assert!(try_validate_stages(&run_config, &expected_stages()).is_ok());
     }
 }

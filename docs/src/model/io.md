@@ -227,10 +227,12 @@ read now fails with a `StageOverrides` parse diagnostic; missing sections still
 mean "use `T::default()`".
 
 When a `StageEnum` and its `StageAdvancePlugin` are present, `RunPlugin` also
-wires a `validate_stages` setup system that asserts the `[[run]]` stage count and
-names match the enum's `#[stage("...")]` declarations, panicking at startup on a
-mismatch. Without a registered `StageNames` resource this validation is skipped —
-the run silently executes whatever stages the TOML declares. See
+wires a `validate_stages` setup system that checks the `[[run]]` stage count and
+names match the enum's `#[stage("...")]` declarations. Mismatches fail at
+startup with the same actionable diagnostic path used by config parsing, so every
+`[[run]]` stage must have a `name` when `StageAdvancePlugin` is active. Without a
+registered `StageNames` resource this validation is skipped — the run silently
+executes whatever stages the TOML declares. See
 [Derive Macros](../reference/derives.md#stageenum) for the enum side of that
 contract.
 
