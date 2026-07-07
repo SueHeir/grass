@@ -93,6 +93,15 @@ malformed section is fatal for both paths.
 `try_required_section::<T>("key")` is the fallible form for tests and wrappers
 that want to return a `Result` instead of exiting.
 
+Stage-aware reads follow the same absent-versus-malformed split. Use
+`StageOverrides::try_section::<T>("key")` when a plugin wants to handle the
+distinction itself: it returns `Ok(None)` for an absent section and `Err(...)`
+for a present section that does not parse. `StageOverrides::section::<T>("key")`
+keeps the convenient default for absent sections, but a malformed global or
+per-stage override prints a diagnostic and exits instead of silently using
+`T::default()`. `StageOverrides::section_or_default::<T>("key")` is available
+only for callers that deliberately want the old best-effort behavior.
+
 `InputPlugin` is idempotent: if a `Config` resource already exists when it
 builds, it returns immediately without touching CLI args. That is what makes
 tests possible without a file — seed the config from a string first:
@@ -212,7 +221,10 @@ inside a `[[run]]` block that is not a known `StageConfig` field
 (`name` / `steps` / `dt` / `skip` / `save_at_end`) is captured as a per-stage
 **override** and deep-merged on top of the global config for the duration of that
 stage. Downstream plugins read stage-aware config through
-`StageOverrides::section::<T>("key")` rather than `Config::section`.
+`StageOverrides::section::<T>("key")` rather than `Config::section`. If a
+stage override contains a misspelled field or the wrong value type for `T`, that
+read now fails with a `StageOverrides` parse diagnostic; missing sections still
+mean "use `T::default()`".
 
 When a `StageEnum` and its `StageAdvancePlugin` are present, `RunPlugin` also
 wires a `validate_stages` setup system that asserts the `[[run]]` stage count and
