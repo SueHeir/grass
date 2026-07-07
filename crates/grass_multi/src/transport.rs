@@ -18,25 +18,114 @@
 //!
 //! ## Wire model
 //!
-//! `send(&[u8])` ships one opaque payload; `recv() -> Vec<u8>` blocks
-//! until the peer ships one. Framing, ordering, and serialization are
-//! the caller's problem — `RemoteMirrorPhysics` handles them via
+//! `try_send(&[u8])` ships one opaque payload; `try_recv() -> Vec<u8>`
+//! blocks until the peer ships one. Framing, ordering, and serialization
+//! are the caller's problem — `RemoteMirrorPhysics` handles them via
 //! [`Wire`](crate::Wire) impls on each registered resource type. A
 //! transport just shuffles bytes.
 //!
-//! Errors aren't modeled — implementations may `panic!` on disconnect,
-//! since recovering from a partner-process crash mid-coupling is
-//! application-specific.
+//! The infallible `send` / `recv` helpers remain for simple call sites, but
+//! they panic with the same diagnostic returned by the fallible API. Remote
+//! coupling code should use `try_send` / `try_recv` so disconnects can be
+//! reported with sub-App, pump phase, and direction context.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
+use std::{any, fmt};
+
+/// Transport operation that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportOperation {
+    /// Sending one payload to the peer failed.
+    Send,
+    /// Receiving one payload from the peer failed.
+    Recv,
+}
+
+impl fmt::Display for TransportOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Send => f.write_str("send"),
+            Self::Recv => f.write_str("recv"),
+        }
+    }
+}
+
+/// Actionable error from a byte transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportError {
+    transport: String,
+    operation: TransportOperation,
+    detail: String,
+}
+
+impl TransportError {
+    /// Construct a transport error from a named transport, failed operation,
+    /// and implementation-specific detail.
+    pub fn new(
+        transport: impl Into<String>,
+        operation: TransportOperation,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            transport: transport.into(),
+            operation,
+            detail: detail.into(),
+        }
+    }
+
+    /// Human-readable transport name.
+    pub fn transport(&self) -> &str {
+        &self.transport
+    }
+
+    /// Operation that failed.
+    pub fn operation(&self) -> TransportOperation {
+        self.operation
+    }
+
+    /// Implementation-specific failure detail.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl fmt::Display for TransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} failed: {}",
+            self.transport, self.operation, self.detail
+        )
+    }
+}
+
+impl std::error::Error for TransportError {}
 
 /// A bidirectional byte channel between this process and a peer.
 pub trait Transport: Send + Sync + 'static {
+    /// Human-readable transport name for diagnostics.
+    fn transport_name(&self) -> &str {
+        any::type_name::<Self>()
+    }
+
     /// Send one payload to the peer.
-    fn send(&self, payload: &[u8]);
+    fn try_send(&self, payload: &[u8]) -> Result<(), TransportError>;
+
     /// Block until the peer sends a payload; return its bytes.
-    fn recv(&self) -> Vec<u8>;
+    fn try_recv(&self) -> Result<Vec<u8>, TransportError>;
+
+    /// Send one payload to the peer, panicking with transport context on
+    /// disconnect.
+    fn send(&self, payload: &[u8]) {
+        self.try_send(payload).unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    /// Block until the peer sends a payload, panicking with transport context
+    /// on disconnect.
+    fn recv(&self) -> Vec<u8> {
+        self.try_recv().unwrap_or_else(|err| panic!("{err}"))
+    }
 }
 
 // ─── LocalTransport: in-memory bidirectional channel ─────────────────────────
@@ -69,15 +158,30 @@ impl LocalTransport {
 }
 
 impl Transport for LocalTransport {
-    fn send(&self, payload: &[u8]) {
-        let tx = self.outgoing.lock().unwrap();
-        tx.send(payload.to_vec())
-            .expect("LocalTransport: peer dropped");
+    fn transport_name(&self) -> &str {
+        "LocalTransport"
     }
 
-    fn recv(&self) -> Vec<u8> {
+    fn try_send(&self, payload: &[u8]) -> Result<(), TransportError> {
+        let tx = self.outgoing.lock().unwrap();
+        tx.send(payload.to_vec()).map_err(|_| {
+            TransportError::new(
+                self.transport_name(),
+                TransportOperation::Send,
+                "peer dropped before it could receive the payload",
+            )
+        })
+    }
+
+    fn try_recv(&self) -> Result<Vec<u8>, TransportError> {
         let rx = self.incoming.lock().unwrap();
-        rx.recv().expect("LocalTransport: peer dropped before send")
+        rx.recv().map_err(|_| {
+            TransportError::new(
+                self.transport_name(),
+                TransportOperation::Recv,
+                "peer dropped before sending a payload",
+            )
+        })
     }
 }
 
@@ -124,18 +228,23 @@ impl MpiInterCommTransport {
 
 #[cfg(feature = "mpi")]
 impl Transport for MpiInterCommTransport {
-    fn send(&self, payload: &[u8]) {
+    fn transport_name(&self) -> &str {
+        "MpiInterCommTransport"
+    }
+
+    fn try_send(&self, payload: &[u8]) -> Result<(), TransportError> {
         use mpi::topology::Communicator;
         use mpi::traits::Destination;
         let process = self.world.process_at_rank(self.peer_rank);
         process.send(payload);
+        Ok(())
     }
 
-    fn recv(&self) -> Vec<u8> {
+    fn try_recv(&self) -> Result<Vec<u8>, TransportError> {
         use mpi::topology::Communicator;
         use mpi::traits::Source;
         let process = self.world.process_at_rank(self.peer_rank);
         let (data, _status) = process.receive_vec::<u8>();
-        data
+        Ok(data)
     }
 }
