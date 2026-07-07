@@ -76,16 +76,22 @@ impl Plugin for MyPlugin {
 
 The two helpers differ in error behaviour:
 
-- `Config::section::<T>("key")` returns `T::default()` if `[key]` is **absent**.
+- `Config::section::<T>("key")` reads optional config and returns `T::default()` if `[key]` is **absent**.
 - `Config::load::<T>(app, "key")` does the same and also registers the result as
   a resource in one call.
+- `Config::required_section::<T>("key")` reads required config and reports an
+  actionable error if `[key]` is absent.
+- `Config::load_required::<T>(app, "key")` does the same and also registers the
+  result as a resource in one call.
 
-> **Warning: a missing section is silent, a malformed one is fatal.** Because an
-> absent section falls back to `T::default()`, a *misspelled* section name reads
-> as "use the defaults" with no error — the simulation runs with values you never
-> set. The only hard error is a section that is present but does not parse, which
-> prints an actionable message and exits. Double-check section names against your
-> `--generate-config` output.
+Use optional reads for opt-in plugins whose absence means "use defaults" or "do
+not register". Use required reads when the plugin cannot run correctly without
+its TOML section; a missing or misspelled section is then a config error naming
+the absent `[key]` and pointing back to `--generate-config`. A present but
+malformed section is fatal for both paths.
+
+`try_required_section::<T>("key")` is the fallible form for tests and wrappers
+that want to return a `Result` instead of exiting.
 
 `InputPlugin` is idempotent: if a `Config` resource already exists when it
 builds, it returns immediately without touching CLI args. That is what makes
@@ -107,7 +113,10 @@ app.add_plugins(InputPlugin);   // sees Config already present, does nothing to 
 `--generate-config` CLI flag makes `start()` print the assembled example config
 and exit without running (see
 [App, Plugin, PluginGroup](./app-plugin.md#the---generate-config-recipe)). This
-is the canonical way to discover every TOML key a built app understands.
+is the canonical way to discover every TOML key a built app understands. It does
+not make optional sections required; plugin authors choose `load`/`section` for
+optional reads and `load_required`/`required_section` for sections that must be
+present at runtime.
 
 ## SimClock and the step counter
 

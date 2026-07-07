@@ -42,12 +42,14 @@
 ### Key free functions
 | Function | Purpose | File:line |
 |---|---|---|
-| `Config::load::<T>(app, key)` | deserialize `[key]` + register `Res<T>` | `config.rs:102` |
-| `Config::section::<T>(key)` | deserialize `[key]`, return `T::default()` if absent | `config.rs:71` |
-| `Config::parse_array::<T>(key)` | deserialize `[[key]]` array | `config.rs:176` |
-| `Config::for_subapp(name, base_dir)` | slice parent TOML for a named sub-App | `config.rs:140` |
-| `deep_merge(base, overrides)` | recursive TOML table merge | `config.rs:358` |
-| `load_toml(path)` | read + parse `.toml` file, exit on error | `config.rs:373` |
+| `Config::load::<T>(app, key)` | deserialize optional `[key]` + register `Res<T>`, returning `T::default()` if absent | `config.rs:176` |
+| `Config::load_required::<T>(app, key)` | deserialize required `[key]` + register `Res<T>`, erroring if absent | `config.rs:200` |
+| `Config::section::<T>(key)` | deserialize optional `[key]`, return `T::default()` if absent | `config.rs:131` |
+| `Config::required_section::<T>(key)` | deserialize required `[key]`, erroring if absent | `config.rs:146` |
+| `Config::parse_array::<T>(key)` | deserialize `[[key]]` array | `config.rs:276` |
+| `Config::for_subapp(name, base_dir)` | slice parent TOML for a named sub-App | `config.rs:225` |
+| `deep_merge(base, overrides)` | recursive TOML table merge | `config.rs:476` |
+| `load_toml(path)` | read + parse `.toml` file, exit on error | `config.rs:493` |
 | `advance_step` | system: `clock.step += 1` | `clock.rs:95` |
 | `every_n_steps(n)` | `.run_if(...)` predicate: `step % n == 0` | `clock.rs:102` |
 | `set_stage_name` | setup system: copy stage name + build `StageOverrides` | `run.rs:305` |
@@ -136,11 +138,11 @@ All `grass_io` schedules pin to fixed namespaces (100 / 200 / 1000) so they alwa
 ### `advance_step` is user-placed for `SimClockPlugin`, auto-placed by `RunPlugin`
 `SimClockPlugin` installs `SimClock` but does **not** register `advance_step` — the caller picks the phase (`clock.rs:67`). `RunPlugin` does register `advance_step` in `RunSchedule::Cycle`, but only if `app.has_update_system(advance_step)` returns false (`run.rs:261`). If you need the step to tick at a specific phase (e.g. so `TermOut` reads the just-completed step), register `advance_step` manually before adding `RunPlugin`.
 
-### `InputPlugin` is idempotent / test-safe (`config.rs:236–239`)
+### `InputPlugin` is idempotent / test-safe (`config.rs:349–360`)
 If a `Config` resource is already present when `InputPlugin::build` runs, it returns immediately without touching CLI args. Tests can seed `Config::from_str(...)` then call `app.add_plugins(InputPlugin)` safely.
 
-### Missing config section → `T::default()`, not an error (`config.rs:71–76`)
-`Config::section` and `Config::load` return `T::default()` when the section is absent. This is intentional for optional/opt-in plugins but is a silent non-error when a required section is simply misspelled. The only hard error path is a present-but-unparseable section (prints actionable message + exits, `config.rs:77–90`).
+### Optional vs required config reads (`config.rs:127–223`)
+`Config::section` and `Config::load` return `T::default()` when the section is absent. This is intentional for optional/opt-in plugins. Non-optional plugins should use `Config::required_section` or `Config::load_required`; a missing or misspelled required section is reported as an actionable config error naming the absent `[key]`.
 
 ### `TermOut` values persist between steps — stale data risk (`term_out.rs:67–77`)
 `TermOut::set` overwrites but nothing clears the map. A column set only on some steps carries its last value on intervening printed lines. If a column should show "no data this step", the user must explicitly overwrite it (e.g. to `f64::NAN`).

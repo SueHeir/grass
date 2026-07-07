@@ -6,7 +6,7 @@ Optional companion to [`grass_app`](../grass_app/). It provides the things every
 
 ## What it does
 
-`InputPlugin` parses the CLI, reads the TOML file at `args[1]`, and installs a `Config` resource holding the parsed table. Each plugin's `build()` then calls `Config::load::<MyConfig>(app, "section")` to deserialize its own slice and register it as a resource. Because every plugin here implements `Plugin::default_config`, `--generate-config` assembles a complete starter TOML from all registered plugins.
+`InputPlugin` parses the CLI, reads the TOML file at `args[1]`, and installs a `Config` resource holding the parsed table. Each plugin's `build()` then calls `Config::load::<MyConfig>(app, "section")` for optional config or `Config::load_required::<MyConfig>(app, "section")` for required config, deserializing its own slice and registering it as a resource. Because every plugin here implements `Plugin::default_config`, `--generate-config` assembles a complete starter TOML from all registered plugins.
 
 The remaining plugins gate periodic work on a shared step/time clock.
 
@@ -14,7 +14,7 @@ The remaining plugins gate periodic work on a shared step/time clock.
 
 | item | TOML | what it does |
 |---|---|---|
-| `Config` + `InputPlugin` | `args[1]` | `InputPlugin` parses CLI, loads the input TOML, installs a `Config` (and `Input`) resource. `Config::load`/`section`/`parse_array` deserialize sections, returning `T::default()` for missing ones. |
+| `Config` + `InputPlugin` | `args[1]` | `InputPlugin` parses CLI, loads the input TOML, installs a `Config` (and `Input`) resource. `Config::load`/`section` read optional sections and return `T::default()` for missing ones; `Config::load_required`/`required_section` report missing required sections as config errors; `parse_array` deserializes `[[section]]` arrays. |
 | `SimClock` + `SimClockPlugin` | `[clock]` | `step` / `time` accumulator. Install the resource (optionally seeded with `start_step`/`start_time`); add `advance_step` in whichever phase should tick. `every_n_steps(n)` is a `.run_if(...)` predicate gating periodic work. |
 | `RunPlugin` + `RunConfig` + `RunSchedule` | `[run]` / `[[run]]` | drives one or more run stages (single table or array of tables), each with its own `steps`, optional `name`/`dt`/`skip`/`save_at_end`, and a flattened `overrides` catch-all merged into `StageOverrides`. Auto-installs `SimClockPlugin` and `advance_step`; ends the App after the final stage. Namespaced at `RUN_NAMESPACE = 1000`. |
 | `TermOutPlugin` + `TermOut` + `TermOutSchedule` | `[term_out]` | LAMMPS-style aligned terminal log. User systems push named values via `TermOut::set` in `TermOutSchedule::Compute`; `step`/`time` are auto-populated. Prints every `every` steps (`0` disables). |
@@ -97,6 +97,21 @@ impl Plugin for GravityPlugin {
 ```
 
 `Config::section` and `Config::load` both return `T::default()` for missing sections, so this is one `if` away.
+
+## Required config
+
+Use the required-read helpers when the plugin cannot run correctly without its TOML section. A missing or misspelled section is reported as a config error naming the section and pointing the user back to `--generate-config`:
+
+```rust
+impl Plugin for MaterialPlugin {
+    fn build(&self, app: &mut App) {
+        let cfg = Config::load_required::<MaterialConfig>(app, "material");
+        app.add_update_system(apply_material_model, MyPhase::Force);
+    }
+}
+```
+
+Use `Config::required_section::<T>("material")` when you already have a `Config` reference, or `Config::try_required_section::<T>("material")` in tests and wrappers that need to return a `Result`. Keep using `Config::load`/`section` for optional plugins whose absence means "use defaults" or "do not register".
 
 ## Multi-App config
 

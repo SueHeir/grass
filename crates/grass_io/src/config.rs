@@ -6,7 +6,9 @@
 //!   1. [`InputPlugin`] parses the CLI, reads the file at `args[1]`, and
 //!      installs a [`Config`] resource holding the parsed `toml::Table`.
 //!   2. Each plugin's `build()` calls [`Config::load::<MyConfig>(app, "my_section")`]
-//!      to deserialize its `[my_section]` slice and register it as an
+//!      for optional config, or
+//!      [`Config::load_required::<MyConfig>(app, "my_section")`] for required
+//!      config, to deserialize its `[my_section]` slice and register it as an
 //!      `Res<MyConfig>` for that plugin's systems to read.
 //!   3. Plugins also call [`grass_app::App::add_config_snippet`] so
 //!      `--generate-config` can dump a complete starter file.
@@ -18,6 +20,10 @@
 //! whether its config section exists or has non-default values, and
 //! short-circuits its `build()` if not. The config-reading API supports
 //! this by returning `T::default()` for missing sections.
+//!
+//! Non-optional plugins should instead use [`Config::required_section`] or
+//! [`Config::load_required`] so a missing or misspelled TOML section is reported
+//! as a config error naming the absent section.
 //!
 //! ## CLI surface
 //!
@@ -36,6 +42,7 @@
 
 use std::any::TypeId;
 use std::env;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use grass_app::{App, GenerateConfigFlag, Plugin};
@@ -43,8 +50,59 @@ use serde::Deserialize;
 
 // ─── Config resource ────────────────────────────────────────────────────────
 
+/// An actionable config-read error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigError {
+    /// A required `[key]` section was absent from the parsed TOML table.
+    MissingSection {
+        /// The missing top-level section name, without brackets.
+        key: String,
+    },
+    /// A required config read was attempted before an App had a [`Config`] resource.
+    MissingConfigResource {
+        /// The required top-level section name, without brackets.
+        key: String,
+    },
+    /// A present `[key]` section failed to deserialize into the requested type.
+    InvalidSection {
+        /// The top-level section name, without brackets.
+        key: String,
+        /// The TOML deserialization error.
+        message: String,
+    },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::MissingSection { key } => write!(
+                f,
+                "missing required [{}] section in config file. Add a [{}] section, \
+                 or run with --generate-config to see the sections this app expects.",
+                key, key
+            ),
+            ConfigError::MissingConfigResource { key } => write!(
+                f,
+                "cannot read required [{}] section because no Config resource is installed. \
+                 Add InputPlugin before this plugin, or seed Config in tests.",
+                key
+            ),
+            ConfigError::InvalidSection { key, message } => {
+                write!(
+                    f,
+                    "failed to parse [{}] section in config file: {}",
+                    key, message
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
 /// Wraps a parsed TOML table. Plugins reach into it with [`Self::section`] /
-/// [`Self::load`] / [`Self::parse_array`] in `Plugin::build`.
+/// [`Self::required_section`] / [`Self::load`] / [`Self::parse_array`] in
+/// `Plugin::build`.
 pub struct Config {
     /// The parsed top-level TOML table backing this config.
     pub table: toml::Table,
@@ -66,30 +124,52 @@ impl Config {
         Self { table }
     }
 
-    /// Deserialize a `[key]` section, returning `T::default()` if the
-    /// section is absent. Prints an actionable error and exits if
+    /// Deserialize an optional `[key]` section, returning `T::default()` if
+    /// the section is absent. Prints an actionable error and exits if
     /// deserialization fails (typo / wrong type).
+    ///
+    /// Use this for opt-in plugins where omitting `[key]` means "use defaults"
+    /// or "do not register this plugin". Use [`Self::required_section`] for
+    /// plugins whose section must appear in the user's TOML.
     pub fn section<T: for<'de> Deserialize<'de> + Default>(&self, key: &str) -> T {
         match self.table.get(key) {
             None => T::default(),
-            Some(v) => match v.clone().try_into::<T>() {
-                Ok(val) => val,
-                Err(e) => {
-                    eprintln!();
-                    eprintln!("ERROR: Failed to parse [{}] section in config file.", key);
-                    eprintln!("  {}", e);
-                    eprintln!();
-                    eprintln!(
-                        "  Hint: check that all field names are spelled correctly \
-                         and values have the right type."
-                    );
-                    eprintln!(
-                        "  Run with --generate-config to see a complete example \
-                         configuration."
-                    );
-                    std::process::exit(1);
-                }
-            },
+            Some(v) => v.clone().try_into::<T>().unwrap_or_else(|e| {
+                report_config_error(&ConfigError::InvalidSection {
+                    key: key.to_string(),
+                    message: e.to_string(),
+                });
+            }),
+        }
+    }
+
+    /// Deserialize a required `[key]` section.
+    ///
+    /// Missing sections are reported as config errors naming the absent
+    /// section. Use this for non-optional plugins where silently falling back
+    /// to defaults would hide a misspelled or omitted TOML section.
+    pub fn required_section<T: for<'de> Deserialize<'de>>(&self, key: &str) -> T {
+        self.try_required_section(key)
+            .unwrap_or_else(|e| report_config_error(&e))
+    }
+
+    /// Fallible form of [`Self::required_section`], useful for tests and
+    /// callers that want to surface config errors without exiting.
+    pub fn try_required_section<T: for<'de> Deserialize<'de>>(
+        &self,
+        key: &str,
+    ) -> Result<T, ConfigError> {
+        match self.table.get(key) {
+            None => Err(ConfigError::MissingSection {
+                key: key.to_string(),
+            }),
+            Some(v) => v
+                .clone()
+                .try_into::<T>()
+                .map_err(|e| ConfigError::InvalidSection {
+                    key: key.to_string(),
+                    message: e.to_string(),
+                }),
         }
     }
 
@@ -112,6 +192,31 @@ impl Config {
             cfg.section::<T>(key)
         } else {
             T::default()
+        };
+        app.add_resource(value.clone());
+        value
+    }
+
+    /// Extract a required `[key]` section, register the resulting `T` as an
+    /// App resource, and return it.
+    ///
+    /// Unlike [`Self::load`], this reports a missing section as an error instead
+    /// of registering `T::default()`. Use it for non-optional plugins whose
+    /// config must be present in the input TOML.
+    pub fn load_required<T: for<'de> Deserialize<'de> + Clone + 'static>(
+        app: &mut App,
+        key: &str,
+    ) -> T {
+        let value: T = if let Some(cell) = app.get_mut_resource(TypeId::of::<Config>()) {
+            let raw = cell.borrow();
+            let cfg = raw
+                .downcast_ref::<Config>()
+                .expect("Config resource has wrong type — this is a bug in grass_app");
+            cfg.required_section::<T>(key)
+        } else {
+            report_config_error(&ConfigError::MissingConfigResource {
+                key: key.to_string(),
+            });
         };
         app.add_resource(value.clone());
         value
@@ -204,6 +309,18 @@ impl Config {
             _ => Vec::new(),
         }
     }
+}
+
+fn report_config_error(error: &ConfigError) -> ! {
+    eprintln!();
+    eprintln!("ERROR: {}", error);
+    eprintln!();
+    eprintln!(
+        "  Hint: check that section names and field names are spelled correctly \
+         and values have the right type."
+    );
+    eprintln!("  Run with --generate-config to see a complete example configuration.");
+    std::process::exit(1);
 }
 
 // ─── CLI input ──────────────────────────────────────────────────────────────
@@ -432,6 +549,58 @@ mod tests {
         let k: Knobs = cfg.section("knobs");
         assert_eq!(k.steps, 0);
         assert_eq!(k.dt, 0.0);
+    }
+
+    #[test]
+    fn required_section_reads_typed_struct() {
+        let cfg = Config::from_str(
+            r#"
+            [knobs]
+            steps = 200
+            dt = 1.0e-3
+            "#,
+        );
+        let k: Knobs = cfg.required_section("knobs");
+        assert_eq!(k.steps, 200);
+        assert_eq!(k.dt, 1.0e-3);
+    }
+
+    #[test]
+    fn try_required_section_reports_missing_section() {
+        let cfg = Config::from_str("");
+        let err = cfg
+            .try_required_section::<Knobs>("knobs")
+            .expect_err("missing required section should be an error");
+
+        assert_eq!(
+            err,
+            ConfigError::MissingSection {
+                key: "knobs".to_string()
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains("missing required [knobs] section"));
+        assert!(message.contains("--generate-config"));
+    }
+
+    #[test]
+    fn load_required_registers_resource_and_returns_value() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [knobs]
+            steps = 7
+            dt = 0.25
+            "#,
+        ));
+
+        let k: Knobs = Config::load_required(&mut app, "knobs");
+        assert_eq!(k.steps, 7);
+        assert_eq!(k.dt, 0.25);
+
+        let read = app.get_resource_ref::<Knobs>().expect("Knobs registered");
+        assert_eq!(read.steps, 7);
+        assert_eq!(read.dt, 0.25);
     }
 
     #[test]
