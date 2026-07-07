@@ -208,9 +208,10 @@ separately. This is a common stumble point for new plugin authors.
 **G. `PluginGroupBuilder::add` silently skips disabled plugins (plugin.rs:198–203)**
 
 If `.disable::<P>()` is called and then `.add(P {...})` is called, the plugin
-is silently dropped. There is no warning. This is intentional for the
-override pattern, but consumers who accidentally disable a plugin they needed
-get no diagnostic.
+is silently dropped. This is intentional for the override pattern and is now
+documented next to `PluginGroupBuilder::add`; consumers who need an inspection
+path should register with `try_add_plugins(...)` so a later dependent plugin can
+return `AppError::MissingDependencies` naming the skipped dependency.
 
 **H. `StagesPlugin` + `StageAdvancePlugin` must use the same schedule phase (plugin.rs:257–263, 292–298)**
 

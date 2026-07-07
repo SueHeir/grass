@@ -85,6 +85,14 @@ This is exactly how SOIL and DIRT layer onto the framework: each ships a plugin
 group, and a consumer can disable one plugin to substitute its own integrator,
 output, or force law.
 
+`disable::<P>()` is an ordered builder gate: any later `.add(P)` in the same
+builder chain is intentionally skipped. That makes the override pattern stable,
+but it also means an accidental disable can hide a default plugin until something
+else needs it. For inspectable wiring in applications, CLIs, or tests, call
+`try_add_plugins(...)`; if a later plugin declares `Plugin::dependencies` on the
+skipped type, the returned `AppError::MissingDependencies` names the dependent
+plugin and the missing dependency.
+
 ## The validation model: two independent mechanisms
 
 `App` checks plugin wiring two different ways, at two different times:

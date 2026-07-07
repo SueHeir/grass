@@ -227,8 +227,23 @@ impl PluginGroupBuilder {
         }
     }
 
-    /// Adds a plugin to the group. Plugins that have been [`disable`](Self::disable)d
-    /// are silently skipped.
+    /// Adds a plugin to the group.
+    ///
+    /// Plugins that have been [`disable`](Self::disable)d are intentionally
+    /// skipped, even when they are added again later in the same builder chain.
+    /// This supports the downstream override pattern:
+    ///
+    /// ```rust,ignore
+    /// Defaults.build()
+    ///     .disable::<OutputPlugin>()
+    ///     .add(CustomOutputPlugin)
+    /// ```
+    ///
+    /// To inspect wiring mistakes around a skipped plugin, register the group
+    /// with [`App::try_add_plugins`](crate::App::try_add_plugins). If a later
+    /// plugin has a [`Plugin::dependencies`] entry for the skipped type, the
+    /// returned [`AppError::MissingDependencies`](crate::app::AppError::MissingDependencies)
+    /// names the dependent plugin and missing dependency.
     #[allow(clippy::should_implement_trait)]
     pub fn add<P: Plugin>(mut self, plugin: P) -> Self {
         if self.disabled.contains(&TypeId::of::<P>()) {

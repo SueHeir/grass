@@ -72,6 +72,13 @@ impl PluginGroup for MyCustomPlugins {
 }
 ```
 
+`disable::<P>()` is an ordered builder gate: any later `.add(P)` in the same
+chain is intentionally skipped, so a default group can be reused while replacing
+one component. When debugging a group assembled from user choices, prefer
+`try_add_plugins(...)`; if a skipped plugin is still required by a later plugin's
+`Plugin::dependencies`, the returned `AppError::MissingDependencies` names both
+the dependent plugin and the missing dependency.
+
 ## See also
 
 - [`grass_scheduler`](../grass_scheduler/) — the scheduler engine that `App` wraps.
