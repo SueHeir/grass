@@ -22,6 +22,7 @@
 //! (namespace 1000, sorts after user phases that default to 0).
 
 use std::any::TypeId;
+use std::fmt;
 
 use grass_app::{App, Plugin, ScheduleSetupSet, StageNames};
 use grass_scheduler::{
@@ -197,14 +198,97 @@ pub struct StageOverrides {
     pub table: toml::Table,
 }
 
+/// Error returned when a present [`StageOverrides`] section cannot be parsed.
+#[derive(Debug)]
+pub struct StageOverrideSectionError {
+    key: String,
+    source: toml::de::Error,
+}
+
+impl StageOverrideSectionError {
+    /// TOML section key that failed to deserialize.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Underlying TOML deserialization error.
+    pub fn source(&self) -> &toml::de::Error {
+        &self.source
+    }
+}
+
+impl fmt::Display for StageOverrideSectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "failed to parse [{}] section in StageOverrides: {}",
+            self.key, self.source
+        )
+    }
+}
+
+impl std::error::Error for StageOverrideSectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 impl StageOverrides {
+    /// Fallibly deserializes the `[key]` section from the merged table.
+    ///
+    /// Returns `Ok(None)` when the section is absent, and `Err` when the
+    /// section is present but cannot be parsed as `T`.
+    pub fn try_section<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, StageOverrideSectionError> {
+        match self.table.get(key) {
+            None => Ok(None),
+            Some(value) => value.clone().try_into::<T>().map(Some).map_err(|source| {
+                StageOverrideSectionError {
+                    key: key.to_string(),
+                    source,
+                }
+            }),
+        }
+    }
+
     /// Deserializes the `[key]` section from the merged table, or `T::default()`
-    /// if it is absent or fails to deserialize.
+    /// if it is absent. Prints an actionable error and exits if a present
+    /// section cannot be parsed.
     pub fn section<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> T {
-        self.table
-            .get(key)
-            .and_then(|v| v.clone().try_into().ok())
-            .unwrap_or_default()
+        match self.try_section(key) {
+            Ok(Some(value)) => value,
+            Ok(None) => T::default(),
+            Err(e) => {
+                eprintln!();
+                eprintln!(
+                    "ERROR: Failed to parse [{}] section in StageOverrides.",
+                    e.key()
+                );
+                eprintln!("  {}", e.source());
+                eprintln!();
+                eprintln!(
+                    "  Hint: this section is the global config deep-merged with the current \
+                     [[run]] stage overrides. Check per-stage override field names and value types."
+                );
+                eprintln!(
+                    "  Run with --generate-config to see the base configuration, then compare \
+                     the override shape for this stage."
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Deserializes the `[key]` section from the merged table, returning
+    /// `T::default()` when the section is absent or malformed.
+    ///
+    /// This preserves the old fully-silent convenience behavior for callers
+    /// that deliberately want best-effort reads. Prefer [`Self::try_section`]
+    /// or [`Self::section`] for user-facing config.
+    pub fn section_or_default<T: serde::de::DeserializeOwned + Default>(&self, key: &str) -> T {
+        self.try_section(key).ok().flatten().unwrap_or_default()
     }
 }
 
@@ -470,5 +554,94 @@ pub fn validate_stages(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct SolverKnobs {
+        every: u32,
+    }
+
+    fn stage_overrides_for(config: &Config, stage_index: usize) -> StageOverrides {
+        let run_config = RunConfig::from_config(config);
+        let stage = run_config.current_stage(stage_index);
+        let mut merged = config.table.clone();
+        merged.remove("run");
+        deep_merge(&mut merged, &stage.overrides);
+        StageOverrides { table: merged }
+    }
+
+    #[test]
+    fn stage_overrides_try_section_distinguishes_absent_section() {
+        let overrides = StageOverrides {
+            table: toml::Table::new(),
+        };
+
+        let result = overrides.try_section::<SolverKnobs>("solver").unwrap();
+        assert_eq!(result, None);
+
+        let value: SolverKnobs = overrides.section("solver");
+        assert_eq!(value, SolverKnobs::default());
+    }
+
+    #[test]
+    fn stage_overrides_try_section_reads_valid_multistage_overrides() {
+        let config = Config::from_str(
+            r#"
+            [solver]
+            every = 10
+
+            [[run]]
+            name = "settle"
+            steps = 100
+            solver = { every = 25 }
+
+            [[run]]
+            name = "flow"
+            steps = 200
+            solver = { every = 50 }
+            "#,
+        );
+
+        let settle = stage_overrides_for(&config, 0);
+        let flow = stage_overrides_for(&config, 1);
+
+        assert_eq!(
+            settle.try_section::<SolverKnobs>("solver").unwrap(),
+            Some(SolverKnobs { every: 25 })
+        );
+        assert_eq!(
+            flow.try_section::<SolverKnobs>("solver").unwrap(),
+            Some(SolverKnobs { every: 50 })
+        );
+    }
+
+    #[test]
+    fn stage_overrides_try_section_reports_malformed_per_stage_override() {
+        let config = Config::from_str(
+            r#"
+            [solver]
+            every = 10
+
+            [[run]]
+            name = "bad-stage"
+            steps = 100
+            solver = { evrey = 25 }
+            "#,
+        );
+        let overrides = stage_overrides_for(&config, 0);
+
+        let err = overrides.try_section::<SolverKnobs>("solver").unwrap_err();
+        assert_eq!(err.key(), "solver");
+        assert!(err.to_string().contains("StageOverrides"));
+        assert!(err.source().to_string().contains("unknown field `evrey`"));
+
+        let silent: SolverKnobs = overrides.section_or_default("solver");
+        assert_eq!(silent, SolverKnobs::default());
     }
 }
