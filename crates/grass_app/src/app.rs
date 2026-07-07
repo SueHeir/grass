@@ -583,9 +583,13 @@ mod tests {
     use super::*;
     use crate::{dependency_names, type_ids, Plugin};
 
+    struct PluginAInstalled;
+
     struct PluginA;
     impl Plugin for PluginA {
-        fn build(&self, _app: &mut App) {}
+        fn build(&self, app: &mut App) {
+            app.add_resource(PluginAInstalled);
+        }
         fn provides(&self) -> Vec<&str> {
             vec!["feature_a"]
         }
@@ -693,6 +697,60 @@ mod tests {
     fn plugin_group_add_plugins_still_panics() {
         let mut app = App::new();
         app.add_plugins(DuplicateGroup);
+    }
+
+    struct DisableThenReaddGroup;
+    impl crate::PluginGroup for DisableThenReaddGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .disable::<PluginA>()
+                .add(PluginA)
+        }
+    }
+
+    #[test]
+    fn plugin_group_disable_then_add_skips_that_plugin() {
+        let mut app = App::new();
+
+        app.try_add_plugins(DisableThenReaddGroup).unwrap();
+
+        assert!(app.get_resource_ref::<PluginAInstalled>().is_none());
+    }
+
+    struct DisableDependencyThenAddDependentGroup;
+    impl crate::PluginGroup for DisableDependencyThenAddDependentGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .disable::<PluginA>()
+                .add(PluginA)
+                .add(PluginB)
+        }
+    }
+
+    #[test]
+    fn disabled_plugin_skip_is_inspectable_through_dependent_error() {
+        let mut app = App::new();
+
+        let err = app
+            .try_add_plugins(DisableDependencyThenAddDependentGroup)
+            .err()
+            .unwrap();
+
+        match &err {
+            AppError::MissingDependencies {
+                plugin_name,
+                missing,
+            } => {
+                assert!(plugin_name.contains("PluginB"));
+                assert_eq!(missing.len(), 1);
+                assert!(missing[0]
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("PluginA")));
+            }
+            other => panic!("expected missing dependency error, got {other:?}"),
+        }
+        assert!(err.to_string().contains("PluginA"));
     }
 
     #[test]
