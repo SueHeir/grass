@@ -182,37 +182,44 @@ impl App {
         }
     }
 
-    /// Validates that every required capability tag has at least one provider.
+    /// Fallibly validates that every required capability tag has at least one provider.
     ///
-    /// Called in [`start`](Self::start) after all plugins are registered.
-    ///
-    /// # Panics
-    ///
-    /// Panics with a clear error listing all unsatisfied capabilities.
-    fn validate_capability_contracts(&self) {
+    /// This is the capability-contract counterpart to
+    /// [`try_add_plugins`](Self::try_add_plugins): TypeId dependencies are checked
+    /// eagerly while plugins register, but capability tags are checked lazily once
+    /// all providers and requirements have been collected. External drivers can call
+    /// this before [`try_prepare`](Self::try_prepare) or [`try_start`](Self::try_start)
+    /// when they need to surface wiring diagnostics without panicking.
+    pub fn validate_capability_contracts_result(&self) -> Result<(), AppError> {
         let provided = &self.main().provided_capabilities;
         let required = &self.main().required_capabilities;
 
         let missing: Vec<_> = required
             .iter()
             .filter(|(cap, _)| !provided.contains(cap))
+            .map(|(cap, plugin_name)| MissingCapability {
+                capability: cap.clone(),
+                requiring_plugin: plugin_name.clone(),
+            })
             .collect();
 
-        if !missing.is_empty() {
-            eprintln!();
-            eprintln!("ERROR: Missing capability contracts:");
-            for (cap, plugin_name) in &missing {
-                eprintln!("  - capability `{}` required by `{}`", cap, plugin_name);
-            }
-            eprintln!();
-            eprintln!("  Hint: Add a plugin that provides the missing capabilities.");
-            panic!(
-                "Missing capabilities: {:?}",
-                missing
-                    .iter()
-                    .map(|(cap, _)| cap.as_str())
-                    .collect::<Vec<_>>()
-            );
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::MissingCapabilities { missing })
+        }
+    }
+
+    /// Validates capability contracts and panics with an actionable diagnostic on failure.
+    ///
+    /// This preserves the convenience path used by [`prepare`](Self::prepare) and
+    /// [`start`](Self::start). Use
+    /// [`validate_capability_contracts_result`](Self::validate_capability_contracts_result)
+    /// when an external driver should receive an [`AppError`] instead.
+    #[track_caller]
+    pub fn validate_capability_contracts(&self) {
+        if let Err(err) = self.validate_capability_contracts_result() {
+            err.panic_with_context();
         }
     }
 
@@ -356,6 +363,16 @@ impl App {
         self
     }
 
+    /// Fallible form of [`prepare`](Self::prepare).
+    ///
+    /// Returns [`AppError::MissingCapabilities`] instead of panicking when a
+    /// required capability tag has no registered provider.
+    pub fn try_prepare(&mut self) -> Result<&mut Self, AppError> {
+        self.validate_capability_contracts_result()?;
+        self.sub_apps.main.prepare();
+        Ok(self)
+    }
+
     /// Returns `true` if a system has signalled simulation end via
     /// [`SchedulerManager`](grass_scheduler::SchedulerManager).
     pub fn is_done(&self) -> bool {
@@ -418,6 +435,23 @@ impl App {
         self.run_cleanup();
     }
 
+    /// Fallible form of [`start`](Self::start).
+    ///
+    /// Preserves the config-generation behavior of [`start`](Self::start), but
+    /// returns [`AppError::MissingCapabilities`] instead of panicking when
+    /// capability contracts are unsatisfied.
+    pub fn try_start(&mut self) -> Result<(), AppError> {
+        if self.get_resource_ref::<GenerateConfigFlag>().is_some() {
+            self.print_generated_config();
+            self.run_cleanup();
+            return Ok(());
+        }
+        self.validate_capability_contracts_result()?;
+        self.sub_apps.main.start();
+        self.run_cleanup();
+        Ok(())
+    }
+
     /// Prints accumulated config snippets from all registered plugins.
     fn print_generated_config(&self) {
         let Some(snippets) = self.get_resource_ref::<ConfigSnippets>() else {
@@ -478,7 +512,7 @@ impl App {
     }
 }
 
-/// Error returned by fallible plugin registration.
+/// Error returned by fallible app assembly and lifecycle validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppError {
     /// A unique plugin was registered more than once.
@@ -492,6 +526,11 @@ pub enum AppError {
         plugin_name: String,
         /// Dependencies that were not registered before this plugin.
         missing: Vec<MissingPluginDependency>,
+    },
+    /// One or more required capability tags have no provider.
+    MissingCapabilities {
+        /// Required capability tags with the plugins that required them.
+        missing: Vec<MissingCapability>,
     },
 }
 
@@ -526,6 +565,19 @@ impl AppError {
                     format_missing_dependencies(&missing)
                 );
             }
+            AppError::MissingCapabilities { missing } => {
+                eprintln!();
+                eprintln!("ERROR: Missing capability contracts:");
+                for cap in &missing {
+                    eprintln!("  - {}", cap);
+                }
+                eprintln!();
+                eprintln!("  Hint: Add plugin(s) that provide the required capabilities.");
+                panic!(
+                    "Missing capabilities: {}",
+                    format_missing_capabilities(&missing)
+                );
+            }
         }
     }
 }
@@ -545,6 +597,11 @@ impl fmt::Display for AppError {
                 "Plugin `{plugin_name}` is missing required dependencies: {}",
                 format_missing_dependencies(missing)
             ),
+            AppError::MissingCapabilities { missing } => write!(
+                f,
+                "Missing capability contracts: {}. Add plugin(s) that provide the required capabilities.",
+                format_missing_capabilities(missing)
+            ),
         }
     }
 }
@@ -561,6 +618,25 @@ pub struct MissingPluginDependency {
     pub name: Option<String>,
 }
 
+/// A required capability tag that has no registered provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingCapability {
+    /// The capability tag returned by [`Plugin::requires`].
+    pub capability: String,
+    /// The plugin that required this capability tag.
+    pub requiring_plugin: String,
+}
+
+impl fmt::Display for MissingCapability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "capability `{}` required by `{}`",
+            self.capability, self.requiring_plugin
+        )
+    }
+}
+
 impl fmt::Display for MissingPluginDependency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.name {
@@ -571,6 +647,14 @@ impl fmt::Display for MissingPluginDependency {
 }
 
 fn format_missing_dependencies(missing: &[MissingPluginDependency]) -> String {
+    missing
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_missing_capabilities(missing: &[MissingCapability]) -> String {
     missing
         .iter()
         .map(ToString::to_string)
@@ -614,6 +698,14 @@ mod tests {
         fn build(&self, _app: &mut App) {}
         fn requires(&self) -> Vec<&str> {
             vec!["feature_missing"]
+        }
+    }
+
+    struct PluginD;
+    impl Plugin for PluginD {
+        fn build(&self, _app: &mut App) {}
+        fn requires(&self) -> Vec<&str> {
+            vec!["feature_missing_d"]
         }
     }
 
@@ -759,6 +851,53 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(PluginC);
         app.validate_capability_contracts();
+    }
+
+    #[test]
+    fn missing_capability_result_names_required_capability_and_plugin() {
+        let mut app = App::new();
+        app.add_plugins(PluginC);
+        app.add_plugins(PluginD);
+
+        let err = app.validate_capability_contracts_result().err().unwrap();
+
+        match &err {
+            AppError::MissingCapabilities { missing } => {
+                assert_eq!(missing.len(), 2);
+                assert!(missing.iter().any(|cap| {
+                    cap.capability == "feature_missing" && cap.requiring_plugin.contains("PluginC")
+                }));
+                assert!(missing.iter().any(|cap| {
+                    cap.capability == "feature_missing_d"
+                        && cap.requiring_plugin.contains("PluginD")
+                }));
+            }
+            other => panic!("expected missing capability error, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("feature_missing"));
+        assert!(msg.contains("PluginC"));
+        assert!(msg.contains("provide"));
+    }
+
+    #[test]
+    fn try_prepare_returns_missing_capability_error_without_panicking() {
+        let mut app = App::new();
+        app.add_plugins(PluginC);
+
+        let err = app.try_prepare().err().unwrap();
+
+        assert!(matches!(err, AppError::MissingCapabilities { .. }));
+    }
+
+    #[test]
+    fn try_start_returns_missing_capability_error_without_panicking() {
+        let mut app = App::new();
+        app.add_plugins(PluginC);
+
+        let err = app.try_start().err().unwrap();
+
+        assert!(matches!(err, AppError::MissingCapabilities { .. }));
     }
 
     #[test]

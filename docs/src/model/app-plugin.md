@@ -108,6 +108,15 @@ plugin A's resources/systems already present (a hard ordering constraint). Use
 requirements, where any provider in any order satisfies the need — the
 order-independence is the point.
 
+For fallible application assembly, use both result-returning surfaces at the
+point where each mechanism is checked. `try_add_plugins(...)` reports duplicate
+plugins and missing TypeId dependencies during registration. Capability
+contracts are checked later, so external drivers can call
+`validate_capability_contracts_result()` explicitly or use `try_prepare()` /
+`try_start()`; the returned `AppError::MissingCapabilities` lists every missing
+capability tag and the plugin that required it. The convenience `prepare()` and
+`start()` methods still panic with the same diagnostic style.
+
 > **Note: `type_ids!` is not in the prelude.** `Plugin::dependencies` returns a
 > `Vec<TypeId>`, and the ergonomic way to build one is the `type_ids![A, B]`
 > macro. It is exported at the crate root, **not** through `grass_app::prelude`,

@@ -25,7 +25,11 @@ Plugin registration validates as it goes: a duplicate unique plugin or an unmet 
 dependency is reported immediately, and `start()` checks that every required capability
 tag has a provider. Use `add_plugins(...)` for fixed app wiring where a panic is fine;
 use `try_add_plugins(...) -> Result<_, AppError>` when a CLI, GUI, or test harness should
-handle duplicate-plugin or missing-dependency diagnostics itself.
+handle duplicate-plugin or missing-dependency diagnostics itself. Capability contracts are
+checked later because providers are order-independent: `prepare()` and `start()` keep the
+panic convenience path, while `validate_capability_contracts_result()`, `try_prepare()`,
+and `try_start()` return `AppError::MissingCapabilities` with every missing capability tag
+and the plugin that required it.
 
 ## Example shape
 

@@ -27,6 +27,11 @@
 //! wiring and panics with a diagnostic on duplicate plugins or missing TypeId
 //! dependencies. Use [`App::try_add_plugins`] when a CLI, GUI, or test harness
 //! should handle those registration failures as an [`AppError`] instead.
+//! Capability contracts have the same split: [`App::prepare`] and
+//! [`App::start`] keep the panic-on-invalid convenience behavior, while
+//! [`App::validate_capability_contracts_result`], [`App::try_prepare`], and
+//! [`App::try_start`] return [`AppError::MissingCapabilities`] so external
+//! drivers can report every missing capability tag and the plugin that required it.
 //!
 //! # Two lifecycle paths
 //!
@@ -85,7 +90,8 @@ pub use sub_app::*;
 pub mod prelude {
     pub use crate::{
         app::App, app::AppError, app::ConfigSnippets, app::GenerateConfigFlag,
-        app::MissingPluginDependency, setup::ScheduleSetupSet, sub_app::SubApp, Plugin,
-        PluginGroup, PluginGroupBuilder, StageAdvancePlugin, StageNames, StatesPlugin,
+        app::MissingCapability, app::MissingPluginDependency, setup::ScheduleSetupSet,
+        sub_app::SubApp, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin, StageNames,
+        StatesPlugin,
     };
 }
