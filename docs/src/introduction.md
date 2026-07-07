@@ -14,7 +14,7 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
   ├─ SOIL    substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
   │    └─ DIRT   physics: Discrete Element Method
   └─ FIELD   substrate: Mesh, FieldData, halo, AMR                         (no equations)
-       └─ test-cfd  physics: compressible CFD (Riemann/EOS/IBM)  — in progress
+       └─ dev_field_efvm  physics: compressible CFD (Riemann/EOS/IBM)  — in progress
 ```
 
 - **GRASS** (this repo) — framework: App + Plugin + dependency-injection
@@ -25,7 +25,8 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
   the [DIRT book](https://sueheir.github.io/dirt).
 - **[FIELD](https://github.com/SueHeir/field)** — the mesh/Eulerian substrate on
   GRASS, equation-agnostic; it hosts the `fem_poisson` implicit-solve proof, with
-  a compressible-CFD physics tier (test-cfd) in progress.
+  a compressible-CFD physics tier
+  ([dev_field_efvm](https://github.com/SueHeir/dev_field_efvm)) in progress.
 
 New to the stack? [How the Stack Fits Together](./stack/how-the-stack-fits-together.md)
 is the canonical walkthrough of how the tiers compose and where to start.

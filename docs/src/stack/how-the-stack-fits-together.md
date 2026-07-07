@@ -13,22 +13,22 @@ GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no 
   ├─ SOIL    substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
   │    └─ DIRT   DEM physics: contact, bonds, walls, clumps
   └─ FIELD   substrate: Mesh, FieldData, halo, AMR                         (no equations)
-       └─ test-cfd  physics: compressible CFD (Riemann/EOS/IBM)  — in progress
+       └─ dev_field_efvm  physics: compressible CFD (Riemann/EOS/IBM)  — in progress
 ```
 
 The particle branch (SOIL → DIRT) is the fully landed, LAMMPS-validated one, and
 most of this page walks it through in detail because it is the worked-out
-example. The mesh branch (FIELD → test-cfd) is the same shape one level over —
-FIELD is to a mesh what SOIL is to particles — and it already carries a landed
-*implicit* proof; see [The mesh branch](#the-mesh-branch) below.
+example. The mesh branch (FIELD → dev_field_efvm) is the same shape one level
+over — FIELD is to a mesh what SOIL is to particles — and it already carries a
+landed *implicit* proof; see [The mesh branch](#the-mesh-branch) below.
 
 The one-sentence version, worded the same everywhere these repos describe
 themselves:
 
 > GRASS gives you the `App`/scheduler/coupling; SOIL turns that into a parallel
 > particle substrate via one `AtomData` contract; DIRT is the proof that a full
-> LAMMPS-validated physics tier rides it — and the same seams are open for SPH,
-> peridynamics, or your own method.
+> LAMMPS-validated physics tier rides it — and the same seams are open for
+> dev_soil_sph, dev_soil_peri, or your own method.
 
 ## The tiers
 
@@ -38,7 +38,9 @@ themselves:
 | **SOIL** | [soil](https://github.com/SueHeir/soil) | base `Atom`, the `AtomData` registry, domain decomposition, ghost/halo comm, atom migration, neighbor lists | contact forces, bonds, damage — any particle *method* |
 | **DIRT** | [dirt](https://github.com/SueHeir/dirt) | Hertz–Mindlin contact, rolling/twisting, bonds, walls, clumps, heat — validated against LAMMPS and closed-form theory | — (it is a top tier) |
 | **FIELD** | [field](https://github.com/SueHeir/field) | `UniformMesh`, `FieldData`, halo exchange, AMR — the mesh/Eulerian counterpart to SOIL | fluxes, EOS, boundary conditions — any mesh *equations* |
-| **test-cfd** *(in progress)* | [field](https://github.com/SueHeir/field) | compressible CFD on FIELD — Riemann solvers, EOS, immersed boundaries | — (it is a top tier) |
+| **dev_soil_sph** *(in progress)* | [dev_soil_sph](https://github.com/SueHeir/dev_soil_sph) | granular SPH (`mu(I)` continuum) on SOIL | — (it is a top tier) |
+| **dev_soil_peri** *(in progress)* | [dev_soil_peri](https://github.com/SueHeir/dev_soil_peri) | bond-based peridynamics on SOIL | — (it is a top tier) |
+| **dev_field_efvm** *(in progress)* | [dev_field_efvm](https://github.com/SueHeir/dev_field_efvm) | compressible CFD on FIELD — Riemann solvers, EOS, immersed boundaries | — (it is a top tier) |
 
 - **GRASS — the framework.** You don't write a `main` loop: you register state as
   **resources** and step logic as **systems** (functions that declare their
@@ -81,10 +83,10 @@ walks one DEM timestep end to end and shows exactly which steps are substrate
 
 ## The mesh branch
 
-FIELD and test-cfd are the mesh branch. Particles are one substrate branch off
-GRASS; **mesh** is the other. GRASS knows
-nothing about *either* — no positions and neighbors, and no cells and fluxes —
-so a mesh/Eulerian substrate rides it the same way SOIL does.
+FIELD and dev_field_efvm are the mesh branch. Particles are one substrate branch
+off GRASS; **mesh** is the other. GRASS knows nothing about *either* — no
+positions and neighbors, and no cells and fluxes — so a mesh/Eulerian substrate
+rides it the same way SOIL does.
 
 - **FIELD — the mesh substrate.** [FIELD](https://github.com/SueHeir/field) is to
   a mesh what SOIL is to particles: it owns `UniformMesh`, `FieldData`, halo
@@ -100,12 +102,12 @@ so a mesh/Eulerian substrate rides it the same way SOIL does.
   resources; *you* bring the sparse solver (`fem_poisson` uses `nalgebra-sparse`).
   The mesh side of the ecosystem is still being built out, so this is an early
   worked example, not a claim of broad discretization coverage.
-- **test-cfd — the mesh physics tier (in progress).** The particle branch's
-  physics tier is DIRT; the mesh branch's counterpart is **test-cfd**,
-  compressible CFD (Riemann solvers, EOS, immersed boundaries) as GRASS plugins
-  riding FIELD. It is being ported — named here as direction, not yet as
-  validated evidence. `fem_poisson` is an early worked example on the mesh path;
-  test-cfd is the physics that will ride it.
+- **dev_field_efvm — the mesh physics tier (in progress).** The particle
+  branch's landed physics tier is DIRT; the mesh branch's CFD counterpart is
+  **dev_field_efvm**, compressible CFD (Riemann solvers, EOS, immersed
+  boundaries) as GRASS plugins riding FIELD. It is being ported — named here as
+  direction, not yet as validated evidence. `fem_poisson` is an early worked
+  example on the mesh path; dev_field_efvm is the physics that will ride it.
 
 ## Where to start
 
