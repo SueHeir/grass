@@ -17,6 +17,7 @@
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
+    fmt,
 };
 
 use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet};
@@ -96,6 +97,18 @@ impl App {
         self
     }
 
+    /// Fallibly registers one or more plugins with this app.
+    ///
+    /// Accepts the same inputs as [`add_plugins`](Self::add_plugins), but
+    /// returns an [`AppError`] instead of panicking when a unique plugin is
+    /// added twice or a TypeId dependency has not been registered yet. Use this
+    /// in applications that need to surface plugin-wiring diagnostics through
+    /// their own CLI, GUI, or test harness.
+    pub fn try_add_plugins<M>(&mut self, plugins: impl Plugins<M>) -> Result<&mut Self, AppError> {
+        plugins.try_add_to_app(self)?;
+        Ok(self)
+    }
+
     /// Internal: adds a boxed plugin, checking uniqueness and dependencies.
     pub(crate) fn add_boxed_plugin(
         &mut self,
@@ -148,9 +161,15 @@ impl App {
             return Ok(());
         }
 
-        let missing: Vec<TypeId> = deps
+        let dependency_names = plugin.dependency_names();
+        let missing: Vec<MissingPluginDependency> = deps
             .into_iter()
-            .filter(|dep| !self.main().plugin_type_ids.contains(dep))
+            .enumerate()
+            .filter(|(_, dep)| !self.main().plugin_type_ids.contains(dep))
+            .map(|(idx, type_id)| MissingPluginDependency {
+                type_id,
+                name: dependency_names.get(idx).map(|name| (*name).to_string()),
+            })
             .collect();
 
         if missing.is_empty() {
@@ -459,22 +478,110 @@ impl App {
     }
 }
 
-/// Internal error type for plugin registration failures.
-#[derive(Debug)]
-pub(crate) enum AppError {
+/// Error returned by fallible plugin registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppError {
     /// A unique plugin was registered more than once.
-    DuplicatePlugin { plugin_name: String },
+    DuplicatePlugin {
+        /// The duplicate plugin's human-readable name.
+        plugin_name: String,
+    },
     /// One or more required dependency plugins (by [`TypeId`]) have not been registered yet.
     MissingDependencies {
+        /// The plugin that could not be registered.
         plugin_name: String,
-        missing: Vec<TypeId>,
+        /// Dependencies that were not registered before this plugin.
+        missing: Vec<MissingPluginDependency>,
     },
+}
+
+impl AppError {
+    /// Panic with the same diagnostic style used by [`App::add_plugins`].
+    #[track_caller]
+    pub(crate) fn panic_with_context(self) -> ! {
+        match self {
+            AppError::DuplicatePlugin { plugin_name } => {
+                panic!("Error adding plugin {plugin_name}: plugin was already added in application")
+            }
+            AppError::MissingDependencies {
+                plugin_name,
+                missing,
+            } => {
+                eprintln!();
+                eprintln!(
+                    "ERROR: Plugin `{}` is missing required dependencies:",
+                    plugin_name
+                );
+                for dep in &missing {
+                    eprintln!("  - {}", dep);
+                }
+                eprintln!();
+                eprintln!(
+                    "  Hint: Add the missing plugin(s) before `{}`.",
+                    plugin_name
+                );
+                panic!(
+                    "Missing plugin dependencies for `{}`: {}",
+                    plugin_name,
+                    format_missing_dependencies(&missing)
+                );
+            }
+        }
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::DuplicatePlugin { plugin_name } => write!(
+                f,
+                "Error adding plugin {plugin_name}: plugin was already added in application"
+            ),
+            AppError::MissingDependencies {
+                plugin_name,
+                missing,
+            } => write!(
+                f,
+                "Plugin `{plugin_name}` is missing required dependencies: {}",
+                format_missing_dependencies(missing)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+/// A missing plugin dependency reported by [`AppError::MissingDependencies`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingPluginDependency {
+    /// The [`TypeId`] returned by [`Plugin::dependencies`] for this dependency.
+    pub type_id: TypeId,
+    /// Human-readable dependency name, when the plugin provided one via
+    /// [`Plugin::dependency_names`].
+    pub name: Option<String>,
+}
+
+impl fmt::Display for MissingPluginDependency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => f.write_str(name),
+            None => write!(f, "{:?}", self.type_id),
+        }
+    }
+}
+
+fn format_missing_dependencies(missing: &[MissingPluginDependency]) -> String {
+    missing
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{type_ids, Plugin};
+    use crate::{dependency_names, type_ids, Plugin};
 
     struct PluginA;
     impl Plugin for PluginA {
@@ -489,6 +596,9 @@ mod tests {
         fn build(&self, _app: &mut App) {}
         fn dependencies(&self) -> Vec<TypeId> {
             type_ids![PluginA]
+        }
+        fn dependency_names(&self) -> Vec<&'static str> {
+            dependency_names![PluginA]
         }
         fn requires(&self) -> Vec<&str> {
             vec!["feature_a"]
@@ -519,6 +629,70 @@ mod tests {
         let mut app = App::new();
         // PluginB depends on PluginA which is not registered.
         app.add_plugins(PluginB);
+    }
+
+    #[test]
+    fn duplicate_plugin_try_add_returns_error() {
+        let mut app = App::new();
+        app.try_add_plugins(PluginA).unwrap();
+
+        let err = app.try_add_plugins(PluginA).err().unwrap();
+
+        assert!(matches!(err, AppError::DuplicatePlugin { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("PluginA"));
+        assert!(msg.contains("already added"));
+    }
+
+    #[test]
+    fn missing_dependency_try_add_names_plugin_and_dependency() {
+        let mut app = App::new();
+
+        let err = app.try_add_plugins(PluginB).err().unwrap();
+
+        match &err {
+            AppError::MissingDependencies {
+                plugin_name,
+                missing,
+            } => {
+                assert!(plugin_name.contains("PluginB"));
+                assert_eq!(missing.len(), 1);
+                assert!(missing[0]
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.contains("PluginA")));
+            }
+            other => panic!("expected missing dependency error, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("PluginB"));
+        assert!(msg.contains("PluginA"));
+    }
+
+    struct DuplicateGroup;
+    impl crate::PluginGroup for DuplicateGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .add(PluginA)
+                .add(PluginA)
+        }
+    }
+
+    #[test]
+    fn plugin_group_try_add_returns_first_registration_error() {
+        let mut app = App::new();
+
+        let err = app.try_add_plugins(DuplicateGroup).err().unwrap();
+
+        assert!(matches!(err, AppError::DuplicatePlugin { .. }));
+        assert!(err.to_string().contains("PluginA"));
+    }
+
+    #[test]
+    #[should_panic(expected = "already added in application")]
+    fn plugin_group_add_plugins_still_panics() {
+        let mut app = App::new();
+        app.add_plugins(DuplicateGroup);
     }
 
     #[test]
