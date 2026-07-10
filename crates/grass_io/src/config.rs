@@ -53,6 +53,25 @@ use serde::Deserialize;
 /// An actionable config-read error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
+    /// The supplied path does not name a TOML file.
+    InvalidFileExtension {
+        /// Path supplied by the caller.
+        path: String,
+    },
+    /// Reading the TOML file failed.
+    ReadFile {
+        /// File that could not be read.
+        path: String,
+        /// The operating-system error.
+        message: String,
+    },
+    /// Parsing TOML text failed.
+    ParseToml {
+        /// Origin of the TOML text (a path, or `"<string>"`).
+        path: String,
+        /// The TOML parser error.
+        message: String,
+    },
     /// A required `[key]` section was absent from the parsed TOML table.
     MissingSection {
         /// The missing top-level section name, without brackets.
@@ -70,11 +89,30 @@ pub enum ConfigError {
         /// The TOML deserialization error.
         message: String,
     },
+    /// A present `[[key]]` value was not an array or one of its entries did
+    /// not deserialize into the requested type.
+    InvalidArray {
+        /// The top-level array name, without brackets.
+        key: String,
+        /// The failing entry index, if the value was an array.
+        index: Option<usize>,
+        /// The TOML deserialization error or a shape description.
+        message: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ConfigError::InvalidFileExtension { path } => {
+                write!(f, "input file must be a .toml file, got '{path}'")
+            }
+            ConfigError::ReadFile { path, message } => {
+                write!(f, "failed to read '{path}': {message}")
+            }
+            ConfigError::ParseToml { path, message } => {
+                write!(f, "failed to parse TOML '{path}': {message}")
+            }
             ConfigError::MissingSection { key } => write!(
                 f,
                 "missing required [{}] section in config file. Add a [{}] section, \
@@ -94,6 +132,20 @@ impl fmt::Display for ConfigError {
                     key, message
                 )
             }
+            ConfigError::InvalidArray {
+                key,
+                index,
+                message,
+            } => match index {
+                Some(index) => write!(
+                    f,
+                    "failed to parse [[{key}]] entry {index} in config file: {message}"
+                ),
+                None => write!(
+                    f,
+                    "expected [[{key}]] to be an array in config file: {message}"
+                ),
+            },
         }
     }
 }
@@ -103,6 +155,7 @@ impl std::error::Error for ConfigError {}
 /// Wraps a parsed TOML table. Plugins reach into it with [`Self::section`] /
 /// [`Self::required_section`] / [`Self::load`] / [`Self::parse_array`] in
 /// `Plugin::build`.
+#[derive(Debug)]
 pub struct Config {
     /// The parsed top-level TOML table backing this config.
     pub table: toml::Table,
@@ -116,12 +169,21 @@ impl Config {
     }
 
     /// Construct from a TOML string. Panics on parse error — meant for
-    /// tests with hardcoded TOML literals.
+    /// tests with hardcoded TOML literals. Programmatic callers should use
+    /// [`Self::try_from_str`].
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(toml_str: &str) -> Self {
-        let table: toml::Table = toml::from_str(toml_str)
-            .unwrap_or_else(|e| panic!("Config::from_str: TOML parse error: {e}"));
-        Self { table }
+        Self::try_from_str(toml_str).unwrap_or_else(|error| panic!("Config::from_str: {error}"))
+    }
+
+    /// Construct from TOML text without panicking.
+    pub fn try_from_str(toml_str: &str) -> Result<Self, ConfigError> {
+        toml::from_str(toml_str)
+            .map(Self::from_table)
+            .map_err(|error| ConfigError::ParseToml {
+                path: "<string>".to_string(),
+                message: error.to_string(),
+            })
     }
 
     /// Deserialize an optional `[key]` section, returning `T::default()` if
@@ -132,14 +194,27 @@ impl Config {
     /// or "do not register this plugin". Use [`Self::required_section`] for
     /// plugins whose section must appear in the user's TOML.
     pub fn section<T: for<'de> Deserialize<'de> + Default>(&self, key: &str) -> T {
+        self.try_section(key)
+            .unwrap_or_else(|error| panic!("Config::section: {error}"))
+    }
+
+    /// Fallible form of [`Self::section`]. Missing optional sections still
+    /// return `T::default()`; malformed present sections return an error.
+    pub fn try_section<T: for<'de> Deserialize<'de> + Default>(
+        &self,
+        key: &str,
+    ) -> Result<T, ConfigError> {
         match self.table.get(key) {
-            None => T::default(),
-            Some(v) => v.clone().try_into::<T>().unwrap_or_else(|e| {
-                report_config_error(&ConfigError::InvalidSection {
-                    key: key.to_string(),
-                    message: e.to_string(),
-                });
-            }),
+            None => Ok(T::default()),
+            Some(value) => {
+                value
+                    .clone()
+                    .try_into::<T>()
+                    .map_err(|error| ConfigError::InvalidSection {
+                        key: key.to_string(),
+                        message: error.to_string(),
+                    })
+            }
         }
     }
 
@@ -150,7 +225,7 @@ impl Config {
     /// to defaults would hide a misspelled or omitted TOML section.
     pub fn required_section<T: for<'de> Deserialize<'de>>(&self, key: &str) -> T {
         self.try_required_section(key)
-            .unwrap_or_else(|e| report_config_error(&e))
+            .unwrap_or_else(|error| panic!("Config::required_section: {error}"))
     }
 
     /// Fallible form of [`Self::required_section`], useful for tests and
@@ -184,17 +259,27 @@ impl Config {
         app: &mut App,
         key: &str,
     ) -> T {
+        Self::try_load(app, key).unwrap_or_else(|error| panic!("Config::load: {error}"))
+    }
+
+    /// Fallible form of [`Self::load`]. It preserves the optional-section
+    /// behavior: if no `Config` resource or section is present, `T::default()`
+    /// is registered and returned.
+    pub fn try_load<T: for<'de> Deserialize<'de> + Default + Clone + 'static>(
+        app: &mut App,
+        key: &str,
+    ) -> Result<T, ConfigError> {
         let value: T = if let Some(cell) = app.get_mut_resource(TypeId::of::<Config>()) {
             let raw = cell.borrow();
             let cfg = raw
                 .downcast_ref::<Config>()
                 .expect("Config resource has wrong type — this is a bug in grass_app");
-            cfg.section::<T>(key)
+            cfg.try_section::<T>(key)?
         } else {
             T::default()
         };
         app.add_resource(value.clone());
-        value
+        Ok(value)
     }
 
     /// Extract a required `[key]` section, register the resulting `T` as an
@@ -207,19 +292,28 @@ impl Config {
         app: &mut App,
         key: &str,
     ) -> T {
+        Self::try_load_required(app, key)
+            .unwrap_or_else(|error| panic!("Config::load_required: {error}"))
+    }
+
+    /// Fallible form of [`Self::load_required`].
+    pub fn try_load_required<T: for<'de> Deserialize<'de> + Clone + 'static>(
+        app: &mut App,
+        key: &str,
+    ) -> Result<T, ConfigError> {
         let value: T = if let Some(cell) = app.get_mut_resource(TypeId::of::<Config>()) {
             let raw = cell.borrow();
             let cfg = raw
                 .downcast_ref::<Config>()
                 .expect("Config resource has wrong type — this is a bug in grass_app");
-            cfg.required_section::<T>(key)
+            cfg.try_required_section::<T>(key)?
         } else {
-            report_config_error(&ConfigError::MissingConfigResource {
+            return Err(ConfigError::MissingConfigResource {
                 key: key.to_string(),
             });
         };
         app.add_resource(value.clone());
-        value
+        Ok(value)
     }
 
     /// Build a per-sub-App `Config` from this (parent) Config.
@@ -244,13 +338,20 @@ impl Config {
     /// the sub-App's plugins will all see `T::default()` from
     /// [`Self::section`] / [`Self::load`].
     pub fn for_subapp(&self, name: &str, base_dir: Option<&Path>) -> Self {
+        self.try_for_subapp(name, base_dir)
+            .unwrap_or_else(|error| panic!("Config::for_subapp: {error}"))
+    }
+
+    /// Fallible form of [`Self::for_subapp`]. In particular, errors reading a
+    /// referenced `config_path` are returned to the programmatic caller.
+    pub fn try_for_subapp(&self, name: &str, base_dir: Option<&Path>) -> Result<Self, ConfigError> {
         let mut base = match self.subapp_config_path(name) {
             Some(path) => {
                 let resolved = match base_dir {
                     Some(dir) if Path::new(&path).is_relative() => dir.join(&path),
                     _ => PathBuf::from(&path),
                 };
-                load_toml(&resolved.to_string_lossy())
+                try_load_toml(&resolved.to_string_lossy())?
             }
             None => toml::Table::new(),
         };
@@ -259,7 +360,7 @@ impl Config {
             deep_merge(&mut base, overrides);
         }
 
-        Config { table: base }
+        Ok(Config { table: base })
     }
 
     fn subapp_config_path(&self, name: &str) -> Option<String> {
@@ -274,53 +375,44 @@ impl Config {
     }
 
     /// Parse a `[[key]]` TOML array into a `Vec<T>`. Returns an empty
-    /// `Vec` if the key is missing. Prints an actionable error and exits
-    /// on per-entry deserialization failure.
+    /// `Vec` if the key is missing. Panics on malformed input; programmatic
+    /// callers should use [`Self::try_parse_array`].
     ///
     /// Use for fix-style entries where multiple instances of the same
     /// "kind" of plugin share a TOML key (`[[addforce]]`, `[[wall]]`, …).
     pub fn parse_array<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Vec<T> {
+        self.try_parse_array(key)
+            .unwrap_or_else(|error| panic!("Config::parse_array: {error}"))
+    }
+
+    /// Fallible form of [`Self::parse_array`].
+    pub fn try_parse_array<T: for<'de> Deserialize<'de>>(
+        &self,
+        key: &str,
+    ) -> Result<Vec<T>, ConfigError> {
         match self.table.get(key) {
             Some(toml::Value::Array(arr)) => arr
                 .iter()
                 .enumerate()
-                .map(|(idx, v)| match v.clone().try_into::<T>() {
-                    Ok(val) => val,
-                    Err(e) => {
-                        eprintln!();
-                        eprintln!(
-                            "ERROR: Failed to parse [[{}]] entry {} in config file.",
-                            key, idx
-                        );
-                        eprintln!("  {}", e);
-                        eprintln!();
-                        eprintln!(
-                            "  Hint: check that all field names are spelled \
-                             correctly and values have the right type."
-                        );
-                        eprintln!(
-                            "  Run with --generate-config to see a complete example \
-                             configuration."
-                        );
-                        std::process::exit(1);
-                    }
+                .map(|(index, value)| {
+                    value
+                        .clone()
+                        .try_into::<T>()
+                        .map_err(|error| ConfigError::InvalidArray {
+                            key: key.to_string(),
+                            index: Some(index),
+                            message: error.to_string(),
+                        })
                 })
                 .collect(),
-            _ => Vec::new(),
+            Some(_) => Err(ConfigError::InvalidArray {
+                key: key.to_string(),
+                index: None,
+                message: "value is not an array".to_string(),
+            }),
+            None => Ok(Vec::new()),
         }
     }
-}
-
-fn report_config_error(error: &ConfigError) -> ! {
-    eprintln!();
-    eprintln!("ERROR: {}", error);
-    eprintln!();
-    eprintln!(
-        "  Hint: check that section names and field names are spelled correctly \
-         and values have the right type."
-    );
-    eprintln!("  Run with --generate-config to see a complete example configuration.");
-    std::process::exit(1);
 }
 
 // ─── CLI input ──────────────────────────────────────────────────────────────
@@ -377,7 +469,8 @@ impl Plugin for InputPlugin {
             eprintln!("Usage: <binary> <input.toml> [--generate-config]");
             std::process::exit(1);
         });
-        let table = load_toml(&input_file);
+        let table =
+            try_load_toml(&input_file).unwrap_or_else(|error| report_cli_config_error(&error));
 
         // Output directory: prefer [output] dir from config, else the
         // input file's parent.
@@ -490,21 +583,37 @@ pub fn deep_merge(base: &mut toml::Table, overrides: &toml::Table) {
     }
 }
 
-/// Read and parse a TOML file. Prints an actionable error and exits on
-/// missing / unreadable / malformed files.
+/// Read and parse a TOML file.
+///
+/// This compatibility convenience wrapper panics on failure. Library callers
+/// that need to handle startup errors should use [`try_load_toml`].
 pub fn load_toml(path: &str) -> toml::Table {
+    try_load_toml(path).unwrap_or_else(|error| panic!("load_toml: {error}"))
+}
+
+/// Read and parse a TOML file without printing or terminating the process.
+pub fn try_load_toml(path: &str) -> Result<toml::Table, ConfigError> {
     if !path.ends_with(".toml") {
-        eprintln!("Error: input file must be a .toml file, got '{}'", path);
-        std::process::exit(1);
+        return Err(ConfigError::InvalidFileExtension {
+            path: path.to_string(),
+        });
     }
-    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("Error reading '{}': {}", path, e);
-        std::process::exit(1);
-    });
-    toml::from_str(&content).unwrap_or_else(|e| {
-        eprintln!("Error parsing TOML '{}': {}", path, e);
-        std::process::exit(1);
+    let content = std::fs::read_to_string(path).map_err(|error| ConfigError::ReadFile {
+        path: path.to_string(),
+        message: error.to_string(),
+    })?;
+    toml::from_str(&content).map_err(|error| ConfigError::ParseToml {
+        path: path.to_string(),
+        message: error.to_string(),
     })
+}
+
+/// Render an input error at the executable boundary, then select the CLI exit
+/// code. This is deliberately private to [`InputPlugin`]; reusable config APIs
+/// return [`ConfigError`] instead.
+fn report_cli_config_error(error: &ConfigError) -> ! {
+    eprintln!("Error: {error}");
+    std::process::exit(1);
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -549,6 +658,24 @@ mod tests {
         let k: Knobs = cfg.section("knobs");
         assert_eq!(k.steps, 0);
         assert_eq!(k.dt, 0.0);
+    }
+
+    #[test]
+    fn try_from_str_reports_malformed_toml() {
+        let err = Config::try_from_str("[knobs\nsteps = 1")
+            .expect_err("malformed TOML must be returned to programmatic callers");
+
+        assert!(matches!(err, ConfigError::ParseToml { path, .. } if path == "<string>"));
+    }
+
+    #[test]
+    fn try_section_reports_malformed_section() {
+        let cfg = Config::from_str("[knobs]\nsteps = \"not an integer\"");
+        let err = cfg
+            .try_section::<Knobs>("knobs")
+            .expect_err("wrong section field type must be returned");
+
+        assert!(matches!(err, ConfigError::InvalidSection { key, .. } if key == "knobs"));
     }
 
     #[test]
@@ -624,6 +751,34 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].gx, 1.0);
         assert_eq!(v[1].gz, -9.81);
+    }
+
+    #[test]
+    fn try_parse_array_reports_malformed_entry() {
+        let cfg = Config::from_str("[[force]]\ngx = \"not a float\"");
+        let err = cfg
+            .try_parse_array::<Force>("force")
+            .expect_err("wrong array entry field type must be returned");
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidArray {
+                key,
+                index: Some(0),
+                ..
+            } if key == "force"
+        ));
+    }
+
+    #[test]
+    fn try_load_toml_reports_missing_file() {
+        let path = std::env::temp_dir().join("grass_io_config_that_does_not_exist.toml");
+        let err = try_load_toml(&path.to_string_lossy())
+            .expect_err("a missing config file must be returned as an error");
+
+        assert!(
+            matches!(err, ConfigError::ReadFile { path: error_path, .. } if error_path == path.to_string_lossy())
+        );
     }
 
     #[test]
