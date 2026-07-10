@@ -187,8 +187,8 @@ impl Config {
     }
 
     /// Deserialize an optional `[key]` section, returning `T::default()` if
-    /// the section is absent. Prints an actionable error and exits if
-    /// deserialization fails (typo / wrong type).
+    /// the section is absent. Panics if deserialization fails (typo / wrong
+    /// type); programmatic callers should use [`Self::try_section`].
     ///
     /// Use this for opt-in plugins where omitting `[key]` means "use defaults"
     /// or "do not register this plugin". Use [`Self::required_section`] for
