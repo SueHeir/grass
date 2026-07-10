@@ -134,6 +134,8 @@ parent.add_subapp_with_config("cfd", |app| {
 
 The closure receives a fresh sub-App with its `Config` (and `Input`) already pre-seeded from the relevant slice. Anything the closure registers runs against that pre-seeded config.
 
+For programmatic startup, use `try_add_subapp_with_config(...) -> Result<_, ConfigError>` instead. It returns missing or malformed referenced `config_path` files before the build closure runs; `add_subapp_with_config` remains the panic-on-error compatibility wrapper.
+
 ## See also
 
 - [`grass_app`](../grass_app/) — the App/Plugin layer that hosts the resources and runs the schedule.

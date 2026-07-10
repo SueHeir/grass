@@ -35,3 +35,4 @@ codegen-units = 1
 grass_scheduler = { workspace = true }
 grass_app = { workspace = true }
 grass_io = { workspace = true }
+toml = "0.8"

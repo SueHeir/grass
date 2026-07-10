@@ -11,3 +11,6 @@ render in Gitea:
   [`plots/verlet_validation.png`](verlet_minisolver/plots/verlet_validation.png).
 - [`matrix_free_poisson_cg`](matrix_free_poisson_cg/README.md) embeds
   [`plots/poisson_convergence.png`](matrix_free_poisson_cg/plots/poisson_convergence.png).
+- [`fallible_config_matrix`](fallible_config_matrix/README.md) embeds
+  [`plots/fallible_config_matrix.png`](fallible_config_matrix/plots/fallible_config_matrix.png),
+  checking typed errors from malformed and missing configuration paths.

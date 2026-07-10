@@ -1,0 +1,8 @@
+# Expected typed outcomes for the fallible config/startup matrix.
+# The executable performs each named operation and compares its returned
+# ConfigError variant with this declarative expectation.
+[checks]
+malformed_inline = "ParseToml"
+missing_section = "MissingSection"
+missing_referenced_file = "ReadFile"
+malformed_referenced_file = "ParseToml"
