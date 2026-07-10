@@ -750,6 +750,23 @@ mod tests {
     }
 
     #[test]
+    fn states_plugin_honors_namespace_assigned_before_registration() {
+        let mut app = App::new();
+        app.set_schedule_namespace::<PluginPhase>(5);
+        app.add_plugins(StatesPlugin::new(TestState::Initial, PluginPhase::Apply));
+        app.add_update_system(request_advance, RequestPhase::Request);
+
+        app.main_mut().organize_systems();
+        app.run();
+
+        assert_eq!(
+            app.get_resource_ref::<CurrentState<TestState>>().unwrap().0,
+            TestState::Advanced,
+            "the state transition must run after the namespace-zero request system"
+        );
+    }
+
+    #[test]
     fn states_plugin_honors_namespace_assigned_after_registration() {
         let mut app = App::new();
         app.add_plugins(StatesPlugin::new(TestState::Initial, PluginPhase::Apply));
@@ -763,6 +780,27 @@ mod tests {
             app.get_resource_ref::<CurrentState<TestState>>().unwrap().0,
             TestState::Advanced,
             "the state transition must run after the namespace-zero request system"
+        );
+    }
+
+    #[test]
+    fn stage_advance_plugin_honors_namespace_assigned_after_registration() {
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin::new(TestState::Initial, PluginPhase::Apply));
+        app.add_plugins(StageAdvancePlugin::<TestState>::new(PluginPhase::Apply));
+        app.set_schedule_namespace::<PluginPhase>(5);
+        app.add_resource(RunCount::default());
+        app.add_update_system(request_advance_on_second_run, RequestPhase::Request);
+
+        app.prepare();
+        app.run();
+        app.run();
+
+        assert!(
+            app.get_resource_ref::<SchedulerManager>()
+                .unwrap()
+                .advance_requested,
+            "the stage plugin must observe the transition after the namespace-zero request system"
         );
     }
 
