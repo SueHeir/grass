@@ -304,7 +304,7 @@ impl<S: Clone + PartialEq + Default + Send + Sync + 'static> StatesPlugin<S> {
     pub fn new(initial: S, phase: impl ScheduleSet) -> Self {
         Self {
             initial,
-            phase: StoredPhase::from(phase),
+            phase: StoredPhase::new(phase),
         }
     }
 }
@@ -337,7 +337,7 @@ impl<S: StageName + Clone + PartialEq + Default + Send + Sync + 'static> StageAd
     pub fn new(phase: impl ScheduleSet) -> Self {
         Self {
             _marker: PhantomData,
-            phase: StoredPhase::from(phase),
+            phase: StoredPhase::new(phase),
         }
     }
 }

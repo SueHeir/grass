@@ -665,7 +665,127 @@ fn format_missing_capabilities(missing: &[MissingCapability]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{dependency_names, type_ids, Plugin};
+    use crate::{dependency_names, type_ids, Plugin, StageAdvancePlugin, StatesPlugin};
+    use grass_scheduler::{
+        CurrentState, NextState, ResMut, ScheduleSet, SchedulerManager, StageName,
+    };
+
+    #[derive(Clone, Copy, Debug)]
+    enum PluginPhase {
+        Apply,
+    }
+
+    impl ScheduleSet for PluginPhase {
+        fn to_index(&self) -> u32 {
+            0
+        }
+
+        fn name(&self) -> &'static str {
+            "PluginPhase::Apply"
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum RequestPhase {
+        Request,
+    }
+
+    impl ScheduleSet for RequestPhase {
+        fn to_index(&self) -> u32 {
+            1
+        }
+
+        fn name(&self) -> &'static str {
+            "RequestPhase::Request"
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    enum TestState {
+        #[default]
+        Initial,
+        Advanced,
+    }
+
+    impl StageName for TestState {
+        fn stage_name(&self) -> &'static str {
+            match self {
+                Self::Initial => "initial",
+                Self::Advanced => "advanced",
+            }
+        }
+
+        fn stage_names() -> &'static [&'static str] {
+            &["initial", "advanced"]
+        }
+
+        fn num_stages() -> usize {
+            2
+        }
+
+        fn from_index(index: usize) -> Option<Self> {
+            match index {
+                0 => Some(Self::Initial),
+                1 => Some(Self::Advanced),
+                _ => None,
+            }
+        }
+    }
+
+    fn request_advance(mut next: ResMut<NextState<TestState>>) {
+        next.set(TestState::Advanced);
+    }
+
+    #[derive(Default)]
+    struct RunCount(usize);
+
+    fn request_advance_on_second_run(
+        mut run_count: ResMut<RunCount>,
+        mut next: ResMut<NextState<TestState>>,
+    ) {
+        run_count.0 += 1;
+        if run_count.0 == 2 {
+            next.set(TestState::Advanced);
+        }
+    }
+
+    #[test]
+    fn states_plugin_honors_namespace_assigned_after_registration() {
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin::new(TestState::Initial, PluginPhase::Apply));
+        app.set_schedule_namespace::<PluginPhase>(5);
+        app.add_update_system(request_advance, RequestPhase::Request);
+
+        app.main_mut().organize_systems();
+        app.run();
+
+        assert_eq!(
+            app.get_resource_ref::<CurrentState<TestState>>().unwrap().0,
+            TestState::Advanced,
+            "the state transition must run after the namespace-zero request system"
+        );
+    }
+
+    #[test]
+    fn stage_advance_plugin_honors_namespace_assigned_before_registration() {
+        let mut app = App::new();
+        app.set_schedule_namespace::<PluginPhase>(5);
+        app.add_plugins(StatesPlugin::new(TestState::Initial, PluginPhase::Apply));
+        app.add_plugins(StageAdvancePlugin::<TestState>::new(PluginPhase::Apply));
+        app.add_resource(RunCount::default());
+        app.add_update_system(request_advance_on_second_run, RequestPhase::Request);
+
+        app.prepare();
+        app.run();
+        app.run();
+
+        assert!(
+            app.get_resource_ref::<SchedulerManager>()
+                .unwrap()
+                .advance_requested,
+            "the stage plugin must observe the transition after the namespace-zero request system"
+        );
+    }
 
     struct PluginAInstalled;
 
