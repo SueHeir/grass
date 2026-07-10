@@ -522,13 +522,35 @@ impl Plugin for InputPlugin {
 /// config_path`). Anything the closure adds — plugins, resources,
 /// systems — runs against that pre-seeded `Config`.
 pub trait MultiIoExt {
+    /// Fallibly adds a named sub-App whose `Config` is pre-seeded from this
+    /// App's `[<name>.*]` slice (and optional `config_path`) before `build`
+    /// runs.
+    ///
+    /// Returns [`ConfigError`] when the referenced config file cannot be read
+    /// or parsed. The build closure is not called when constructing that
+    /// slice fails, so programmatic callers can report a startup diagnostic
+    /// without panicking.
+    fn try_add_subapp_with_config<F: FnOnce(&mut App)>(
+        &mut self,
+        name: &str,
+        build: F,
+    ) -> Result<&mut Self, ConfigError>;
+
     /// Adds a named sub-App whose `Config` is pre-seeded from this App's
     /// `[<name>.*]` slice (and optional `config_path`) before `build` runs.
+    ///
+    /// This compatibility convenience wrapper panics if a referenced config
+    /// file cannot be read or parsed. Programmatic callers should use
+    /// [`Self::try_add_subapp_with_config`].
     fn add_subapp_with_config<F: FnOnce(&mut App)>(&mut self, name: &str, build: F) -> &mut Self;
 }
 
 impl MultiIoExt for App {
-    fn add_subapp_with_config<F: FnOnce(&mut App)>(&mut self, name: &str, build: F) -> &mut Self {
+    fn try_add_subapp_with_config<F: FnOnce(&mut App)>(
+        &mut self,
+        name: &str,
+        build: F,
+    ) -> Result<&mut Self, ConfigError> {
         let input_dir = self
             .get_resource_ref::<Input>()
             .and_then(|i| Path::new(&i.filename).parent().map(|p| p.to_path_buf()));
@@ -536,7 +558,7 @@ impl MultiIoExt for App {
             .get_resource_ref::<Config>()
             .map(|c| Config::from_table(c.table.clone()))
             .unwrap_or_else(|| Config::from_str(""));
-        let slice = main_cfg.for_subapp(name, input_dir.as_deref());
+        let slice = main_cfg.try_for_subapp(name, input_dir.as_deref())?;
 
         // Seed `Input` on the sub-App so plugins that resolve relative
         // output paths (DIRT's print/dump systems, `grass_io::DumpPlugin`)
@@ -562,7 +584,12 @@ impl MultiIoExt for App {
 
         use grass_multi::MultiAppExt;
         self.add_subapp(name, sub);
-        self
+        Ok(self)
+    }
+
+    fn add_subapp_with_config<F: FnOnce(&mut App)>(&mut self, name: &str, build: F) -> &mut Self {
+        self.try_add_subapp_with_config(name, build)
+            .unwrap_or_else(|error| panic!("App::add_subapp_with_config: {error}"))
     }
 }
 
@@ -888,6 +915,53 @@ mod tests {
         assert_eq!(k.steps, 50);
         assert_eq!(k.dt, 5e-4);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn try_add_subapp_with_config_reports_missing_referenced_file() {
+        let path = std::env::temp_dir().join("grass_io_missing_subapp_config.toml");
+        let mut parent = App::new();
+        parent.add_resource(Config::from_str(&format!(
+            "[subapps.child]\nconfig_path = \"{}\"\n",
+            path.display()
+        )));
+
+        let err = match parent.try_add_subapp_with_config("child", |_| {
+            panic!("build must not run after config loading fails")
+        }) {
+            Ok(_) => panic!("missing referenced config must be returned as an error"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ConfigError::ReadFile { path: error_path, .. } if error_path == path.to_string_lossy())
+        );
+    }
+
+    #[test]
+    fn try_add_subapp_with_config_reports_malformed_referenced_file() {
+        let dir = std::env::temp_dir().join("grass_io_malformed_subapp_config");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("child.toml");
+        std::fs::write(&path, "[knobs\nsteps = 1").unwrap();
+
+        let mut parent = App::new();
+        parent.add_resource(Config::from_str(&format!(
+            "[subapps.child]\nconfig_path = \"{}\"\n",
+            path.display()
+        )));
+
+        let err = match parent.try_add_subapp_with_config("child", |_| {
+            panic!("build must not run after config loading fails")
+        }) {
+            Ok(_) => panic!("malformed referenced config must be returned as an error"),
+            Err(err) => err,
+        };
+
+        assert!(
+            matches!(err, ConfigError::ParseToml { path: error_path, .. } if error_path == path.to_string_lossy())
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
