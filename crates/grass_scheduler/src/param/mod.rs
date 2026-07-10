@@ -845,7 +845,7 @@ impl SystemGroup {
         phase: impl ScheduleSet,
     ) -> Self {
         self.inner_systems
-            .push((system.into_stored(), StoredPhase::from_typed(phase)));
+            .push((system.into_stored(), StoredPhase::new(phase)));
         self
     }
 
@@ -862,7 +862,7 @@ impl SystemGroup {
                 requires: vec![],
                 condition_name: None,
             },
-            StoredPhase::from_typed(phase),
+            StoredPhase::new(phase),
         ));
         self
     }
@@ -1103,17 +1103,16 @@ pub struct StoredPhase {
 
 impl StoredPhase {
     /// Captures the index, name, and type identity from any [`ScheduleSet`] implementor.
-    pub fn from(phase: impl ScheduleSet) -> Self {
-        Self {
-            schedule_type_id: TypeId::of::<Self>(),
-            namespace: 0,
-            index: phase.to_index(),
-            name: phase.name(),
+    pub fn new<P: ScheduleSet>(phase: P) -> Self {
+        // `StoredPhase` itself implements `ScheduleSet` so plugins can retain
+        // an erased phase between construction and registration. Preserve its
+        // original identity instead of erasing it a second time at that boundary.
+        if TypeId::of::<P>() == TypeId::of::<Self>() {
+            return *(&phase as &dyn Any)
+                .downcast_ref::<Self>()
+                .expect("StoredPhase type identity check must downcast");
         }
-    }
 
-    /// Creates a `StoredPhase` that remembers the concrete phase enum type.
-    pub fn from_typed<P: ScheduleSet>(phase: P) -> Self {
         Self {
             schedule_type_id: TypeId::of::<P>(),
             namespace: 0,

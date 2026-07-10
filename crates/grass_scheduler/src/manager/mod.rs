@@ -963,7 +963,7 @@ impl Scheduler {
         system: impl IntoScheduledSystem<M>,
         schedule_set: impl ScheduleSet,
     ) {
-        let mut phase = StoredPhase::from_typed(schedule_set);
+        let mut phase = StoredPhase::new(schedule_set);
         if let Some(&ns) = self.phase_namespaces.get(&phase.schedule_type_id) {
             phase.namespace = ns;
         }
@@ -976,7 +976,7 @@ impl Scheduler {
         system: impl IntoScheduledSystem<M>,
         schedule_set: impl ScheduleSet,
     ) {
-        let mut phase = StoredPhase::from_typed(schedule_set);
+        let mut phase = StoredPhase::new(schedule_set);
         if let Some(&ns) = self.phase_namespaces.get(&phase.schedule_type_id) {
             phase.namespace = ns;
         }
