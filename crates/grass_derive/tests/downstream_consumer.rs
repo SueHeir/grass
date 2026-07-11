@@ -100,9 +100,8 @@ fn main() {
         String::from_utf8_lossy(&custom_default.stderr)
     );
 
-    // `Default` alone does not make a field optional to Serde. The generated
-    // sample must keep it as a placeholder and preserve Serde's error when it
-    // is omitted.
+    // `Default` alone does not make a field optional to Serde. The field is
+    // still marked required, but its typed value makes the starter TOML valid.
     fs::write(
         temp.join("src/main.rs"),
         r##"use grass_derive::ConfigDescription;
@@ -118,10 +117,11 @@ fn main() {
     let field = &description.fields[0];
     assert!(field.required);
     assert_eq!(field.default, None);
+    assert_eq!(field.example.as_deref(), Some("\"\""));
     let sample = description.render_toml();
-    assert!(sample.contains("# required_name = <required string>"));
-    assert!(!sample.contains("\nrequired_name ="));
-    assert!(Config::from_str(&sample).try_section::<ProbeConfig>("probe").is_err());
+    assert!(sample.contains("required_name = \"\""));
+    assert!(Config::from_str(&sample).try_section::<ProbeConfig>("probe").is_ok());
+    assert!(Config::from_str("[probe]\n").try_section::<ProbeConfig>("probe").is_err());
 }
 "##,
     )

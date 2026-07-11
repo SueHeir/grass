@@ -281,18 +281,18 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
         let source = quote_spanned! {field.span()=> concat!(file!(), ":", #line, ":", stringify!(#name), ".", stringify!(#ident)).to_string() };
         if let Some(function) = serde_default {
             default_overrides.push(quote! {
-                defaults.insert(
-                    #field_name.to_string(),
-                    ::grass_io::__private::toml::Value::try_from(#function())
+                let parser_default = ::grass_io::__private::toml::Value::try_from(#function())
                         .expect("serde default must serialize to TOML")
-                        .to_string(),
-                );
+                        .to_string();
+                defaults.insert(#field_name.to_string(), parser_default.clone());
+                examples.insert(#field_name.to_string(), parser_default);
             });
         }
         generated_fields.push(quote! {
             ::grass_io::__private::grass_app::ConfigFieldDescription {
                 name: #field_name.to_string(), ty: #ty.to_string(),
-                default: defaults.get(#field_name).cloned(), required: #required,
+                default: defaults.get(#field_name).cloned(),
+                example: examples.get(#field_name).cloned(), required: #required,
                 choices: <#field_ty as ::grass_io::ConfigChoices>::choices(), description: #description.to_string(), source: #source,
             }
         });
@@ -310,6 +310,10 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
                     // omission.
                     .filter(|(key, _)| [#(#optional_field_names),*].contains(&key.as_str()))
                     .map(|(key, value)| (key, value.to_string())).collect();
+                let mut examples: ::std::collections::BTreeMap<::std::string::String, ::std::string::String> = ::grass_io::__private::toml::to_string(&Self::default())
+                    .expect("default config must serialize to TOML")
+                    .parse::<::grass_io::__private::toml::Table>().expect("serialized default must be a TOML table")
+                    .into_iter().map(|(key, value)| (key, value.to_string())).collect();
                 #(#default_overrides)*
                 ::grass_io::__private::grass_app::ConfigDescription {
                     section: #section.to_string(), array_table: #array_table,

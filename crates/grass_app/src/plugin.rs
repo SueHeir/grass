@@ -84,6 +84,12 @@ pub struct ConfigFieldDescription {
     pub ty: String,
     /// TOML expression representing the parsed default, if optional.
     pub default: Option<String>,
+    /// A concrete TOML expression from the typed Rust `Default` value.
+    ///
+    /// This is deliberately separate from [`Self::default`]: Serde can require
+    /// a key even when the Rust type has a useful value to put in a starter
+    /// file.  Generated examples must remain parseable in that case.
+    pub example: Option<String>,
     /// Whether this field must be supplied by the user.
     pub required: bool,
     /// Allowed symbolic values, when this field is an enum.
@@ -117,7 +123,7 @@ impl ConfigDescription {
             out.push_str(&field.ty);
             out.push_str(". ");
             if field.required {
-                out.push_str("Required.");
+                out.push_str("Required; example value comes from Rust Default.");
             } else {
                 out.push_str("Optional; default: ");
                 out.push_str(field.default.as_deref().unwrap_or("not set (None)"));
@@ -131,17 +137,11 @@ impl ConfigDescription {
             out.push_str(" Source: ");
             out.push_str(&field.source);
             out.push('\n');
-            if let Some(default) = &field.default {
+            if let Some(example) = &field.example {
                 out.push_str(&field.name);
                 out.push_str(" = ");
-                out.push_str(&default);
+                out.push_str(&example);
                 out.push('\n');
-            } else if field.required {
-                out.push_str("# ");
-                out.push_str(&field.name);
-                out.push_str(" = <required ");
-                out.push_str(&field.ty);
-                out.push_str(">\n");
             }
         }
         out

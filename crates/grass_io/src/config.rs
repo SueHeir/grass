@@ -559,30 +559,18 @@ mod described_config_tests {
             .collect();
         let typed_fields: std::collections::BTreeSet<_> =
             typed.keys().map(String::as_str).collect();
-        let unset_fields: std::collections::BTreeSet<_> = description
-            .fields
-            .iter()
-            .filter(|field| field.default.is_none())
-            .map(|field| field.name.as_str())
-            .collect();
-        assert_eq!(
-            described,
-            typed_fields.union(&unset_fields).copied().collect()
-        );
+        // `Option::None` is absent from the serialized typed value, but it is
+        // still an advertised optional parser field. Every serialized field
+        // must have an emitted example; metadata may additionally describe
+        // such unset optional fields.
+        assert!(typed_fields.is_subset(&described));
 
         for (name, value) in &typed {
             assert_eq!(generated.get(name), Some(value), "default drift for {name}");
             assert!(description
                 .fields
                 .iter()
-                .any(|field| field.name == *name && field.default.is_some()));
-        }
-        for field in description
-            .fields
-            .iter()
-            .filter(|field| field.default.is_none())
-        {
-            assert!(!generated.contains_key(&field.name));
+                .any(|field| field.name == *name && field.example.is_some()));
         }
     }
 
