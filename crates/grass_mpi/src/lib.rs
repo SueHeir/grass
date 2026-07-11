@@ -77,10 +77,22 @@ use std::ops::{Deref, DerefMut};
 /// custom communication backend implements [`CommBackend`] explicitly at the
 /// crate root; it is intentionally not hidden behind a broader convenience
 /// import.
+///
+/// The prelude does not put [`CommBackend`] in scope. This compile-fail example
+/// is also a regression test for that boundary: an application that only needs
+/// the serial resource can use the prelude, while a library that calls the
+/// backend trait must name that contract explicitly.
+///
+/// ```compile_fail
+/// use grass_mpi::prelude::*;
+///
+/// let comm = SingleProcessComm::new();
+/// let _rank = comm.rank(); // `CommBackend` is not imported by the prelude.
+/// ```
 pub mod prelude {
     #[cfg(feature = "mpi_backend")]
     pub use crate::MpiCommBackend;
-    pub use crate::{CommBackend, CommResource, SingleProcessComm};
+    pub use crate::{CommResource, SingleProcessComm};
 }
 
 #[cfg(feature = "mpi_backend")]
