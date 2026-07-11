@@ -37,7 +37,7 @@ check:
 
 ```bash
 cargo run --example oscillator_demo
-python3 examples/oscillator_demo/sweep.py
+$BENCH_PYTHON examples/oscillator_demo/sweep.py
 ```
 
 Expected tail of the first command:
@@ -247,7 +247,7 @@ in-memory channels:
 ```bash
 cargo test --example oscillator_mpmd_local
 cargo run --example oscillator_mpmd_local
-python3 examples/oscillator_mpmd/sweep.py
+$BENCH_PYTHON examples/oscillator_mpmd/sweep.py
 ```
 
 Expected final line:
