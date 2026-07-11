@@ -22,3 +22,6 @@ render in Gitea:
   [`plots/typed_system_labels_matrix.png`](typed_system_labels/plots/typed_system_labels_matrix.png),
   checking typed ordering keys, required-target diagnostics, optional ordering, and legacy string
   compatibility.
+- [`fallible_lifecycle`](fallible_lifecycle/README.md) embeds
+  [`plots/fallible_lifecycle_matrix.png`](fallible_lifecycle/plots/fallible_lifecycle_matrix.png),
+  checking plugin-build and setup failure propagation, cleanup, and legacy compatibility.

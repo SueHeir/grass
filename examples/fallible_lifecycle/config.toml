@@ -1,0 +1,6 @@
+# Declarative validation matrix for the fallible app lifecycle example.
+[checks]
+plugin_build_failure = true
+setup_failure = true
+cleanup = true
+legacy_compatibility = true

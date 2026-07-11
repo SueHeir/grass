@@ -20,7 +20,7 @@ use std::{
     fmt,
 };
 
-use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet};
+use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet, StoredPhase};
 
 use crate::{CapabilityId, Plugin, Plugins, SubApp, SubApps};
 
@@ -58,6 +58,32 @@ pub struct App {
     cleanup_fns: Vec<Box<dyn FnOnce()>>,
     #[allow(clippy::type_complexity)]
     cleanup_with_app_fns: Vec<Box<dyn FnOnce(&mut App)>>,
+    fallible_setup_systems: Vec<FallibleSetupEntry>,
+}
+
+/// A setup callback that may return a structured [`AppError`].
+///
+/// Implement this trait for stateful setup work, or pass a closure directly to
+/// [`App::add_fallible_setup_system`]. It deliberately receives the app rather
+/// than scheduler internals so it remains useful to every simulation substrate.
+pub trait FallibleSetupSystem: 'static {
+    /// Executes this one-shot setup operation.
+    fn run(&mut self, app: &mut App) -> Result<(), AppError>;
+}
+
+impl<F> FallibleSetupSystem for F
+where
+    F: FnMut(&mut App) -> Result<(), AppError> + 'static,
+{
+    fn run(&mut self, app: &mut App) -> Result<(), AppError> {
+        self(app)
+    }
+}
+
+struct FallibleSetupEntry {
+    name: String,
+    phase: StoredPhase,
+    system: Box<dyn FallibleSetupSystem>,
 }
 
 impl Default for App {
@@ -79,6 +105,7 @@ impl App {
             },
             cleanup_fns: Vec::new(),
             cleanup_with_app_fns: Vec::new(),
+            fallible_setup_systems: Vec::new(),
         }
     }
 
@@ -122,18 +149,23 @@ impl App {
 
         self.validate_dependencies(&*plugin)?;
 
-        // Record the plugin's TypeId for TypeId-based dependency checks.
+        // Record the plugin name before build so nested registrations can see it.
+        // Remove it again on failure, so a failed plugin is never considered
+        // initialized by a later retry or outer runner.
         let plugin_type_id = (*plugin).type_id();
-        self.main_mut().plugin_type_ids.insert(plugin_type_id);
-
-        // Record the plugin name *before* build so that nested add_plugins calls
         // within build() can see this plugin as registered (prevents false-positive
         // dependency errors when a plugin group adds a dependency and its dependent
         // in sequence).
         let plugin_name = plugin.name().to_string();
+        self.main_mut().plugin_type_ids.insert(plugin_type_id);
         self.main_mut().plugin_names.insert(plugin_name.clone());
 
-        plugin.build(self);
+        if let Err(error) = plugin.try_build(self) {
+            self.main_mut().plugin_type_ids.remove(&plugin_type_id);
+            self.main_mut().plugin_names.remove(&plugin_name);
+            self.run_cleanup();
+            return Err(error.with_plugin_context(plugin_name));
+        }
 
         self.collect_config_snippet(&*plugin);
 
@@ -352,6 +384,29 @@ impl App {
         self
     }
 
+    /// Fallibly executes setup work, stopping at the first failure.
+    ///
+    /// Legacy setup systems run through the scheduler unchanged. Fallible
+    /// setup callbacks are ordered by their [`ScheduleSet`] phase and run
+    /// before that legacy pass. On error, no later fallible setup callback,
+    /// update system, or lifecycle step runs; registered cleanup is drained.
+    pub fn try_setup(&mut self) -> Result<&mut Self, AppError> {
+        self.fallible_setup_systems
+            .sort_by_key(|entry| entry.phase.sort_key());
+        let mut systems = std::mem::take(&mut self.fallible_setup_systems);
+        for index in 0..systems.len() {
+            if let Err(error) = systems[index].system.run(self) {
+                let name = systems[index].name.clone();
+                self.fallible_setup_systems = systems;
+                self.run_cleanup();
+                return Err(error.with_setup_context(name));
+            }
+        }
+        self.fallible_setup_systems = systems;
+        self.sub_apps.main.setup();
+        Ok(self)
+    }
+
     /// Runs the main simulation loop (all update systems each timestep).
     ///
     /// Called automatically by [`start`](Self::start).
@@ -367,6 +422,28 @@ impl App {
         schedule_set: impl ScheduleSet,
     ) -> &mut Self {
         self.sub_apps.main.add_setup_system(system, schedule_set);
+        self
+    }
+
+    /// Registers a one-shot setup callback that can fail without panicking.
+    ///
+    /// The callback is sorted by `schedule_set` relative to other fallible
+    /// setup callbacks. Use [`try_start`](Self::try_start) or
+    /// [`try_prepare`](Self::try_prepare) to receive its [`AppError`].
+    pub fn add_fallible_setup_system<F>(
+        &mut self,
+        name: impl Into<String>,
+        system: F,
+        schedule_set: impl ScheduleSet,
+    ) -> &mut Self
+    where
+        F: FallibleSetupSystem,
+    {
+        self.fallible_setup_systems.push(FallibleSetupEntry {
+            name: name.into(),
+            phase: StoredPhase::new(schedule_set),
+            system: Box::new(system),
+        });
         self
     }
 
@@ -451,7 +528,14 @@ impl App {
     /// required capability tag has no registered provider.
     pub fn try_prepare(&mut self) -> Result<&mut Self, AppError> {
         self.validate_capability_contracts_result()?;
-        self.sub_apps.main.prepare();
+        if self.fallible_setup_systems.is_empty() {
+            self.sub_apps.main.prepare();
+            return Ok(self);
+        }
+        self.sub_apps.main.add_scheduler_manager();
+        self.sub_apps.main.organize_systems();
+        self.try_setup()?;
+        self.sub_apps.main.set_running();
         Ok(self)
     }
 
@@ -507,14 +591,9 @@ impl App {
     /// config snippets to stdout and exits. Otherwise, runs
     /// [`organize_systems`](Self::organize_systems) → setup → run → cleanup.
     pub fn start(&mut self) {
-        if self.get_resource_ref::<GenerateConfigFlag>().is_some() {
-            self.print_generated_config();
-            self.run_cleanup();
-            return;
+        if let Err(error) = self.try_start() {
+            error.panic_with_context();
         }
-        self.validate_capability_contracts();
-        self.sub_apps.main.start();
-        self.run_cleanup();
     }
 
     /// Fallible form of [`start`](Self::start).
@@ -529,7 +608,16 @@ impl App {
             return Ok(());
         }
         self.validate_capability_contracts_result()?;
-        self.sub_apps.main.start();
+        if self.fallible_setup_systems.is_empty() {
+            self.sub_apps.main.start();
+            self.run_cleanup();
+            return Ok(());
+        }
+        self.sub_apps.main.add_scheduler_manager();
+        self.sub_apps.main.organize_systems();
+        self.try_setup()?;
+        self.sub_apps.main.set_running();
+        self.sub_apps.main.run_until_done();
         self.run_cleanup();
         Ok(())
     }
@@ -597,6 +685,20 @@ impl App {
 /// Error returned by fallible app assembly and lifecycle validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppError {
+    /// A plugin's fallible construction or preflight hook failed.
+    PluginBuild {
+        /// The plugin that failed.
+        plugin_name: String,
+        /// Stable, caller-provided failure detail.
+        message: String,
+    },
+    /// A fallible one-shot setup callback failed.
+    SetupSystem {
+        /// Registered setup callback name.
+        system_name: String,
+        /// Stable, caller-provided failure detail.
+        message: String,
+    },
     /// A unique plugin was registered more than once.
     DuplicatePlugin {
         /// The duplicate plugin's human-readable name.
@@ -617,10 +719,51 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// Creates an application error from plugin or setup preflight detail.
+    pub fn message(message: impl Into<String>) -> Self {
+        Self::PluginBuild {
+            plugin_name: String::new(),
+            message: message.into(),
+        }
+    }
+
+    fn with_plugin_context(self, plugin_name: String) -> Self {
+        match self {
+            Self::PluginBuild { message, .. } => Self::PluginBuild {
+                plugin_name,
+                message,
+            },
+            other => other,
+        }
+    }
+
+    fn with_setup_context(self, system_name: String) -> Self {
+        match self {
+            Self::PluginBuild { message, .. } | Self::SetupSystem { message, .. } => {
+                Self::SetupSystem {
+                    system_name,
+                    message,
+                }
+            }
+            other => other,
+        }
+    }
     /// Panic with the same diagnostic style used by [`App::add_plugins`].
     #[track_caller]
     pub(crate) fn panic_with_context(self) -> ! {
         match self {
+            AppError::PluginBuild {
+                plugin_name,
+                message,
+            } => {
+                panic!("Plugin `{plugin_name}` failed to build: {message}")
+            }
+            AppError::SetupSystem {
+                system_name,
+                message,
+            } => {
+                panic!("Setup system `{system_name}` failed: {message}")
+            }
             AppError::DuplicatePlugin { plugin_name } => {
                 panic!("Error adding plugin {plugin_name}: plugin was already added in application")
             }
@@ -667,6 +810,10 @@ impl AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            AppError::PluginBuild { plugin_name, message } =>
+                write!(f, "Plugin `{plugin_name}` failed to build: {message}"),
+            AppError::SetupSystem { system_name, message } =>
+                write!(f, "Setup system `{system_name}` failed: {message}"),
             AppError::DuplicatePlugin { plugin_name } => write!(
                 f,
                 "Error adding plugin {plugin_name}: plugin was already added in application"
@@ -812,10 +959,15 @@ fn format_missing_capabilities(missing: &[MissingCapability]) -> String {
 mod tests {
     use super::*;
     use crate::{
-        dependency_names, type_ids, CapabilityId, Plugin, StageAdvancePlugin, StatesPlugin,
+        dependency_names, type_ids, CapabilityId, Plugin, ScheduleSetupSet, StageAdvancePlugin,
+        StatesPlugin,
     };
     use grass_scheduler::{
         CurrentState, NextState, ResMut, ScheduleSet, SchedulerManager, StageName,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
     };
 
     #[derive(Clone, Copy, Debug)]
@@ -1267,6 +1419,131 @@ mod tests {
         let err = app.try_start().err().unwrap();
 
         assert!(matches!(err, AppError::MissingCapabilities { .. }));
+    }
+
+    struct FailingBuildPlugin {
+        cleanup_count: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for FailingBuildPlugin {
+        fn build(&self, _app: &mut App) {}
+
+        fn try_build(&self, app: &mut App) -> Result<(), AppError> {
+            let cleanup_count = Arc::clone(&self.cleanup_count);
+            app.add_cleanup_with_app(move |_app| {
+                cleanup_count.fetch_add(1, Ordering::SeqCst);
+            });
+            Err(AppError::message("configuration rejected"))
+        }
+    }
+
+    struct MustNotBuild(Arc<AtomicUsize>);
+    impl Plugin for MustNotBuild {
+        fn build(&self, _app: &mut App) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct FailingBuildGroup {
+        cleanup_count: Arc<AtomicUsize>,
+        later_builds: Arc<AtomicUsize>,
+    }
+
+    impl crate::PluginGroup for FailingBuildGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .add(FailingBuildPlugin {
+                    cleanup_count: self.cleanup_count,
+                })
+                .add(MustNotBuild(self.later_builds))
+        }
+    }
+
+    #[test]
+    fn try_add_plugins_returns_build_error_stops_group_and_cleans_up() {
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let later_builds = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+
+        let Err(err) = app.try_add_plugins(FailingBuildGroup {
+            cleanup_count: Arc::clone(&cleanup_count),
+            later_builds: Arc::clone(&later_builds),
+        }) else {
+            panic!("failing plugin group must return an error");
+        };
+
+        assert!(matches!(err, AppError::PluginBuild { .. }));
+        assert!(err.to_string().contains("FailingBuildPlugin"));
+        assert_eq!(later_builds.load(Ordering::SeqCst), 0);
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        assert!(!app
+            .main()
+            .plugin_names
+            .iter()
+            .any(|n| n.contains("FailingBuildPlugin")));
+    }
+
+    #[test]
+    fn fallible_setup_stops_later_setup_and_runs_cleanup() {
+        let first = Arc::new(AtomicUsize::new(0));
+        let later = Arc::new(AtomicUsize::new(0));
+        let cleanup = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+        let cleanup_for_callback = Arc::clone(&cleanup);
+        app.add_cleanup_with_app(move |_app| {
+            cleanup_for_callback.fetch_add(1, Ordering::SeqCst);
+        });
+        let first_for_callback = Arc::clone(&first);
+        app.add_fallible_setup_system(
+            "check-input",
+            move |_app: &mut App| {
+                first_for_callback.fetch_add(1, Ordering::SeqCst);
+                Err(AppError::message("input is invalid"))
+            },
+            ScheduleSetupSet::Setup,
+        );
+        let later_for_callback = Arc::clone(&later);
+        app.add_fallible_setup_system(
+            "must-not-run",
+            move |_app: &mut App| {
+                later_for_callback.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            ScheduleSetupSet::PostSetup,
+        );
+
+        let Err(err) = app.try_prepare() else {
+            panic!("failing setup must return an error");
+        };
+
+        assert!(matches!(err, AppError::SetupSystem { .. }));
+        assert!(err.to_string().contains("check-input"));
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        assert_eq!(later.load(Ordering::SeqCst), 0);
+        assert_eq!(cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[derive(Default)]
+    struct LegacySetupRan(bool);
+
+    fn legacy_setup(mut value: ResMut<LegacySetupRan>) {
+        value.0 = true;
+    }
+
+    #[test]
+    fn legacy_plugins_and_setup_systems_remain_compatible() {
+        let mut app = App::new();
+        app.add_resource(LegacySetupRan::default());
+        app.add_setup_system(legacy_setup, ScheduleSetupSet::Setup);
+        app.add_fallible_setup_system(
+            "new-setup",
+            |_app: &mut App| Ok(()),
+            ScheduleSetupSet::PreSetup,
+        );
+
+        app.try_prepare().unwrap();
+
+        assert!(app.get_resource_ref::<LegacySetupRan>().unwrap().0);
     }
 
     #[test]

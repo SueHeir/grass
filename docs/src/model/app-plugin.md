@@ -291,6 +291,36 @@ A few patterns recur when writing plugins:
   declare the outer plugin as a dependency — the parent already counts as
   registered.
 
+## Fallible construction and setup
+
+Existing plugins remain source-compatible: `Plugin::build` and ordinary
+`add_setup_system` registrations still work. A plugin which needs to reject a
+configuration or complete a preflight check can override `Plugin::try_build`;
+the default simply calls `build` and returns `Ok(())`. Add the plugin with
+`try_add_plugins` to receive `AppError::PluginBuild` instead of a panic.
+
+One-shot setup has the matching opt-in path. Register a closure (or a type
+implementing `FallibleSetupSystem`) with `add_fallible_setup_system`, then drive
+the lifecycle with `try_prepare` or `try_start`:
+
+```rust,ignore
+app.add_fallible_setup_system(
+    "validate-input",
+    |app: &mut App| validate_input(app).map_err(AppError::message),
+    ScheduleSetupSet::PreSetup,
+);
+app.try_start()?;
+```
+
+Fallible setup callbacks are phase-sorted with each other and run before the
+legacy scheduler setup pass. The first error is returned as
+`AppError::SetupSystem`; later fallible setup, update execution, and lifecycle
+progress are skipped. `App` drains registered cleanup callbacks on plugin-build
+or fallible-setup failure, so an outer runner can inspect the structured error
+and coordinate its own shutdown (including rank-wide termination) without
+introducing MPI into `grass_app`. Plugin authors should make cleanup safe for
+resources allocated before a fallible hook returns an error.
+
 ## App internals: `SubApp` and `SubApps`
 
 `App::main()` / `App::main_mut()` hand you a `SubApp` — the scheduler plus its

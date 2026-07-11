@@ -35,6 +35,14 @@ contracts; the string hooks remain supported for staged migration. Use
 `App::plugin_contracts()` to obtain a data-only contract snapshot for generated
 docs and architecture diagrams.
 
+For fallible preflight, override `Plugin::try_build`; its default calls legacy
+`build`, so existing plugins need no migration. `try_add_plugins` returns
+`AppError::PluginBuild` and drains cleanup on failure. Register fallible setup
+with `add_fallible_setup_system(name, callback, phase)` and use `try_prepare` or
+`try_start`: callbacks stop at the first `AppError::SetupSystem`, no update pass
+runs, and cleanup is drained. This is deliberately MPI-free; an outer runner
+can use the error to coordinate termination across ranks.
+
 ## Example shape
 
 ```rust
