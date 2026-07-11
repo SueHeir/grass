@@ -198,6 +198,7 @@ pub mod prelude {
         SystemGroupInfo,
         SystemKey,
         SystemLabel,
+        SystemParam,
     };
     // Proc-macro derive (re-exported so users get it via the prelude).
     pub use grass_derive::ScheduleSet;
@@ -211,7 +212,8 @@ pub mod prelude {
 )]
 mod tests {
     use super::*;
-    use std::any::TypeId;
+    use std::any::{Any, TypeId};
+    use std::cell::RefCell;
     use std::collections::HashMap;
 
     // Test schedule that mirrors the standard Verlet phase names (for warning tests)
@@ -290,7 +292,8 @@ mod tests {
         let mut index = HashMap::new();
         index.insert(TypeId::of::<A>(), 7usize);
         index.insert(TypeId::of::<B>(), 3usize);
-        let missing = s.prepare(&index);
+        let resources = Vec::new();
+        let missing = s.prepare(&index, &resources);
         assert!(missing.is_empty());
         let acc = s.accesses();
         // Local contributes no tracked access; A reads slot 7, B writes slot 3.
@@ -306,15 +309,16 @@ mod tests {
         let mut s = sys.into_system();
         // Missing optional: no validation error, and nothing recorded (idx == MAX).
         let empty = HashMap::new();
-        assert!(s.prepare(&empty).is_empty());
+        let resources = Vec::new();
+        assert!(s.prepare(&empty, &resources).is_empty());
         assert!(s.accesses().is_empty());
         // Present: recorded as a Write at its slot.
         let mut index = HashMap::new();
         index.insert(TypeId::of::<C>(), 1usize);
-        s.prepare(&index);
+        s.prepare(&index, &resources);
         assert_eq!(s.accesses(), &[(1, AccessKind::Write)]);
         // Re-prepare must not duplicate (accesses cleared each time).
-        s.prepare(&index);
+        s.prepare(&index, &resources);
         assert_eq!(s.accesses(), &[(1, AccessKind::Write)]);
     }
 
@@ -347,6 +351,43 @@ mod tests {
             .expect("BorrowLog should be registered");
         let guard = cell.borrow();
         assert_eq!(guard.downcast_ref::<BorrowLog>().unwrap().0, vec![7]);
+    }
+
+    #[test]
+    #[should_panic(expected = "composite parameter validation failed")]
+    fn composite_system_param_validation_runs_during_organization() {
+        struct Probe(bool);
+        struct Validated<'a>(Res<'a, Probe>);
+
+        impl SystemParam for Validated<'_> {
+            type Item<'new> = Validated<'new>;
+            fn retrieve<'r>(
+                resources: &'r [RefCell<Box<dyn Any>>],
+                index: usize,
+                locals: *mut HashMap<TypeId, Box<dyn Any>>,
+            ) -> Self::Item<'r> {
+                Validated(Res::<Probe>::retrieve(resources, index, locals))
+            }
+            fn resource_type_id() -> Option<(TypeId, &'static str)> {
+                Some((TypeId::of::<Probe>(), std::any::type_name::<Probe>()))
+            }
+            fn access_kind() -> AccessKind {
+                AccessKind::Read
+            }
+            fn validate(resources: &[RefCell<Box<dyn Any>>], index: usize) -> Vec<String> {
+                let guard = resources[index].borrow();
+                (!guard.downcast_ref::<Probe>().unwrap().0)
+                    .then(|| "composite parameter validation failed".to_string())
+                    .into_iter()
+                    .collect()
+            }
+        }
+
+        fn system(_probe: Validated<'_>) {}
+        let mut scheduler = Scheduler::default();
+        scheduler.add_resource(Probe(false));
+        scheduler.add_update_system(system, TestSchedule::Force);
+        scheduler.organize_systems();
     }
 
     #[test]

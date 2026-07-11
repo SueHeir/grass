@@ -1,0 +1,4 @@
+# Declarative expectations for the composite-SystemParam preparation matrix.
+[checks]
+valid_nested_contract = "PASS"
+invalid_nested_contract = "PASS"

@@ -32,7 +32,7 @@ macro_rules! impl_system {
                 call_inner(&mut self.f, $($params),*)
             }
 
-            fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
+            fn prepare(&mut self, index: &HashMap<TypeId, usize>, resources: &[RefCell<Box<dyn Any>>]) -> Vec<String> {
                 self.indices.clear();
                 self.accesses.clear();
                 let mut _missing = Vec::new();
@@ -45,6 +45,9 @@ macro_rules! impl_system {
                         if let Some((_, name)) = _type_info {
                             _missing.push(name.to_string());
                         }
+                    }
+                    if _idx != usize::MAX {
+                        _missing.extend(<$params as SystemParam>::validate(resources, _idx));
                     }
                     let _kind = <$params as SystemParam>::access_kind();
                     if _kind != AccessKind::None && _idx != usize::MAX {
@@ -200,6 +203,14 @@ pub trait SystemParam {
     /// and their `Option` wrappers override it.
     fn access_kind() -> AccessKind {
         AccessKind::None
+    }
+
+    /// Performs parameter-specific validation once resources have been resolved.
+    ///
+    /// Composite parameters can use this hook to validate state nested inside a
+    /// resource, while ordinary resource parameters retain the default no-op.
+    fn validate(_resources: &[RefCell<Box<dyn Any>>], _index: usize) -> Vec<String> {
+        Vec::new()
     }
 }
 // ANCHOR_END: SystemParam
@@ -426,7 +437,11 @@ pub trait System {
     /// Resolves resource indices from the type-id map. Returns names of any missing resources.
     ///
     /// Called once during [`crate::Scheduler::organize_systems`] before the run loop begins.
-    fn prepare(&mut self, _index: &HashMap<TypeId, usize>) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        _index: &HashMap<TypeId, usize>,
+        _resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         Vec::new()
     }
 
@@ -693,9 +708,13 @@ impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
             self.system.run(resources);
         }
     }
-    fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        index: &HashMap<TypeId, usize>,
+        resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         let mut missing = self.condition.prepare(index);
-        missing.extend(self.system.prepare(index));
+        missing.extend(self.system.prepare(index, resources));
         missing
     }
     fn name(&self) -> &str {
@@ -966,7 +985,11 @@ impl SystemGroup {
 }
 
 impl System for SystemGroup {
-    fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        index: &HashMap<TypeId, usize>,
+        resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         // Sort by (namespace, index)
         self.inner_systems
             .sort_by_key(|(_, phase)| phase.sort_key());
@@ -1002,7 +1025,7 @@ impl System for SystemGroup {
         // Prepare all inner systems
         let mut missing = Vec::new();
         for (entry, _) in &mut self.inner_systems {
-            missing.extend(entry.system.prepare(index));
+            missing.extend(entry.system.prepare(index, resources));
         }
 
         // Prepare loop condition
