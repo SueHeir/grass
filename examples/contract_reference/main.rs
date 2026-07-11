@@ -5,7 +5,11 @@ use grass_io::{DumpPlugin, RawFrameWriter, RunPlugin, SimClockPlugin, TermOutPlu
 use oscillator_demo::OscillatorPlugin;
 
 const SOURCE: &str = "https://github.com/SueHeir/grass/blob/main";
-const REPOSITORY: &str = "https://github.com/SueHeir/grass";
+// `oscillator_demo` is introduced by this branch and is not in the public
+// GitHub mirror yet.  Use Gitea's canonical source-page URL for its precise
+// source links rather than substituting an unrelated repository-root link.
+const OSCILLATOR_SOURCE: &str =
+    "http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference";
 
 fn list(values: &[String]) -> String {
     if values.is_empty() {
@@ -19,11 +23,8 @@ fn source_link(source: &str) -> String {
     let mut parts = source.splitn(3, ':');
     let path = parts.next().unwrap_or(source);
     let line = parts.next().unwrap_or("");
-    // `oscillator_demo` is maintained in this repository but is not yet part
-    // of its GitHub mirror.  Its repository link remains live rather than
-    // emitting a precise-looking dead URL for generated documentation.
     let url = if path.starts_with("crates/oscillator_demo/") {
-        REPOSITORY.to_string()
+        format!("{OSCILLATOR_SOURCE}/{path}#L{line}")
     } else {
         format!("{SOURCE}/{path}#L{line}")
     };
@@ -47,7 +48,7 @@ fn render_plugin(out: &mut String, plugin: &PluginContract) {
     out.push_str(&format!("## `{}`\n\n", plugin.plugin_name));
     let source = plugin_source(&plugin.plugin_name);
     let source_url = if source.starts_with("crates/oscillator_demo/") {
-        REPOSITORY.to_string()
+        format!("{OSCILLATOR_SOURCE}/{source}")
     } else {
         format!("{SOURCE}/{source}")
     };
@@ -114,5 +115,5 @@ fn main() {
     for plugin in &contracts.plugins {
         render_plugin(&mut out, plugin);
     }
-    print!("{out}");
+    println!("{}", out.trim_end());
 }
