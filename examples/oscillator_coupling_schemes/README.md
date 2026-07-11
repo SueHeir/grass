@@ -7,8 +7,7 @@ adaptive Picard retry.
 
 ```bash
 source ~/projects/.build-env
-cargo run --example oscillator_coupling_schemes
-$BENCH_PYTHON examples/oscillator_coupling_schemes/sweep.py
+$BENCH_PYTHON examples/oscillator_coupling_schemes/showcase.py
 ```
 
 The deliberately strong interface spring (`k_c=2000`) gives the nominal
@@ -26,10 +25,21 @@ starts at `h=0.02`, rejects that attempt because its residual remains above the
 same configured tolerance after 14 iterations, restores both solvers, and
 accepts `h=0.01`; it has no separate timestep acceptance gate.
 
-`sweep.py` independently reconstructs the full four-state linear ODE and uses
-SciPy's matrix exponential to validate the executable's reported error. It
-also runs the executable twice and requires byte-identical output/fingerprints.
-The exact-mode derivation, source, and limitations are in
+`showcase.py` is the reproducible evidence command. It runs every coupling
+policy, the two-thread `LocalTransport` replay, and the two-rank MPI launch
+when `mpirun` is available. It writes the executable's complete macro-step
+history to [data/coupling_histories.csv](data/coupling_histories.csv), including
+trajectory state, interface residual, inner iterations, accepted/rejected dt,
+and energy ratio. The scheme sweep independently reconstructs the full
+four-state linear ODE with SciPy's matrix exponential; the MPMD sweep compares
+the complete local and MPI state vectors with its separately implemented
+recurrence. The exact-mode derivation, source, and limitations are in
 [data/reference.md](data/reference.md).
 
 ![Measured relative error to the independent matrix-exponential reference. Green lines show the 0.25 converged-policy budget and 0.50 CSS-lag exposure threshold; this run passes.](plots/coupling_schemes.png)
+
+![Coupling trajectories, energy, residual history, Picard work, and accepted dt from the executable.](plots/coupling_histories.png)
+
+The history figure is an execution record rather than a gate graphic: it shows
+the transient behavior that the independent terminal-state and full-trajectory
+checks evaluate.
