@@ -28,11 +28,12 @@
 //! );
 //! ```
 
-use grass_app::{App, Plugin};
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{Res, ResMut};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::Config;
+use crate::{Config, DescribedConfig};
 
 // ─── Resource ───────────────────────────────────────────────────────────────
 
@@ -51,8 +52,12 @@ pub struct SimClock {
 
 /// `[clock]` section of the input TOML — optional starting values for
 /// restart scenarios. Both default to zero.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(
+    section = "clock",
+    narrative = "Simulation step + time accumulator. Set non-zero values to resume a saved state."
+)]
 pub struct ClockConfig {
     /// Starting step count. Default: 0.
     #[serde(default)]
@@ -71,22 +76,15 @@ pub struct SimClockPlugin;
 
 impl Plugin for SimClockPlugin {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<ClockConfig>(app, "clock");
+        let cfg = Config::load_described::<ClockConfig>(app);
         app.add_resource(SimClock {
             step: cfg.start_step,
             time: cfg.start_time,
         });
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# [clock] — simulation step + time accumulator. Both default to 0;
-# set non-zero starting values to resume from a saved state.
-[clock]
-start_step = 0
-start_time = 0.0
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(ClockConfig::description())
     }
 }
 

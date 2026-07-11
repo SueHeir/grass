@@ -1,7 +1,7 @@
 //! Pedagogical oscillator composition: direct typed coupling and port coupling.
 
 use grass_app::prelude::*;
-use grass_io::{Config, MultiIoExt};
+use grass_io::{Config, InputPlugin, MultiIoExt};
 use grass_multi::{
     consume_field, expose_field, tick_subapp, MultiAppExt, MultiRes, MultiResMut, Namespace,
     OuterIterStopPlugin, SubApps,
@@ -55,7 +55,10 @@ fn final_state(parent: &App) -> FinalState {
 
 fn build_parent(port_based: bool) -> App {
     let mut parent = App::new();
-    parent.add_resource(Config::from_str(include_str!("config.toml")));
+    if std::env::args().len() == 1 {
+        parent.add_resource(Config::from_str(include_str!("config.toml")));
+    }
+    parent.add_plugins(InputPlugin);
     parent.add_subapp_with_config(A::NAME, |app| {
         app.add_plugins(OscillatorPlugin);
     });
@@ -114,6 +117,10 @@ fn run(port_based: bool) -> FinalState {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--generate-config") {
+        build_parent(false).start();
+        return;
+    }
     let direct = run(false);
     let port = run(true);
     println!("direct  fingerprint={:016x?}", direct.fingerprint());

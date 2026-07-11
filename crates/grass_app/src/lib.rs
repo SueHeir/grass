@@ -55,7 +55,8 @@
 //!
 //! ## Config-generation recipe
 //!
-//! Each plugin can return a TOML snippet from [`Plugin::default_config`]; the
+//! Each plugin can return typed metadata from [`Plugin::config_description`] (or
+//! a legacy TOML snippet from [`Plugin::default_config`]); the
 //! `App` accumulates them all into the [`ConfigSnippets`] resource as plugins
 //! register. If the [`GenerateConfigFlag`] resource is present when
 //! [`start`](App::start) is called, the `App` prints the assembled config to

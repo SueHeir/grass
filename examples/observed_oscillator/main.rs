@@ -9,7 +9,7 @@
 //!
 //! [`InputPlugin`] is what reads the TOML in a real binary
 //! (`myapp config.toml`), and `--generate-config` makes it install a
-//! `GenerateConfigFlag` so `start()` prints every plugin's `default_config()`
+//! `GenerateConfigFlag` so `start()` prints every plugin's generated config
 //! and exits. Here we seed the same TOML programmatically with
 //! `Config::from_str` so the example is self-contained — adding `InputPlugin`
 //! afterwards is a no-op because a `Config` is already present.
@@ -32,32 +32,7 @@ use grass_io::{
 use grass_scheduler::prelude::*;
 use grass_scheduler::{Res, ResMut};
 
-const CONFIG: &str = r#"
-[clock]
-start_step = 0
-
-[term_out]
-every = 20
-columns = ["step", "time", "x", "v"]
-
-[dump]
-interval = 25                      # write a frame every 25 steps
-path_template = "examples/observed_oscillator/out/frames/osc_{step:05}.json"
-
-# Multi-stage run: a short settle stage, then a longer production stage.
-# Per-stage `[run.<section>]` tables deep-merge over the global config into
-# the StageOverrides resource (see the module doc for the caveat on which
-# plugins actually re-read it per stage).
-[[run]]
-name  = "settle"
-steps = 40
-
-[[run]]
-name  = "production"
-steps = 100
-[run.solver]                       # surfaced via StageOverrides::section("solver")
-relax = 0.5
-"#;
+const CONFIG: &str = include_str!("config.toml");
 
 /// User solver phase (namespace 0 — runs before any grass_io plugin).
 #[derive(Debug, Clone, Copy)]
@@ -97,9 +72,14 @@ fn report_columns(s: Res<OscState>, mut term_out: ResMut<TermOut>) {
 
 fn main() {
     let mut app = App::new();
+    let generating_config = std::env::args().any(|arg| arg == "--generate-config");
 
-    // Seed the config programmatically; InputPlugin then becomes a no-op.
-    app.add_resource(Config::from_str(CONFIG));
+    // Keep the no-argument demo self-contained.  With either a TOML path or
+    // `--generate-config`, InputPlugin owns configuration so the generated
+    // file exercises the same CLI parsing route as a real application.
+    if std::env::args().len() == 1 {
+        app.add_resource(Config::from_str(CONFIG));
+    }
     app.add_plugins(InputPlugin);
 
     app.add_resource(OscState {
@@ -126,6 +106,9 @@ fn main() {
 
     // Self-driving lifecycle: organize -> setup -> run both stages -> cleanup.
     app.start();
+    if generating_config {
+        return;
+    }
 
     let s = app.get_resource_ref::<OscState>().expect("OscState");
     println!(

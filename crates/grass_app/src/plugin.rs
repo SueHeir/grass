@@ -32,21 +32,6 @@ use std::any::TypeId;
 use std::collections::HashSet;
 
 /// A typed, stable identifier for a capability that a plugin provides or requires.
-///
-/// Export capability identifiers as constants from the crate that defines the
-/// contract, then consume those constants instead of repeating string literals:
-///
-/// ```rust,ignore
-/// pub const NEIGHBOR_SEARCH: CapabilityId = CapabilityId::new("neighbor_search");
-///
-/// fn requires_capabilities(&self) -> Vec<CapabilityId> {
-///     vec![NEIGHBOR_SEARCH]
-/// }
-/// ```
-///
-/// `Plugin::provides` and `Plugin::requires` remain available during the
-/// migration from the earlier string-tag API. New contracts should use the
-/// typed hooks.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityId(Cow<'static, str>);
 
@@ -69,6 +54,97 @@ impl CapabilityId {
 impl std::fmt::Display for CapabilityId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// Declarative description of one parsed plugin configuration section.
+///
+/// This deliberately describes configuration rather than any simulation
+/// discretization, so particle, mesh, and other plugins can use the same
+/// contract.  Keep narrative intent in `narrative` or field `description`;
+/// the renderer only automates facts that have a stable representation.
+#[derive(Clone, Debug)]
+pub struct ConfigDescription {
+    /// TOML top-level key, without brackets.
+    pub section: String,
+    /// Whether this description emits a normal table or an array-table sample.
+    pub array_table: bool,
+    /// Hand-written context preserved above the generated fields.
+    pub narrative: String,
+    /// Fields in declaration order.
+    pub fields: Vec<ConfigFieldDescription>,
+}
+
+/// Declarative metadata for one configuration field.
+#[derive(Clone, Debug)]
+pub struct ConfigFieldDescription {
+    /// Serde/TOML field name.
+    pub name: String,
+    /// Human-readable TOML type.
+    pub ty: String,
+    /// TOML expression representing the parsed default, if optional.
+    pub default: Option<String>,
+    /// A concrete TOML expression from the typed Rust `Default` value.
+    ///
+    /// This is deliberately separate from [`Self::default`]: Serde can require
+    /// a key even when the Rust type has a useful value to put in a starter
+    /// file.  Generated examples must remain parseable in that case.
+    pub example: Option<String>,
+    /// Whether this field must be supplied by the user.
+    pub required: bool,
+    /// Allowed symbolic values, when this field is an enum.
+    pub choices: Vec<String>,
+    /// Hand-written field intent.
+    pub description: String,
+    /// Rust definition location, kept close to the typed parser definition.
+    pub source: String,
+}
+
+impl ConfigDescription {
+    /// Renders a valid, declarative TOML example with field-reference comments.
+    pub fn render_toml(&self) -> String {
+        let mut out = String::new();
+        for line in self.narrative.lines() {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        if self.array_table {
+            out.push_str("[[");
+        } else {
+            out.push('[');
+        }
+        out.push_str(&self.section);
+        out.push_str(if self.array_table { "]]\n" } else { "]\n" });
+        for field in &self.fields {
+            out.push_str("# ");
+            out.push_str(&field.description);
+            out.push_str(" Type: ");
+            out.push_str(&field.ty);
+            out.push_str(". ");
+            if field.required {
+                out.push_str("Required; example value comes from Rust Default.");
+            } else {
+                out.push_str("Optional; default: ");
+                out.push_str(field.default.as_deref().unwrap_or("not set (None)"));
+                out.push('.');
+            }
+            if !field.choices.is_empty() {
+                out.push_str(" Choices: ");
+                out.push_str(&field.choices.join(", "));
+                out.push('.');
+            }
+            out.push_str(" Source: ");
+            out.push_str(&field.source);
+            out.push('\n');
+            if let Some(example) = &field.example {
+                out.push_str(&field.name);
+                out.push_str(" = ");
+                out.push_str(&example);
+                out.push('\n');
+            }
+        }
+        out
     }
 }
 
@@ -139,15 +215,7 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// systems, and sub-plugins here.
     fn build(&self, app: &mut App);
 
-    /// Fallible form of [`build`](Self::build).
-    ///
-    /// New plugins can override this hook to report configuration, preflight,
-    /// or construction failures to an outer runner. Existing plugins need no
-    /// changes: the compatibility default calls their infallible `build`.
-    ///
-    /// A failing implementation must leave its own resources in a state that
-    /// its registered cleanup callbacks can safely tear down. [`App`] invokes
-    /// that cleanup and stops registration before returning the error.
+    /// Fallible compatibility hook for plugin construction.
     fn try_build(&self, app: &mut App) -> Result<(), AppError> {
         self.build(app);
         Ok(())
@@ -173,6 +241,14 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// Used by `--generate-config` to print a complete example config file.
     /// Return `None` (the default) if the plugin has no configuration.
     fn default_config(&self) -> Option<&str> {
+        None
+    }
+
+    /// Returns a typed configuration description for generated examples and
+    /// field reference comments. Prefer this to [`Self::default_config`]: the
+    /// latter remains for downstream compatibility and hand-written legacy
+    /// snippets.
+    fn config_description(&self) -> Option<ConfigDescription> {
         None
     }
 
@@ -231,20 +307,12 @@ pub trait Plugin: Downcast + Any + Send + Sync {
         Vec::new()
     }
 
-    /// Returns typed capabilities this plugin provides.
-    ///
-    /// Prefer this hook for new code and export the identifiers from the crate
-    /// that owns the contract. The legacy string-based [`provides`](Self::provides)
-    /// hook is collected as well for staged compatibility.
+    /// Typed capabilities this plugin provides.
     fn provides_capabilities(&self) -> Vec<CapabilityId> {
         Vec::new()
     }
 
-    /// Returns typed capabilities this plugin requires from other plugins.
-    ///
-    /// Prefer this hook for new code and use exported [`CapabilityId`] constants
-    /// at consumer call sites. The legacy string-based [`requires`](Self::requires)
-    /// hook is collected as well for staged compatibility.
+    /// Typed capabilities this plugin requires.
     fn requires_capabilities(&self) -> Vec<CapabilityId> {
         Vec::new()
     }

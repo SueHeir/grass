@@ -45,8 +45,8 @@ use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use grass_app::{App, GenerateConfigFlag, Plugin};
-use serde::Deserialize;
+use grass_app::{App, ConfigDescription, ConfigSnippets, GenerateConfigFlag, Plugin};
+use serde::{Deserialize, Serialize};
 
 // ─── Config resource ────────────────────────────────────────────────────────
 
@@ -262,6 +262,13 @@ impl Config {
         Self::try_load(app, key).unwrap_or_else(|error| panic!("Config::load: {error}"))
     }
 
+    /// Loads a section through its typed, declarative description. This keeps
+    /// the TOML key used for parsing and the key used for generated examples
+    /// coupled to the same Rust config type.
+    pub fn load_described<T: DescribedConfig + Clone + 'static>(app: &mut App) -> T {
+        Self::load(app, &T::description().section)
+    }
+
     /// Fallible form of [`Self::load`]. It preserves the optional-section
     /// behavior: if no `Config` resource or section is present, `T::default()`
     /// is registered and returned.
@@ -412,6 +419,293 @@ impl Config {
             }),
             None => Ok(Vec::new()),
         }
+    }
+}
+
+/// A Serde-compatible config type that publishes declarative metadata for the
+/// same section it parses. The metadata powers generated TOML examples and
+/// field-reference comments; Serde remains the source of parsing semantics.
+///
+/// It deliberately requires [`Serialize`] as well as [`Deserialize`]: the
+/// `ConfigDescription` derive serializes defaults into TOML, and therefore
+/// cannot truthfully describe a deserialize-only type.
+pub trait DescribedConfig: for<'de> Deserialize<'de> + Serialize + Default {
+    /// The section and fields represented by this parsing type.
+    fn description() -> ConfigDescription;
+}
+
+/// Symbolic TOML values accepted by a configuration field.
+///
+/// `#[derive(ConfigDescription)]` implements this for configuration structs
+/// (with no symbolic choices) and enums (using their declared variants).
+/// Primitive and container implementations have no symbolic choices.
+pub trait ConfigChoices {
+    /// Declared symbolic values, in source order.
+    fn choices() -> Vec<String>;
+}
+
+macro_rules! no_config_choices {
+    ($($type:ty),* $(,)?) => {$(
+        impl ConfigChoices for $type {
+            fn choices() -> Vec<String> { Vec::new() }
+        }
+    )*};
+}
+
+no_config_choices!(
+    bool,
+    String,
+    toml::Value,
+    toml::Table,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    f32,
+    f64,
+);
+
+impl<T: ConfigChoices> ConfigChoices for Option<T> {
+    fn choices() -> Vec<String> {
+        T::choices()
+    }
+}
+
+impl<T> ConfigChoices for Vec<T> {
+    fn choices() -> Vec<String> {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod described_config_tests {
+    use super::*;
+    use crate::{
+        ClockConfig, DumpConfig, DumpPlugin, RunPlugin, SimClockPlugin, StageConfig, TermOutConfig,
+        TermOutPlugin,
+    };
+    use grass_app::ConfigSnippets;
+    use grass_derive::ConfigDescription as DeriveConfigDescription;
+
+    #[derive(Clone, Default, Deserialize, serde::Serialize, DeriveConfigDescription)]
+    enum ProbeMode {
+        #[default]
+        #[serde(rename = "fast")]
+        Fast,
+        Accurate,
+    }
+
+    #[derive(Clone, Default, Deserialize, serde::Serialize, DeriveConfigDescription)]
+    #[config_description(section = "probe")]
+    struct ProbeConfig {
+        #[serde(default)]
+        mode: ProbeMode,
+    }
+
+    fn default_from_generated<T: DescribedConfig>() -> T {
+        let description = T::description();
+        let config = Config::from_str(&description.render_toml());
+        if description.array_table {
+            config
+                .table
+                .get(&description.section)
+                .expect("generated array table")
+                .as_array()
+                .expect("array table")
+                .first()
+                .expect("sample entry")
+                .clone()
+                .try_into()
+                .expect("generated defaults deserialize")
+        } else {
+            config.section(&description.section)
+        }
+    }
+
+    /// The default serialized by the parsed Rust type is the independent
+    /// oracle here. A new typed field, a changed Rust default, or a removed
+    /// metadata field makes this comparison fail instead of quietly relying on
+    /// Serde's missing-field fallback.
+    fn assert_description_matches_typed_default<T: DescribedConfig + serde::Serialize>() {
+        let description = T::description();
+        let typed: toml::Table = toml::from_str(
+            &toml::to_string(&T::default()).expect("typed default serializes to TOML"),
+        )
+        .expect("serialized typed config is a TOML table");
+
+        let generated = Config::from_str(&description.render_toml());
+        let generated = if description.array_table {
+            generated.table[&description.section]
+                .as_array()
+                .expect("generated array table")[0]
+                .as_table()
+                .expect("generated sample table")
+        } else {
+            generated.table[&description.section]
+                .as_table()
+                .expect("generated table")
+        };
+
+        let described: std::collections::BTreeSet<_> = description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        let typed_fields: std::collections::BTreeSet<_> =
+            typed.keys().map(String::as_str).collect();
+        // `Option::None` is absent from the serialized typed value, but it is
+        // still an advertised optional parser field. Every serialized field
+        // must have an emitted example; metadata may additionally describe
+        // such unset optional fields.
+        assert!(typed_fields.is_subset(&described));
+
+        for (name, value) in &typed {
+            assert_eq!(generated.get(name), Some(value), "default drift for {name}");
+            assert!(description
+                .fields
+                .iter()
+                .any(|field| field.name == *name && field.example.is_some()));
+        }
+    }
+
+    #[test]
+    fn generated_defaults_match_typed_defaults() {
+        assert_description_matches_typed_default::<ClockConfig>();
+        assert_description_matches_typed_default::<DumpConfig>();
+        assert_description_matches_typed_default::<TermOutConfig>();
+        assert_description_matches_typed_default::<StageConfig>();
+        assert_eq!(
+            default_from_generated::<ClockConfig>().start_step,
+            ClockConfig::default().start_step
+        );
+        assert_eq!(
+            default_from_generated::<ClockConfig>().start_time,
+            ClockConfig::default().start_time
+        );
+        assert_eq!(
+            default_from_generated::<DumpConfig>().interval,
+            DumpConfig::default().interval
+        );
+        assert_eq!(
+            default_from_generated::<DumpConfig>().path_template,
+            DumpConfig::default().path_template
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().every,
+            TermOutConfig::default().every
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().columns,
+            TermOutConfig::default().columns
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().width,
+            TermOutConfig::default().width
+        );
+        assert_eq!(
+            default_from_generated::<StageConfig>().steps,
+            StageConfig::default().steps
+        );
+        assert!(default_from_generated::<StageConfig>().name.is_none());
+    }
+
+    #[test]
+    fn generated_reference_includes_status_and_source_locations() {
+        let text = TermOutConfig::description().render_toml();
+        assert!(text.contains("Optional; default: 100."));
+        assert!(text.contains("Source: crates/grass_io/src/term_out.rs:"));
+        assert!(text.contains("TermOutConfig.every"));
+    }
+
+    /// This is deliberately stricter than round-tripping defaults: it checks
+    /// the complete user-visible field contract (names, TOML types,
+    /// requiredness, defaults, docs, and per-field source locations). A
+    /// renamed, added, removed, or retyped Serde field changes the derive
+    /// output and fails this test rather than leaving a parallel descriptor
+    /// quietly stale.
+    #[test]
+    fn generated_contract_covers_every_builtin_field() {
+        fn check<T: DescribedConfig>(expected: &[(&str, &str, bool, Option<&str>)]) {
+            let description = T::description();
+            assert_eq!(description.fields.len(), expected.len());
+            for (field, (name, ty, required, default)) in
+                description.fields.iter().zip(expected.iter().copied())
+            {
+                assert_eq!(field.name, name);
+                assert_eq!(field.ty, ty);
+                assert_eq!(field.required, required);
+                assert_eq!(field.default.as_deref(), default);
+                assert!(!field.description.is_empty());
+                assert!(field.source.contains(':'));
+                assert!(field.source.ends_with(&format!(".{}", name)));
+            }
+        }
+        check::<ClockConfig>(&[
+            ("start_step", "integer", false, Some("0")),
+            ("start_time", "float", false, Some("0.0")),
+        ]);
+        check::<DumpConfig>(&[
+            ("interval", "integer", false, Some("0")),
+            (
+                "path_template",
+                "string",
+                false,
+                Some("\"frame_{step:06}.bin\""),
+            ),
+        ]);
+        check::<TermOutConfig>(&[
+            ("every", "integer", false, Some("100")),
+            ("columns", "array", false, Some("[\"step\", \"time\"]")),
+            ("width", "integer", false, Some("14")),
+        ]);
+        check::<StageConfig>(&[
+            ("name", "optional", false, None),
+            ("steps", "integer", false, Some("1000")),
+            ("dt", "float", false, Some("0.0")),
+            ("skip", "boolean", false, Some("false")),
+            ("save_at_end", "boolean", false, Some("false")),
+        ]);
+    }
+
+    #[test]
+    fn enum_choices_come_from_the_serde_enum_definition() {
+        let field = &ProbeConfig::description().fields[0];
+        assert_eq!(field.name, "mode");
+        assert_eq!(field.choices, ["fast", "Accurate"]);
+    }
+
+    #[test]
+    fn built_in_plugins_collect_typed_examples() {
+        let mut app = App::new();
+        app.add_plugins(SimClockPlugin);
+        app.add_plugins(TermOutPlugin);
+        app.add_plugins(DumpPlugin::default());
+        app.add_plugins(RunPlugin);
+        let snippets = app
+            .get_resource_ref::<ConfigSnippets>()
+            .expect("built-in descriptions collected");
+        assert!(snippets
+            .snippets
+            .iter()
+            .any(|text| text.contains("[clock]")));
+        assert!(snippets
+            .snippets
+            .iter()
+            .any(|text| text.contains("Source: crates/grass_io/src/run.rs:")
+                && text.contains("StageConfig.steps")));
+    }
+
+    #[test]
+    fn built_in_unknown_fields_name_the_bad_key() {
+        let config = Config::from_str("[clock]\nstart_stpe = 1\n");
+        let error = config.try_section::<ClockConfig>("clock").unwrap_err();
+        assert!(error.to_string().contains("unknown field `start_stpe`"));
     }
 }
 
@@ -582,6 +876,30 @@ impl MultiIoExt for App {
         });
         build(&mut sub);
 
+        // A generated parent config must be directly usable for the same
+        // namespaced sub-app setup.  Re-home each child table beneath its
+        // sub-app key while preserving all generated comments and values.
+        let generated = sub
+            .get_resource_ref::<ConfigSnippets>()
+            .map(|snippets| snippets.snippets.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|snippet| namespace_generated_table(name, snippet))
+            .collect::<Vec<_>>();
+        if !generated.is_empty() {
+            if let Some(cell) = self.get_mut_resource(TypeId::of::<ConfigSnippets>()) {
+                cell.borrow_mut()
+                    .downcast_mut::<ConfigSnippets>()
+                    .expect("ConfigSnippets resource has wrong type")
+                    .snippets
+                    .extend(generated);
+            } else {
+                self.add_resource(ConfigSnippets {
+                    snippets: generated,
+                });
+            }
+        }
+
         use grass_multi::MultiAppExt;
         self.add_subapp(name, sub);
         Ok(self)
@@ -591,6 +909,26 @@ impl MultiIoExt for App {
         self.try_add_subapp_with_config(name, build)
             .unwrap_or_else(|error| panic!("App::add_subapp_with_config: {error}"))
     }
+}
+
+fn namespace_generated_table(namespace: &str, snippet: String) -> String {
+    let mut namespaced = String::with_capacity(snippet.len() + namespace.len());
+    let mut changed = false;
+    for line in snippet.lines() {
+        if !changed && (line.starts_with('[') && !line.starts_with("[[")) {
+            let section = line.trim_start_matches('[').trim_end_matches(']');
+            namespaced.push_str(&format!("[{namespace}.{section}]\n"));
+            changed = true;
+        } else if !changed && line.starts_with("[[") {
+            let section = line.trim_start_matches("[[").trim_end_matches("]]");
+            namespaced.push_str(&format!("[[{namespace}.{section}]]\n"));
+            changed = true;
+        } else {
+            namespaced.push_str(line);
+            namespaced.push('\n');
+        }
+    }
+    namespaced
 }
 
 /// Recursive merge — for each key in `overrides`, if both sides have a

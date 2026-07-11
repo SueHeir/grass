@@ -6,10 +6,11 @@
 
 use std::marker::PhantomData;
 
-use grass_app::{App, Plugin};
-use grass_io::Config;
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_io::{Config, DescribedConfig};
 use grass_scheduler::{Res, ResMut, ScheduleSet};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Position and velocity owned by one oscillator solver.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -53,19 +54,31 @@ pub struct OscillatorParameters {
 }
 
 /// Plugin configuration read from a declarative `[oscillator]` TOML table.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(
+    section = "oscillator",
+    narrative = "Parameters for one harmonic-oscillator library instance. The application may compose multiple instances under separate sub-app namespaces."
+)]
 pub struct OscillatorConfig {
+    /// Initial displacement.
     pub x0: f64,
+    /// Initial velocity.
     pub v0: f64,
+    /// Initial interface position used before the first coupling exchange.
     #[serde(default)]
     pub peer_x0: f64,
+    /// Local spring stiffness.
     pub stiffness: f64,
+    /// Linear viscous damping coefficient.
     #[serde(default)]
     pub damping: f64,
+    /// Interface spring stiffness.
     #[serde(default)]
     pub coupling_stiffness: f64,
+    /// Positive oscillator mass.
     pub mass: f64,
+    /// Positive semi-implicit-Euler timestep.
     pub dt: f64,
 }
 impl Default for OscillatorConfig {
@@ -116,7 +129,7 @@ pub fn integrate(
 pub struct OscillatorPlugin;
 impl Plugin for OscillatorPlugin {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<OscillatorConfig>(app, "oscillator");
+        let cfg = Config::load_described::<OscillatorConfig>(app);
         assert!(cfg.mass > 0.0, "oscillator.mass must be positive");
         assert!(cfg.dt > 0.0, "oscillator.dt must be positive");
         app.add_resource(OscillatorState {
@@ -133,8 +146,8 @@ impl Plugin for OscillatorPlugin {
         });
         app.add_update_system(integrate, OscillatorSchedule::Integrate);
     }
-    fn default_config(&self) -> Option<&str> {
-        Some("[oscillator]\nx0 = 1.0\nv0 = 0.0\npeer_x0 = 0.0\nstiffness = 1.0\ndamping = 0.0\ncoupling_stiffness = 0.0\nmass = 1.0\ndt = 0.01\n")
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(OscillatorConfig::description())
     }
 }
 

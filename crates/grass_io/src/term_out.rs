@@ -35,11 +35,12 @@
 
 use std::collections::HashMap;
 
-use grass_app::{App, Plugin};
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{prelude::*, Res, ResMut};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::{every_n_steps, Config, SimClock, SimClockPlugin};
+use crate::{every_n_steps, Config, DescribedConfig, SimClock, SimClockPlugin};
 
 /// Schedule namespace for [`TermOutSchedule`]. Between user phases
 /// (default 0) and [`crate::RUN_NAMESPACE`] so term_out runs after
@@ -96,8 +97,12 @@ fn default_columns() -> Vec<String> {
 
 /// `[term_out]` section. All fields optional; defaults give every-100
 /// printing of `step` and `time`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(
+    section = "term_out",
+    narrative = "Periodic terminal log line. `step` and `time` columns are filled by SimClock."
+)]
 pub struct TermOutConfig {
     /// Print every N steps. 0 disables term_out output.
     #[serde(default = "default_every")]
@@ -144,7 +149,7 @@ pub struct TermOutPlugin;
 
 impl Plugin for TermOutPlugin {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<TermOutConfig>(app, "term_out");
+        let cfg = Config::load_described::<TermOutConfig>(app);
 
         // Auto-add SimClock if not present — TermOut gates on it.
         if app.get_resource_ref::<SimClock>().is_none() {
@@ -167,19 +172,8 @@ impl Plugin for TermOutPlugin {
         );
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# [term_out] — periodic terminal log line.
-[term_out]
-# Print every N steps. 0 disables.
-every = 100
-# Column names. `step` and `time` are auto-populated from SimClock;
-# anything else must be pushed by a user system via TermOut::set.
-columns = ["step", "time"]
-# Per-column field width.
-width = 14
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(TermOutConfig::description())
     }
 }
 

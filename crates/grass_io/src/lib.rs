@@ -40,6 +40,23 @@
 
 #![warn(missing_docs)]
 
+// Lets `#[derive(ConfigDescription)]` use the same absolute path in this
+// crate and in downstream config crates.
+extern crate self as grass_io;
+
+/// Internal macro support. This is public only so `ConfigDescription` derives
+/// can expand in downstream crates without requiring implementation-only
+/// `grass_app` or `toml` dependencies.
+#[doc(hidden)]
+pub mod __private {
+    /// Re-export used by generated configuration metadata.
+    pub use grass_app;
+    /// Re-export used to name the serialization contract in derive diagnostics.
+    pub use serde;
+    /// Re-export used to serialize typed defaults in generated metadata.
+    pub use toml;
+}
+
 mod clock;
 mod config;
 mod dump;
@@ -48,7 +65,8 @@ mod term_out;
 
 pub use clock::{advance_step, every_n_steps, ClockConfig, SimClock, SimClockPlugin};
 pub use config::{
-    deep_merge, load_toml, try_load_toml, Config, ConfigError, Input, InputPlugin, MultiIoExt,
+    deep_merge, load_toml, try_load_toml, Config, ConfigChoices, ConfigError, DescribedConfig,
+    Input, InputPlugin, MultiIoExt,
 };
 pub use dump::{
     DumpBuffer, DumpConfig, DumpFormat, DumpPlugin, DumpSchedule, RawFrameWriter, DUMP_NAMESPACE,

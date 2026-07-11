@@ -70,7 +70,7 @@ physics-agnostic; it depends only on `grass_scheduler` and `downcast-rs`.
 | `Plugin::build` | required method | `plugin.rs:79` | Called once during `add_plugins` |
 | `Plugin::name` | optional method | `plugin.rs:84` | Defaults to `type_name::<Self>()` |
 | `Plugin::is_unique` | optional method | `plugin.rs:92` | Default `true`; duplicates panic |
-| `Plugin::default_config` | optional method | `plugin.rs:100` | TOML snippet or `None` |
+| `Plugin::config_description` | optional method | `plugin.rs` | typed TOML metadata; `default_config` remains a legacy fallback |
 | `Plugin::dependencies` | optional method | `plugin.rs:115` | Eager TypeId ordering |
 | `Plugin::provides` | optional method | `plugin.rs:127` | Capability tag strings |
 | `Plugin::requires` | optional method | `plugin.rs:140` | Capability tag strings |
@@ -145,8 +145,8 @@ tests.
 `grass_app` itself reads **no TOML** and has **no config keys**. It is the
 *collector* of TOML, not a consumer:
 
-- `Plugin::default_config` (`plugin.rs:100`) lets each plugin return a `&str`
-  TOML snippet. The framework accumulates these into the `ConfigSnippets`
+- `Plugin::config_description` lets each plugin publish typed TOML metadata;
+  legacy `default_config` snippets remain supported. The framework accumulates these into the `ConfigSnippets`
   resource (`app.rs:31`) as plugins register.
 - When `GenerateConfigFlag` is present at `start()` time, the assembled
   snippets are printed to stdout (`app.rs:403–413`), one per plugin, with a
@@ -261,8 +261,8 @@ A tutorial chapter should teach these steps in order:
    explain eager vs. lazy validation.
 9. **Use `Plugin::provides` / `requires` for loose contracts** — show capability
    string tags, explain that order does not matter.
-10. **Provide a default config snippet** — implement `Plugin::default_config`
-    returning a `&str` TOML block; wire `--generate-config` CLI flag to
+10. **Provide typed config metadata** — implement `Plugin::config_description`
+    (or a legacy `default_config` TOML block); wire `--generate-config` CLI flag to
     `GenerateConfigFlag`.
 11. **Self-driving run**: `app.start()` — the standard path, cleanup is
     automatic.

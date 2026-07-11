@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 grass_app.workspace = true
 grass_io.workspace = true
+grass_derive.workspace = true
 grass_scheduler.workspace = true
 serde = { version = "1", features = ["derive"] }

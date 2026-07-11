@@ -24,7 +24,8 @@
 use std::any::TypeId;
 use std::fmt;
 
-use grass_app::{App, Plugin, ScheduleSetupSet, StageNames};
+use grass_app::{App, ConfigDescription, Plugin, ScheduleSetupSet, StageNames};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{
     first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
     SystemLabel,
@@ -32,7 +33,7 @@ use grass_scheduler::{
 use serde::{Deserialize, Serialize};
 
 use crate::clock::SimClock;
-use crate::config::{deep_merge, Config};
+use crate::config::{deep_merge, Config, DescribedConfig};
 use crate::{advance_step, SimClockPlugin};
 
 /// Schedule namespace `RunSchedule` sorts at — high enough that it
@@ -67,11 +68,16 @@ fn default_steps() -> u32 {
 
 /// Per-stage settings: step count, optional name/dt, plus an arbitrary
 /// `overrides` catch-all for codebase-specific keys.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, DeriveConfigDescription)]
+#[config_description(
+    section = "run",
+    narrative = "One run stage. Repeat [[run]] for multi-stage workflows; unrecognised keys are preserved as stage overrides.",
+    array_table
+)]
 pub struct StageConfig {
     /// Optional human-readable stage name. Used by [`StageNames`]
     /// validation when a `StageEnum` is wired.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Number of timesteps to run in this stage.
     #[serde(default = "default_steps")]
@@ -446,28 +452,8 @@ impl Plugin for RunPlugin {
         }
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# Single-stage run:
-[run]
-steps = 1000
-# name = "my_stage"     # optional stage name
-# dt = 0.0              # per-stage dt (0 = leave whatever's set)
-# skip = false          # advance past this stage immediately
-# save_at_end = false   # codebase hint: write dump/restart on stage end
-# Any other keys land in `overrides` and are visible via
-# StageOverrides::section, e.g. an MD/DEM `thermo = 100`.
-
-# Multi-stage run (use [[run]] instead of [run]):
-# [[run]]
-# name  = "settling"
-# steps = 1000
-#
-# [[run]]
-# name  = "production"
-# steps = 5000
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(StageConfig::description())
     }
 }
 
