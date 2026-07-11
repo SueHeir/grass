@@ -1,33 +1,68 @@
 # GRASS
 
 <!-- disclaimer-banner -->
-> This code was fully written via **Claude 4.6,4.8 and Fable 5**, and stands as a proof of concept for a **bevy-like** ecosystem for physics simulation research, with the goal of testing if one scheduler/framework (**GRASS**) works for most scientific codes. **SOIL** and **FIELD** are particle- and mesh-based substrates for physics such as **DIRT** (DEM) or **dev_field_efvm**. Note that all other physics based repos I have start with **dev_**, as I do **NOT** know these methods. Please read, evaluate, use with a grain of salt, I have not personally read or reviewed everything here.
+> **Research-software status:** This ecosystem is AI-authored and under active evaluation. GRASS, SOIL, and DIRT are the core architecture and DEM implementation; repositories prefixed `dev_` are experimental method demonstrations outside the author's domain expertise. Treat claims according to their linked evidence and documented limitations. See [DISCLAIMER.md](DISCLAIMER.md).
 <!-- /disclaimer-banner -->
 
 
-**Build solvers as composable plugins instead of a hand-rolled main loop —
-explicit time-stepping or a single implicit global solve, particles or a mesh —
-and couple several together, in-process or across MPI.**
+**Write a simulation code once. Run it alone, embed it inside another solver, or
+couple it to other GRASS codes in-process or across MPI.**
 
-You don't write a `main` loop. You register your state as **resources** and your
-step logic as **systems** (plain functions that declare what they read and write
-by argument type), bundle them into **plugins**, and let a dependency-injection
-**scheduler** order and run them. Swap an integrator or output plugin without
-touching the rest; wire two whole solvers together — a particle code to a fluid
-code — under one parent and let them exchange state every step, in one process or
-across MPI binaries.
+Most simulation codes begin the same way: keep some state, call functions in a
+particular order, repeat. That is enough to express essentially any simulation.
+It is not, by itself, a reason to use GRASS.
 
-GRASS — the **General Rust App System Scheduler** — is that framework tier. It
-knows nothing about particles or physics; it is the App, scheduler, I/O, MPI, and
-coupling layer that domain crates (and your own solver) build on.
+The reason to use GRASS is what happens when one simulation must become part of
+another. Scientific solvers are usually built as closed applications. Each grows
+its own state containers, lifecycle, timestep driver, I/O, and communication
+assumptions. Coupling two of them later means reconciling two private worlds — or
+maintaining an adapter between them forever.
 
-It's the foundation a research ecosystem is built on, not a monolith you run.
-[SOIL](https://github.com/SueHeir/soil) builds a parallel particle substrate on it;
-[DIRT](https://github.com/SueHeir/dirt) builds a LAMMPS-validated DEM code on that;
-[FIELD](https://github.com/SueHeir/field) builds a mesh substrate for PDE solvers —
-and the same seams are open for a CFD, SPH, or peridynamics tier you write yourself.
-Each is a library you read, extend, and customize in Rust, reusing the scheduler,
-I/O, and coupling instead of a hand-rolled main loop.
+GRASS gives solvers a shared composition model from the beginning:
+
+- **Resources** hold state.
+- **Systems** are ordinary functions that declare the state they read and write.
+- **Schedules** define when those functions run.
+- **Plugins** package capabilities that can be added, replaced, or removed.
+- **Sub-apps and transports** compose complete solvers in one process or across MPI.
+
+A GRASS solver is therefore not only an executable. It is a component that can
+participate in a larger scheduled simulation.
+
+```text
+ standalone particle solver       standalone fluid solver
+             │                              │
+             └────── shared GRASS model ────┘
+                            │
+                            ▼
+                 coupled scheduled simulation
+                    in-process or across MPI
+```
+
+GRASS — the **General Rust App System Scheduler** — knows nothing about particles,
+meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
+that domain crates and complete solvers build on.
+
+## Can GRASS represent my simulation?
+
+If your code advances state by calling functions in an order, yes: those
+functions can be systems, that state can be resources, and that order can be a
+schedule. Explicit timestepping, iterative loops, branches, mesh sweeps, particle
+updates, and a global assemble-and-solve step all fit that mechanical model.
+
+The more useful question is whether it **should** be written in GRASS.
+
+Use GRASS when the solver is likely to:
+
+- couple to another physical method;
+- run both standalone and as part of a larger application;
+- share infrastructure with a family of related solvers;
+- evolve from in-process coupling to separate MPI binaries;
+- replace coupling, integration, I/O, or diagnostic components independently.
+
+A small calculation that will remain permanently standalone may not benefit
+enough to justify a shared framework. GRASS earns its structure when composition
+is part of the research problem.
 
 ## Ten seconds
 
@@ -54,6 +89,28 @@ No `main` loop, no manual dispatch: `move_thing` takes `ResMut<Position>`, so th
 scheduler injects that borrow and runs it. Grow this into a real time-stepping
 solver in the [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html)
 tutorial, or skim [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html).
+
+That example is deliberately ordinary. The important property is not that GRASS
+can call `move_thing`; any main loop can. The important property is that every
+GRASS solver uses the same App, resource, system, and schedule vocabulary. A
+coupling plugin can read one solver's resources, write another's, and place that
+exchange at an explicit point in their combined schedule.
+
+## Evidence that the composition boundary holds
+
+- **DIRT** is a full granular-DEM code built from GRASS plugins over SOIL.
+- **SOIL** supplies decomposition, migration, ghost exchange, neighbor lists,
+  and restart to multiple particle-method demonstrations through one `AtomData`
+  contract.
+- **FIELD** and `dev_field_efvm` exercise mesh and finite-volume solver structure.
+- **`grass_multi`** runs sub-apps under a parent schedule, in-process or through
+  remote MPI-backed transport.
+- Dedicated coupling repositories place exchanges between DEM, SPH, and CFD
+  components at explicit schedule phases rather than inside either solver.
+
+These repositories are not nine products a new reader must learn. They are
+evidence for one claim: independently useful simulation components can share a
+common composition boundary.
 
 ## The deal
 
