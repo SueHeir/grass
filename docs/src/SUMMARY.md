@@ -26,4 +26,5 @@
 - [Crate Map](./reference/crates.md)
 - [Scientific Library Composition Contract](./reference/library-composition-contract.md)
 - [Configuration metadata preflight](./reference/config-metadata-preflight.md)
+- [Public API and extension points](./reference/public-api.md)
 - [Derive Macros](./reference/derives.md)

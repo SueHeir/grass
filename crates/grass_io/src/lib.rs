@@ -78,3 +78,16 @@ pub use run::{
     RUN_NAMESPACE, UPDATE_CYCLE,
 };
 pub use term_out::{TermOut, TermOutConfig, TermOutPlugin, TermOutSchedule, TERM_OUT_NAMESPACE};
+
+/// The `grass_io` application prelude.
+///
+/// This contains the opt-in plugins, their declarative configuration types, and
+/// the [`MultiIoExt`] wiring helper that an application normally uses. Format
+/// implementations, error types, and configuration parsing helpers remain at
+/// the crate root for library authors that need to implement or handle them.
+pub mod prelude {
+    pub use crate::{
+        ClockConfig, Config, DumpConfig, DumpPlugin, Input, InputPlugin, MultiIoExt, RunConfig,
+        RunPlugin, SimClock, SimClockPlugin, StageConfig, TermOutConfig, TermOutPlugin,
+    };
+}
