@@ -25,9 +25,17 @@ observed_oscillator: finished at x = ..., v = ...
 
 ## Configuration-generation check
 
-![Generated configuration coverage](plots/generated_config_coverage.png)
+![Generated configuration field audit](plots/generated_config_coverage.png)
 
-The check compares the 12 typed built-in fields expected by the oscillator's
-plugins with the 12 fields emitted by `--generate-config` (PASS when both are
-equal). It also verifies that every generated default deserializes back to the
-same typed default.
+Run the reproducible audit with the build environment's plotting dependency:
+
+```bash
+source ~/projects/.build-env
+$BENCH_PYTHON sweep.py
+```
+
+The figure shows all 12 fields individually, including each generated type and
+required/default status. It passes only when the generated output contains the
+complete field set and every row has type, status, and source metadata. The
+`grass_io` regression suite independently compares the generated fields and
+defaults with the typed Serde configuration definitions, including enum choices.

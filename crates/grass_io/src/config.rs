@@ -430,6 +430,55 @@ pub trait DescribedConfig: for<'de> Deserialize<'de> + Default {
     fn description() -> ConfigDescription;
 }
 
+/// Symbolic TOML values accepted by a configuration field.
+///
+/// `#[derive(ConfigDescription)]` implements this for configuration structs
+/// (with no symbolic choices) and enums (using their declared variants).
+/// Primitive and container implementations have no symbolic choices.
+pub trait ConfigChoices {
+    /// Declared symbolic values, in source order.
+    fn choices() -> Vec<String>;
+}
+
+macro_rules! no_config_choices {
+    ($($type:ty),* $(,)?) => {$(
+        impl ConfigChoices for $type {
+            fn choices() -> Vec<String> { Vec::new() }
+        }
+    )*};
+}
+
+no_config_choices!(
+    bool,
+    String,
+    toml::Value,
+    toml::Table,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    f32,
+    f64,
+);
+
+impl<T: ConfigChoices> ConfigChoices for Option<T> {
+    fn choices() -> Vec<String> {
+        T::choices()
+    }
+}
+
+impl<T> ConfigChoices for Vec<T> {
+    fn choices() -> Vec<String> {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod described_config_tests {
     use super::*;
@@ -438,6 +487,22 @@ mod described_config_tests {
         TermOutPlugin,
     };
     use grass_app::ConfigSnippets;
+    use grass_derive::ConfigDescription as DeriveConfigDescription;
+
+    #[derive(Clone, Default, Deserialize, serde::Serialize, DeriveConfigDescription)]
+    enum ProbeMode {
+        #[default]
+        #[serde(rename = "fast")]
+        Fast,
+        Accurate,
+    }
+
+    #[derive(Clone, Default, Deserialize, serde::Serialize, DeriveConfigDescription)]
+    #[config_description(section = "probe")]
+    struct ProbeConfig {
+        #[serde(default)]
+        mode: ProbeMode,
+    }
 
     fn default_from_generated<T: DescribedConfig>() -> T {
         let description = T::description();
@@ -614,6 +679,13 @@ mod described_config_tests {
             ("skip", "boolean", false, Some("false")),
             ("save_at_end", "boolean", false, Some("false")),
         ]);
+    }
+
+    #[test]
+    fn enum_choices_come_from_the_serde_enum_definition() {
+        let field = &ProbeConfig::description().fields[0];
+        assert_eq!(field.name, "mode");
+        assert_eq!(field.choices, ["fast", "Accurate"]);
     }
 
     #[test]

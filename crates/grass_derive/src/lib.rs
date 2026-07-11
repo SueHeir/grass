@@ -24,7 +24,9 @@
 //! The generated code references trait paths in `grass_scheduler::*` and
 //! `grass_multi::*` **literally** (not re-exported), so the corresponding
 //! crate must be in your dependency graph: `grass_scheduler` for `ScheduleSet`
-//! / `StageEnum`, `grass_multi` for `Namespace`.
+//! / `StageEnum`, `grass_multi` for `Namespace`. `ConfigDescription` needs
+//! only `grass_io`; its implementation paths are re-exported there so config
+//! consumers do not need hidden `grass_app` or `toml` dependencies.
 //!
 //! `#[derive(ScheduleSet)]` does **not** add the trait's supertrait bounds for
 //! you. `ScheduleSet: Copy + Clone + Debug + 'static`, so the target type must
@@ -51,7 +53,8 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 // ─── #[derive(ConfigDescription)] ───────────────────────────────────────────
 
-/// Generates `grass_io::DescribedConfig` directly from a Serde config struct.
+/// Generates `grass_io::DescribedConfig` directly from a Serde config struct,
+/// or `grass_io::ConfigChoices` from an enum's declared variants.
 ///
 /// The derive reads the same field names, `#[serde(rename = ...)]`,
 /// `#[serde(default)]`, and doc comments that define the TOML parser contract.
@@ -61,10 +64,48 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 pub fn derive_config_description(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Data::Enum(data) = &input.data {
+        let choices = data
+            .variants
+            .iter()
+            .map(|variant| {
+                if !matches!(variant.fields, Fields::Unit) {
+                    return syn::Error::new_spanned(
+                        variant,
+                        "ConfigDescription enum choices must be unit variants",
+                    )
+                    .to_compile_error();
+                }
+                let mut value = variant.ident.to_string();
+                for attr in &variant.attrs {
+                    if attr.path().is_ident("serde") {
+                        let _ = attr.parse_nested_meta(|meta| {
+                            if meta.path.is_ident("rename") {
+                                value = meta.value()?.parse::<syn::LitStr>()?.value();
+                            }
+                            Ok(())
+                        });
+                    }
+                }
+                quote!(#value.to_string())
+            })
+            .collect::<Vec<_>>();
+        return quote! {
+            impl ::grass_io::ConfigChoices for #name {
+                fn choices() -> ::std::vec::Vec<::std::string::String> {
+                    ::std::vec![#(#choices),*]
+                }
+            }
+        }
+        .into();
+    }
     let Data::Struct(data) = &input.data else {
-        return syn::Error::new_spanned(input, "ConfigDescription can only be derived for structs")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            input,
+            "ConfigDescription can only be derived for structs or enums",
+        )
+        .to_compile_error()
+        .into();
     };
     let Fields::Named(fields) = &data.fields else {
         return syn::Error::new_spanned(&input, "ConfigDescription requires named fields")
@@ -104,6 +145,7 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
     let mut generated_fields = Vec::new();
     for field in &fields.named {
         let ident = field.ident.as_ref().unwrap();
+        let field_ty = &field.ty;
         let mut field_name = ident.to_string();
         let mut has_default = false;
         let mut flattened = false;
@@ -158,25 +200,28 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
         let line = field.span().start().line;
         let source = quote_spanned! {field.span()=> concat!(file!(), ":", #line, ":", stringify!(#name), ".", stringify!(#ident)).to_string() };
         generated_fields.push(quote! {
-            grass_app::ConfigFieldDescription {
+            ::grass_io::__private::grass_app::ConfigFieldDescription {
                 name: #field_name.to_string(), ty: #ty.to_string(),
                 default: defaults.remove(#field_name), required: #required,
-                choices: Vec::new(), description: #description.to_string(), source: #source,
+                choices: <#field_ty as ::grass_io::ConfigChoices>::choices(), description: #description.to_string(), source: #source,
             }
         });
     }
     quote! {
-        impl grass_io::DescribedConfig for #name {
-            fn description() -> grass_app::ConfigDescription {
-                let mut defaults: std::collections::BTreeMap<String, String> = toml::to_string(&Self::default())
+        impl ::grass_io::DescribedConfig for #name {
+            fn description() -> ::grass_io::__private::grass_app::ConfigDescription {
+                let mut defaults: ::std::collections::BTreeMap<::std::string::String, ::std::string::String> = ::grass_io::__private::toml::to_string(&Self::default())
                     .expect("default config must serialize to TOML")
-                    .parse::<toml::Table>().expect("serialized default must be a TOML table")
+                    .parse::<::grass_io::__private::toml::Table>().expect("serialized default must be a TOML table")
                     .into_iter().map(|(key, value)| (key, value.to_string())).collect();
-                grass_app::ConfigDescription {
+                ::grass_io::__private::grass_app::ConfigDescription {
                     section: #section.to_string(), array_table: #array_table,
-                    narrative: #narrative.to_string(), fields: vec![#(#generated_fields),*],
+                    narrative: #narrative.to_string(), fields: ::std::vec![#(#generated_fields),*],
                 }
             }
+        }
+        impl ::grass_io::ConfigChoices for #name {
+            fn choices() -> ::std::vec::Vec<::std::string::String> { ::std::vec![] }
         }
     }.into()
 }
