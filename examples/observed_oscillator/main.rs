@@ -32,32 +32,7 @@ use grass_io::{
 use grass_scheduler::prelude::*;
 use grass_scheduler::{Res, ResMut};
 
-const CONFIG: &str = r#"
-[clock]
-start_step = 0
-
-[term_out]
-every = 20
-columns = ["step", "time", "x", "v"]
-
-[dump]
-interval = 25                      # write a frame every 25 steps
-path_template = "examples/observed_oscillator/out/frames/osc_{step:05}.json"
-
-# Multi-stage run: a short settle stage, then a longer production stage.
-# Per-stage `[run.<section>]` tables deep-merge over the global config into
-# the StageOverrides resource (see the module doc for the caveat on which
-# plugins actually re-read it per stage).
-[[run]]
-name  = "settle"
-steps = 40
-
-[[run]]
-name  = "production"
-steps = 100
-[run.solver]                       # surfaced via StageOverrides::section("solver")
-relax = 0.5
-"#;
+const CONFIG: &str = include_str!("config.toml");
 
 /// User solver phase (namespace 0 — runs before any grass_io plugin).
 #[derive(Debug, Clone, Copy)]

@@ -1,0 +1,24 @@
+# The generated Grass metadata covers field defaults and source locations.
+# This scenario-specific narrative remains hand-written: the settle stage
+# damps the initial transient before the production interval is observed.
+
+[clock]
+start_step = 0
+
+[term_out]
+every = 20
+columns = ["step", "time", "x", "v"]
+
+[dump]
+interval = 25
+path_template = "examples/observed_oscillator/out/frames/osc_{step:05}.json"
+
+[[run]]
+name = "settle"
+steps = 40
+
+[[run]]
+name = "production"
+steps = 100
+[run.solver]
+relax = 0.5

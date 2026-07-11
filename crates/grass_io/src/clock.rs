@@ -28,11 +28,11 @@
 //! );
 //! ```
 
-use grass_app::{App, Plugin};
+use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{Res, ResMut};
 use serde::Deserialize;
 
-use crate::Config;
+use crate::{Config, DescribedConfig};
 
 // ─── Resource ───────────────────────────────────────────────────────────────
 
@@ -62,6 +62,37 @@ pub struct ClockConfig {
     pub start_time: f64,
 }
 
+impl DescribedConfig for ClockConfig {
+    fn description() -> ConfigDescription {
+        ConfigDescription {
+            section: "clock",
+            array_table: false,
+            narrative:
+                "Simulation step + time accumulator. Set non-zero values to resume a saved state.",
+            fields: &[
+                ConfigFieldDescription {
+                    name: "start_step",
+                    ty: "integer",
+                    default: Some("0"),
+                    required: false,
+                    choices: &[],
+                    description: "Starting step count.",
+                    source: "crates/grass_io/src/clock.rs:ClockConfig.start_step",
+                },
+                ConfigFieldDescription {
+                    name: "start_time",
+                    ty: "float",
+                    default: Some("0.0"),
+                    required: false,
+                    choices: &[],
+                    description: "Starting simulated time in application units.",
+                    source: "crates/grass_io/src/clock.rs:ClockConfig.start_time",
+                },
+            ],
+        }
+    }
+}
+
 // ─── Plugin ─────────────────────────────────────────────────────────────────
 
 /// Installs [`SimClock`] on the App, optionally seeded from a `[clock]`
@@ -71,22 +102,15 @@ pub struct SimClockPlugin;
 
 impl Plugin for SimClockPlugin {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<ClockConfig>(app, "clock");
+        let cfg = Config::load_described::<ClockConfig>(app);
         app.add_resource(SimClock {
             step: cfg.start_step,
             time: cfg.start_time,
         });
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# [clock] — simulation step + time accumulator. Both default to 0;
-# set non-zero starting values to resume from a saved state.
-[clock]
-start_step = 0
-start_time = 0.0
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(ClockConfig::description())
     }
 }
 

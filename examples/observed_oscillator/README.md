@@ -1,7 +1,7 @@
 # observed_oscillator
 
 End-to-end `grass_io` wiring for a simple harmonic oscillator observed through
-the full I/O stack. The example seeds a declarative TOML config in the binary,
+the full I/O stack. The example reads its declarative [config.toml](config.toml),
 runs two `[[run]]` stages, prints terminal columns, and writes JSON dump frames
 under `examples/observed_oscillator/out/`.
 

@@ -24,7 +24,9 @@
 use std::any::TypeId;
 use std::fmt;
 
-use grass_app::{App, Plugin, ScheduleSetupSet, StageNames};
+use grass_app::{
+    App, ConfigDescription, ConfigFieldDescription, Plugin, ScheduleSetupSet, StageNames,
+};
 use grass_scheduler::{
     first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
     SystemLabel,
@@ -32,7 +34,7 @@ use grass_scheduler::{
 use serde::{Deserialize, Serialize};
 
 use crate::clock::SimClock;
-use crate::config::{deep_merge, Config};
+use crate::config::{deep_merge, Config, DescribedConfig};
 use crate::{advance_step, SimClockPlugin};
 
 /// Schedule namespace `RunSchedule` sorts at — high enough that it
@@ -106,6 +108,18 @@ impl Default for StageConfig {
             save_at_end: false,
             overrides: toml::Table::new(),
         }
+    }
+}
+
+impl DescribedConfig for StageConfig {
+    fn description() -> ConfigDescription {
+        ConfigDescription { section: "run", array_table: true, narrative: "One run stage. Repeat [[run]] for multi-stage workflows; unrecognised keys are preserved as stage overrides.", fields: &[
+            ConfigFieldDescription { name: "name", ty: "string", default: None, required: false, choices: &[], description: "Human-readable stage name when stage validation is enabled.", source: "crates/grass_io/src/run.rs:StageConfig.name" },
+            ConfigFieldDescription { name: "steps", ty: "integer", default: Some("1000"), required: false, choices: &[], description: "Number of timesteps in this stage.", source: "crates/grass_io/src/run.rs:StageConfig.steps" },
+            ConfigFieldDescription { name: "dt", ty: "float", default: Some("0.0"), required: false, choices: &[], description: "Stage timestep; 0.0 leaves the integrator setting unchanged.", source: "crates/grass_io/src/run.rs:StageConfig.dt" },
+            ConfigFieldDescription { name: "skip", ty: "boolean", default: Some("false"), required: false, choices: &[], description: "Advance past this stage immediately.", source: "crates/grass_io/src/run.rs:StageConfig.skip" },
+            ConfigFieldDescription { name: "save_at_end", ty: "boolean", default: Some("false"), required: false, choices: &[], description: "Hint that plugins may use to write final output at the stage end.", source: "crates/grass_io/src/run.rs:StageConfig.save_at_end" },
+        ] }
     }
 }
 
@@ -446,28 +460,8 @@ impl Plugin for RunPlugin {
         }
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# Single-stage run:
-[run]
-steps = 1000
-# name = "my_stage"     # optional stage name
-# dt = 0.0              # per-stage dt (0 = leave whatever's set)
-# skip = false          # advance past this stage immediately
-# save_at_end = false   # codebase hint: write dump/restart on stage end
-# Any other keys land in `overrides` and are visible via
-# StageOverrides::section, e.g. an MD/DEM `thermo = 100`.
-
-# Multi-stage run (use [[run]] instead of [run]):
-# [[run]]
-# name  = "settling"
-# steps = 1000
-#
-# [[run]]
-# name  = "production"
-# steps = 5000
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(StageConfig::description())
     }
 }
 

@@ -35,11 +35,11 @@
 
 use std::collections::HashMap;
 
-use grass_app::{App, Plugin};
+use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::Deserialize;
 
-use crate::{every_n_steps, Config, SimClock, SimClockPlugin};
+use crate::{every_n_steps, Config, DescribedConfig, SimClock, SimClockPlugin};
 
 /// Schedule namespace for [`TermOutSchedule`]. Between user phases
 /// (default 0) and [`crate::RUN_NAMESPACE`] so term_out runs after
@@ -122,6 +122,16 @@ impl Default for TermOutConfig {
     }
 }
 
+impl DescribedConfig for TermOutConfig {
+    fn description() -> ConfigDescription {
+        ConfigDescription { section: "term_out", array_table: false, narrative: "Periodic terminal log line. `step` and `time` columns are filled by SimClock.", fields: &[
+            ConfigFieldDescription { name: "every", ty: "integer", default: Some("100"), required: false, choices: &[], description: "Print interval in steps; 0 disables output.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.every" },
+            ConfigFieldDescription { name: "columns", ty: "array of strings", default: Some("[\"step\", \"time\"]"), required: false, choices: &[], description: "Columns in display order; user systems supply custom values through TermOut::set.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.columns" },
+            ConfigFieldDescription { name: "width", ty: "integer", default: Some("14"), required: false, choices: &[], description: "Display width per column.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.width" },
+        ] }
+    }
+}
+
 // ─── Schedule ───────────────────────────────────────────────────────────────
 
 /// Where TermOut's two systems run. Plugins register their column-setter
@@ -144,7 +154,7 @@ pub struct TermOutPlugin;
 
 impl Plugin for TermOutPlugin {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<TermOutConfig>(app, "term_out");
+        let cfg = Config::load_described::<TermOutConfig>(app);
 
         // Auto-add SimClock if not present — TermOut gates on it.
         if app.get_resource_ref::<SimClock>().is_none() {
@@ -167,19 +177,8 @@ impl Plugin for TermOutPlugin {
         );
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# [term_out] — periodic terminal log line.
-[term_out]
-# Print every N steps. 0 disables.
-every = 100
-# Column names. `step` and `time` are auto-populated from SimClock;
-# anything else must be pushed by a user system via TermOut::set.
-columns = ["step", "time"]
-# Per-column field width.
-width = 14
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(TermOutConfig::description())
     }
 }
 

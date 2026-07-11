@@ -307,3 +307,17 @@ Optional. When present, the referenced file is the base and any inline
 `MultiIoExt::add_subapp_with_config(name, build)` extension slices the parent TOML
 for a named sub-App and propagates its `[output] dir`; see
 [MPI and Coupling](./mpi-coupling.md).
+# Generated configuration reference
+
+Plugins can expose a simulation-agnostic `ConfigDescription` for the same
+Serde type they parse. `--generate-config` then emits valid TOML defaults plus
+comments containing each field's type, required/optional status, choices (for
+enum-like fields), and Rust source location. Keep scenario-specific explanation
+in the description's narrative text or in an example's `config.toml`; the
+renderer deliberately does not try to infer that intent.
+
+`grass_io::DescribedConfig` couples a parsing type to its section key, and
+`Config::load_described::<T>` uses that key rather than repeating a string in a
+plugin. The built-in clock, terminal output, dump, and run-stage plugins use
+this route. Tests deserialize generated defaults back into their typed configs,
+so an edited default cannot silently drift from its generated example.

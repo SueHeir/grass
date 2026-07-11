@@ -45,7 +45,7 @@ use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use grass_app::{App, GenerateConfigFlag, Plugin};
+use grass_app::{App, ConfigDescription, GenerateConfigFlag, Plugin};
 use serde::Deserialize;
 
 // ─── Config resource ────────────────────────────────────────────────────────
@@ -262,6 +262,13 @@ impl Config {
         Self::try_load(app, key).unwrap_or_else(|error| panic!("Config::load: {error}"))
     }
 
+    /// Loads a section through its typed, declarative description. This keeps
+    /// the TOML key used for parsing and the key used for generated examples
+    /// coupled to the same Rust config type.
+    pub fn load_described<T: DescribedConfig + Clone + 'static>(app: &mut App) -> T {
+        Self::load(app, T::description().section)
+    }
+
     /// Fallible form of [`Self::load`]. It preserves the optional-section
     /// behavior: if no `Config` resource or section is present, `T::default()`
     /// is registered and returned.
@@ -412,6 +419,115 @@ impl Config {
             }),
             None => Ok(Vec::new()),
         }
+    }
+}
+
+/// A Serde-compatible config type that publishes declarative metadata for the
+/// same section it parses. The metadata powers generated TOML examples and
+/// field-reference comments; Serde remains the source of parsing semantics.
+pub trait DescribedConfig: for<'de> Deserialize<'de> + Default {
+    /// The section and fields represented by this parsing type.
+    fn description() -> ConfigDescription;
+}
+
+#[cfg(test)]
+mod described_config_tests {
+    use super::*;
+    use crate::{
+        ClockConfig, DumpConfig, DumpPlugin, RunPlugin, SimClockPlugin, StageConfig, TermOutConfig,
+        TermOutPlugin,
+    };
+    use grass_app::ConfigSnippets;
+
+    fn default_from_generated<T: DescribedConfig>() -> T {
+        let description = T::description();
+        let config = Config::from_str(&description.render_toml());
+        if description.array_table {
+            config
+                .table
+                .get(description.section)
+                .expect("generated array table")
+                .as_array()
+                .expect("array table")
+                .first()
+                .expect("sample entry")
+                .clone()
+                .try_into()
+                .expect("generated defaults deserialize")
+        } else {
+            config.section(description.section)
+        }
+    }
+
+    #[test]
+    fn generated_defaults_match_typed_defaults() {
+        assert_eq!(
+            default_from_generated::<ClockConfig>().start_step,
+            ClockConfig::default().start_step
+        );
+        assert_eq!(
+            default_from_generated::<ClockConfig>().start_time,
+            ClockConfig::default().start_time
+        );
+        assert_eq!(
+            default_from_generated::<DumpConfig>().interval,
+            DumpConfig::default().interval
+        );
+        assert_eq!(
+            default_from_generated::<DumpConfig>().path_template,
+            DumpConfig::default().path_template
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().every,
+            TermOutConfig::default().every
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().columns,
+            TermOutConfig::default().columns
+        );
+        assert_eq!(
+            default_from_generated::<TermOutConfig>().width,
+            TermOutConfig::default().width
+        );
+        assert_eq!(
+            default_from_generated::<StageConfig>().steps,
+            StageConfig::default().steps
+        );
+        assert!(default_from_generated::<StageConfig>().name.is_none());
+    }
+
+    #[test]
+    fn generated_reference_includes_status_and_source_locations() {
+        let text = TermOutConfig::description().render_toml();
+        assert!(text.contains("Optional; default: 100."));
+        assert!(text.contains("Source: crates/grass_io/src/term_out.rs:TermOutConfig.every"));
+    }
+
+    #[test]
+    fn built_in_plugins_collect_typed_examples() {
+        let mut app = App::new();
+        app.add_plugins(SimClockPlugin);
+        app.add_plugins(TermOutPlugin);
+        app.add_plugins(DumpPlugin::default());
+        app.add_plugins(RunPlugin);
+        let snippets = app
+            .get_resource_ref::<ConfigSnippets>()
+            .expect("built-in descriptions collected");
+        assert!(snippets
+            .snippets
+            .iter()
+            .any(|text| text.contains("[clock]")));
+        assert!(snippets
+            .snippets
+            .iter()
+            .any(|text| text.contains("Source: crates/grass_io/src/run.rs:StageConfig.steps")));
+    }
+
+    #[test]
+    fn built_in_unknown_fields_name_the_bad_key() {
+        let config = Config::from_str("[clock]\nstart_stpe = 1\n");
+        let error = config.try_section::<ClockConfig>("clock").unwrap_err();
+        assert!(error.to_string().contains("unknown field `start_stpe`"));
     }
 }
 

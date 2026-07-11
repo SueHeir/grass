@@ -48,7 +48,8 @@ mod term_out;
 
 pub use clock::{advance_step, every_n_steps, ClockConfig, SimClock, SimClockPlugin};
 pub use config::{
-    deep_merge, load_toml, try_load_toml, Config, ConfigError, Input, InputPlugin, MultiIoExt,
+    deep_merge, load_toml, try_load_toml, Config, ConfigError, DescribedConfig, Input, InputPlugin,
+    MultiIoExt,
 };
 pub use dump::{
     DumpBuffer, DumpConfig, DumpFormat, DumpPlugin, DumpSchedule, RawFrameWriter, DUMP_NAMESPACE,

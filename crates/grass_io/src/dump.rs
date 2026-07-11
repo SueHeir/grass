@@ -34,11 +34,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use grass_app::{App, Plugin};
+use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::Deserialize;
 
-use crate::{every_n_steps, Config, Input, SimClock, SimClockPlugin};
+use crate::{every_n_steps, Config, DescribedConfig, Input, SimClock, SimClockPlugin};
 
 /// Schedule namespace for [`DumpSchedule`]. Between [`crate::TERM_OUT_NAMESPACE`]
 /// and [`crate::RUN_NAMESPACE`] so dump runs after term_out's print
@@ -120,6 +120,37 @@ impl Default for DumpConfig {
     }
 }
 
+impl DescribedConfig for DumpConfig {
+    fn description() -> ConfigDescription {
+        ConfigDescription {
+            section: "dump",
+            array_table: false,
+            narrative: "Periodic per-frame file output.",
+            fields: &[
+                ConfigFieldDescription {
+                    name: "interval",
+                    ty: "integer",
+                    default: Some("0"),
+                    required: false,
+                    choices: &[],
+                    description: "Write interval in steps; 0 disables output.",
+                    source: "crates/grass_io/src/dump.rs:DumpConfig.interval",
+                },
+                ConfigFieldDescription {
+                    name: "path_template",
+                    ty: "string",
+                    default: Some("\"frame_{step:06}.bin\""),
+                    required: false,
+                    choices: &[],
+                    description:
+                        "Per-frame path; {step}, {step:0N}, and {time} expand when writing.",
+                    source: "crates/grass_io/src/dump.rs:DumpConfig.path_template",
+                },
+            ],
+        }
+    }
+}
+
 // ─── Schedule ───────────────────────────────────────────────────────────────
 
 /// User fills the buffer in `Build`; plugin writes in `Write`.
@@ -161,7 +192,7 @@ impl Default for DumpPlugin<RawFrameWriter> {
 
 impl<F: DumpFormat> Plugin for DumpPlugin<F> {
     fn build(&self, app: &mut App) {
-        let cfg = Config::load::<DumpConfig>(app, "dump");
+        let cfg = Config::load_described::<DumpConfig>(app);
 
         if app.get_resource_ref::<SimClock>().is_none() {
             app.add_plugins(SimClockPlugin);
@@ -185,17 +216,8 @@ impl<F: DumpFormat> Plugin for DumpPlugin<F> {
         }
     }
 
-    fn default_config(&self) -> Option<&str> {
-        Some(
-            r#"# [dump] — periodic per-frame file output.
-[dump]
-# Write every N steps. 0 disables.
-interval = 0
-# Per-frame path. {step} / {step:0N} / {time} expand at write time.
-# Relative paths resolve against Input.output_dir.
-path_template = "frame_{step:06}.bin"
-"#,
-        )
+    fn config_description(&self) -> Option<ConfigDescription> {
+        Some(DumpConfig::description())
     }
 }
 

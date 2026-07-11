@@ -24,7 +24,7 @@ use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet, StoredPhase}
 
 use crate::{CapabilityId, Plugin, Plugins, SubApp, SubApps};
 
-/// Collected TOML snippets from all plugins that implement [`Plugin::default_config`].
+/// Collected TOML snippets from all plugins that expose configuration metadata.
 ///
 /// This resource is automatically populated during plugin registration. When the
 /// [`GenerateConfigFlag`] resource is present, [`App::start`] prints these
@@ -347,10 +347,13 @@ impl App {
     /// If the plugin provides a [`Plugin::default_config`] snippet, appends it
     /// to the [`ConfigSnippets`] resource (creating the resource if needed).
     fn collect_config_snippet(&mut self, plugin: &dyn Plugin) {
-        let Some(snippet) = plugin.default_config() else {
-            return;
+        let snippet = match plugin.config_description() {
+            Some(description) => description.render_toml(),
+            None => match plugin.default_config() {
+                Some(snippet) => snippet.to_string(),
+                None => return,
+            },
         };
-        let snippet = snippet.to_string();
 
         if let Some(cell) = self.get_mut_resource(TypeId::of::<ConfigSnippets>()) {
             let mut borrow = cell.borrow_mut();
