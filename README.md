@@ -116,6 +116,105 @@ That division of ownership is the important part:
 - The **parent application** selects the plugins, orders the solver ticks and
   exchanges, and decides when the combined run is finished.
 
+### What one coupled step looks like in code
+
+Suppose CFD computes a force that a DEM library must apply during a public
+`ExternalForces` phase. The names in this example are illustrative: a real
+solver must export the equivalent phase and resource types as part of its
+coupling seam. The coupling package first defines the small adapter resource
+that will live inside the DEM sub-App:
+
+```rust
+use grass_scheduler::{Res, ResMut};
+
+#[derive(Default)]
+struct CfdForce(Vec<[f64; 3]>);
+
+fn apply_cfd_force(
+    force: Res<CfdForce>,
+    mut particles: ResMut<DemParticles>,
+) {
+    particles.add_external_forces(&force.0);
+}
+```
+
+After both solvers have been registered, the coupling plugin can install that
+resource and system into the existing DEM App without editing the DEM library:
+
+```rust
+parent.configure_subapp("dem", |dem| {
+    dem.add_resource(CfdForce::default());
+    dem.add_update_system(apply_cfd_force, DemPhase::ExternalForces);
+});
+```
+
+`configure_subapp` receives `&mut App`, so the inserted system is an ordinary
+DEM child system. It uses ordinary `Res` / `ResMut` and runs at the exact place
+defined by `DemPhase::ExternalForces`. Configuration must happen before the
+child is prepared or ticked, and currently applies only to local sub-Apps.
+
+The cross-solver conversion is a different system. It belongs to the parent
+schedule and uses typed namespace markers to borrow resources from the child
+Apps:
+
+```rust
+use grass_multi::{namespace, MultiRes, MultiResMut};
+
+namespace!(Cfd = "cfd");
+namespace!(Dem = "dem");
+
+fn transfer_cfd_force(
+    cfd: MultiRes<CfdState, Cfd>,
+    mut force: MultiResMut<CfdForce, Dem>,
+) {
+    force.0 = calculate_particle_forces(&cfd);
+}
+```
+
+`MultiRes<CfdState, Cfd>` is a shared borrow from the CFD child resource store.
+`MultiResMut<CfdForce, Dem>` is an exclusive borrow from the DEM child resource
+store. They are automatically injected into this parent system just like
+ordinary `Res` and `ResMut` are injected into a child system.
+
+Finally, ticking a child is also an ordinary parent system. The parent places
+the complete solver ticks and the exchange in the required physical order:
+
+```rust
+use grass_multi::tick_n_times;
+
+#[derive(Clone, Copy, Debug, ScheduleSet)]
+enum CoupledStep {
+    TickCfd,
+    TransferForce,
+    TickDem,
+    Check,
+}
+
+parent
+    .add_update_system(tick_n_times::<Cfd>(1), CoupledStep::TickCfd)
+    .add_update_system(transfer_cfd_force, CoupledStep::TransferForce)
+    .add_update_system(tick_n_times::<Dem>(1), CoupledStep::TickDem)
+    .add_update_system(check_coupled_run, CoupledStep::Check);
+```
+
+One parent iteration is therefore:
+
+```text
+tick CFD's complete schedule
+    → read CfdState and write DEM's CfdForce
+    → tick DEM's complete schedule
+        → ... → DemPhase::ExternalForces → ...
+    → check the combined stopping policy
+```
+
+The parent can put its own systems before, after, or between calls to
+`tick_n_times` / `tick_subapp`. A child tick normally runs that child's entire
+schedule. To place coupling work *inside* a child tick, the child must expose a
+phase such as `ExternalForces`, and the coupling plugin installs an adapter there
+with `configure_subapp` as shown above. Ticking and `MultiRes` access must remain
+in separate parent systems because they borrow the parent's `SubApps` resource
+in incompatible ways.
+
 The full, test-linked rules are in the
 [Scientific Library Composition Contract](docs/src/reference/library-composition-contract.md).
 
