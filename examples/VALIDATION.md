@@ -10,7 +10,10 @@ render in Gitea:
 - [`oscillator_coupling_schemes`](oscillator_coupling_schemes/README.md) embeds
   [`plots/coupling_schemes.png`](oscillator_coupling_schemes/plots/coupling_schemes.png),
   comparing explicit, Picard, relaxed, and adaptive exchange policies with the
-  independent SciPy matrix-exponential reference for the coupled normal mode.
+  independent SciPy matrix-exponential reference for the coupled normal mode;
+  its reproducible `showcase.py` command also commits
+  [`plots/coupling_histories.png`](oscillator_coupling_schemes/plots/coupling_histories.png)
+  and the full executable history in `data/coupling_histories.csv`.
 
 - [`oscillator_mpmd`](oscillator_mpmd/README.md) embeds
   [`plots/local_contract_comparison.png`](oscillator_mpmd/plots/local_contract_comparison.png),

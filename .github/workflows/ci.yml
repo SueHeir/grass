@@ -29,6 +29,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install oscillator evidence Python dependencies
+        run: python3 -m pip install --user numpy scipy matplotlib
+
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
@@ -55,6 +58,9 @@ jobs:
         run: |
           cargo build --features mpi --example oscillator_mpmd_a --example oscillator_mpmd_b
           ./examples/oscillator_mpmd/run_mpmd.sh
+
+      - name: Reproducible oscillator showcase (schemes + LocalTransport + MPI)
+        run: python3 examples/oscillator_coupling_schemes/showcase.py
 
       - name: cargo doc (broken intra-doc links = error)
         env:

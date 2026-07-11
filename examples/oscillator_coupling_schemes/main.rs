@@ -182,6 +182,17 @@ fn report(
     }
 }
 
+// Machine-readable scientific trace consumed by the example sweep.  Keeping
+// it here makes the reported histories come from the same schedule execution
+// as the summary, rather than from a reconstructed implementation.
+fn trace(name: &str, step: usize, dt: f64, solve: (usize, f64, bool), p: Pair, e0: f64) {
+    let (iterations, residual, accepted) = solve;
+    println!(
+        "COUPLING_TRACE policy={name} step={step} dt={dt:.17e} iterations={iterations} residual={residual:.17e} accepted={accepted} energy_ratio={:.17e} state={:.17e},{:.17e},{:.17e},{:.17e}",
+        energy(p) / e0, p.a.x, p.a.v, p.b.x, p.b.v
+    );
+}
+
 fn explicit() -> Report {
     let (mut app, c) = build();
     let outer = app.get_mut_resource(TypeId::of::<SubApps>()).unwrap();
@@ -190,10 +201,19 @@ fn explicit() -> Report {
     set_dt(subs, c.nominal_dt);
     let e0 = energy(pair(subs));
     let mut max_r: f64 = 0.0;
-    for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
+    for step in 1..=(c.final_time / c.nominal_dt).round() as usize {
         let old = pair(subs);
         css_step(subs, old);
-        max_r = max_r.max(residual(pair(subs), old));
+        let r = residual(pair(subs), old);
+        max_r = max_r.max(r);
+        trace(
+            "explicit_CSS",
+            step,
+            c.nominal_dt,
+            (1, r, true),
+            pair(subs),
+            e0,
+        );
     }
     report("explicit CSS", pair(subs), max_r, 1, 0, c.nominal_dt, e0)
 }
@@ -206,13 +226,25 @@ fn implicit(relaxed: bool) -> Report {
     let e0 = energy(pair(subs));
     let mut max_r: f64 = 0.0;
     let mut max_i = 0;
-    for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
+    for step in 1..=(c.final_time / c.nominal_dt).round() as usize {
         let start = pair(subs);
         let (accepted, i, r) =
             solve_picard(subs, start, c, relaxed).expect("nominal Picard step must converge");
         restore(subs, accepted);
         max_r = max_r.max(r);
         max_i = max_i.max(i);
+        trace(
+            if relaxed {
+                "relaxed_Picard"
+            } else {
+                "implicit_Picard"
+            },
+            step,
+            c.nominal_dt,
+            (i, r, true),
+            pair(subs),
+            e0,
+        );
     }
     report(
         if relaxed {
@@ -240,6 +272,7 @@ fn adaptive() -> Report {
     let mut min_h = f64::INFINITY;
     let mut max_r: f64 = 0.0;
     let mut max_i = 0;
+    let mut step = 0;
     while t < c.final_time - 1e-12 {
         h = h.min(c.final_time - t);
         set_dt(subs, h);
@@ -248,14 +281,27 @@ fn adaptive() -> Report {
             Ok((accepted, i, r)) => {
                 restore(subs, accepted);
                 t += h;
+                step += 1;
                 min_h = min_h.min(h);
                 max_r = max_r.max(r);
                 max_i = max_i.max(i);
+                trace("adaptive_retry", step, h, (i, r, true), pair(subs), e0);
                 h = c.nominal_dt;
             }
             Err(r) => {
                 max_r = max_r.max(r);
                 rejects += 1;
+                // A rejected attempt has no trajectory state, but its
+                // residual, iteration cap, and proposed dt are evidence for
+                // the adaptive decision.
+                trace(
+                    "adaptive_retry",
+                    step + 1,
+                    h,
+                    (c.picard_max_iterations, r, false),
+                    start,
+                    e0,
+                );
                 h *= 0.5;
                 assert!(
                     h >= c.minimum_dt - 1e-12,
