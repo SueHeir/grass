@@ -371,7 +371,9 @@ mod tests {
             fn resource_type_id() -> Option<(TypeId, &'static str)> {
                 Some((TypeId::of::<Probe>(), std::any::type_name::<Probe>()))
             }
-            fn access_kind() -> AccessKind { AccessKind::Read }
+            fn access_kind() -> AccessKind {
+                AccessKind::Read
+            }
             fn validate(resources: &[RefCell<Box<dyn Any>>], index: usize) -> Vec<String> {
                 let guard = resources[index].borrow();
                 (!guard.downcast_ref::<Probe>().unwrap().0)

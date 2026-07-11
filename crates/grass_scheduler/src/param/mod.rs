@@ -209,10 +209,7 @@ pub trait SystemParam {
     ///
     /// Composite parameters can use this hook to validate state nested inside a
     /// resource, while ordinary resource parameters retain the default no-op.
-    fn validate(
-        _resources: &[RefCell<Box<dyn Any>>],
-        _index: usize,
-    ) -> Vec<String> {
+    fn validate(_resources: &[RefCell<Box<dyn Any>>], _index: usize) -> Vec<String> {
         Vec::new()
     }
 }
@@ -440,7 +437,11 @@ pub trait System {
     /// Resolves resource indices from the type-id map. Returns names of any missing resources.
     ///
     /// Called once during [`crate::Scheduler::organize_systems`] before the run loop begins.
-    fn prepare(&mut self, _index: &HashMap<TypeId, usize>, _resources: &[RefCell<Box<dyn Any>>]) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        _index: &HashMap<TypeId, usize>,
+        _resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         Vec::new()
     }
 
@@ -707,7 +708,11 @@ impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
             self.system.run(resources);
         }
     }
-    fn prepare(&mut self, index: &HashMap<TypeId, usize>, resources: &[RefCell<Box<dyn Any>>]) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        index: &HashMap<TypeId, usize>,
+        resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         let mut missing = self.condition.prepare(index);
         missing.extend(self.system.prepare(index, resources));
         missing
@@ -980,7 +985,11 @@ impl SystemGroup {
 }
 
 impl System for SystemGroup {
-    fn prepare(&mut self, index: &HashMap<TypeId, usize>, resources: &[RefCell<Box<dyn Any>>]) -> Vec<String> {
+    fn prepare(
+        &mut self,
+        index: &HashMap<TypeId, usize>,
+        resources: &[RefCell<Box<dyn Any>>],
+    ) -> Vec<String> {
         // Sort by (namespace, index)
         self.inner_systems
             .sort_by_key(|(_, phase)| phase.sort_key());
