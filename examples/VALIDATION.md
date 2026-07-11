@@ -7,6 +7,11 @@ render in Gitea:
   [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
   comparing an uncoupled numerical oscillator with its analytical solution.
 
+- [`oscillator_coupling_schemes`](oscillator_coupling_schemes/README.md) embeds
+  [`plots/coupling_schemes.png`](oscillator_coupling_schemes/plots/coupling_schemes.png),
+  comparing explicit, Picard, relaxed, and adaptive exchange policies with a
+  refined monolithic reference.
+
 - [`heat_diffusion_1d`](heat_diffusion_1d/README.md) embeds
   [`plots/heat_diffusion_validation.png`](heat_diffusion_1d/plots/heat_diffusion_validation.png).
 - [`hello_app`](hello_app/README.md) embeds

@@ -1,0 +1,30 @@
+# One physical model; policies in main.rs choose only exchange order, rollback,
+# relaxation, and retry cadence.  The oscillator library is unchanged.
+[case]
+final_time = 1.0
+nominal_dt = 0.04
+minimum_dt = 0.01
+reference_dt = 0.000025
+picard_tolerance = 1.0e-10
+picard_max_iterations = 80
+relaxation = 0.45
+
+[a.oscillator]
+x0 = 1.0
+v0 = 0.0
+peer_x0 = -1.0
+stiffness = 1.0
+damping = 0.0
+coupling_stiffness = 600.0
+mass = 1.0
+dt = 0.04
+
+[b.oscillator]
+x0 = -1.0
+v0 = 0.0
+peer_x0 = 1.0
+stiffness = 1.0
+damping = 0.0
+coupling_stiffness = 600.0
+mass = 1.0
+dt = 0.04
