@@ -89,9 +89,27 @@ use std::ops::{Deref, DerefMut};
 /// let comm = SingleProcessComm::new();
 /// let _rank = comm.rank(); // `CommBackend` is not imported by the prelude.
 /// ```
+///
+/// With the `mpi_backend` feature, the prelude includes the complete ordinary
+/// application-wiring lifecycle: optionally split an MPMD application before
+/// acquiring its communicator, build the resource, and finalize after the
+/// resource is dropped. This `no_run` example is a feature-gated compile-pass
+/// regression for that promise.
+///
+/// ```no_run
+/// # #[cfg(feature = "mpi_backend")]
+/// # {
+/// use grass_mpi::prelude::*;
+///
+/// init_app_color(0);
+/// let comm = CommResource(Box::new(MpiCommBackend::new(get_mpi_world())));
+/// drop(comm);
+/// finalize_mpi();
+/// # }
+/// ```
 pub mod prelude {
     #[cfg(feature = "mpi_backend")]
-    pub use crate::MpiCommBackend;
+    pub use crate::{finalize_mpi, get_mpi_world, init_app_color, MpiCommBackend};
     pub use crate::{CommResource, SingleProcessComm};
 }
 

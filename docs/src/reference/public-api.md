@@ -29,7 +29,11 @@ resources, systems, and scheduling vocabulary. `grass_io::prelude` covers the
 optional declarative configuration and observability plugins.
 `grass_multi::prelude` covers parent-App sub-App registration, local ticks,
 and typed exchange ports. `grass_mpi::prelude` covers installing either the
-serial or MPI communication resource.
+serial or MPI communication resource. With its `mpi_backend` feature it also
+includes the ordinary MPI lifecycle calls needed for that wiring:
+`init_app_color` for an MPMD split, `get_mpi_world`, and `finalize_mpi` after
+the resource is dropped. Raw-world transport/bootstrap accessors remain root
+imports because they are coupling-specific rather than normal app wiring.
 
 No prelude is required, and none changes what is available at a crate root.
 That is intentional compatibility policy: existing explicit imports and
