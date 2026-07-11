@@ -25,12 +25,11 @@ data.  Failed receives and malformed packets carry the mirror name, setup or
 each-iteration phase, direction, slot number, payload length, and underlying
 transport/wire cause through the existing fallible remote-pump diagnostic.
 
-The symmetric setup pump occupies the first receive slot, so the first
-completed iteration imports its own just-exported position; from the second
-iteration onward, each import is the other side's preceding export.  The
-independent recurrence used below states this one-slot startup latency
-explicitly.  It is intentionally kept unchanged between the `LocalTransport`
-replay and the MPI launch.
+The setup exchange establishes the other side's initial position before the
+first local tick.  At every iteration pump, each rank then imports the other
+rank's freshly exported position for its next local tick.  The independent
+recurrence used below implements this same exchange order for both the
+`LocalTransport` replay and the MPI launch.
 
 ## Runs
 

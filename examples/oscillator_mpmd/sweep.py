@@ -27,7 +27,7 @@ def recurrence(config):
 
     a, b = state("a"), state("b")
     values = []
-    for step in range(config["case"]["steps"]):
+    for _ in range(config["case"]["steps"]):
         def tick(q):
             x, v, peer, p = q
             accel = (-p["stiffness"] * x - p["damping"] * v
@@ -35,15 +35,10 @@ def recurrence(config):
             v += accel * p["dt"]
             return [x + v * p["dt"], v, peer, p]
         a_next, b_next = tick(a), tick(b)
-        # The symmetric setup pump occupies the first receive slot.  Thus the
-        # first completed iteration imports each side's just-exported value;
-        # thereafter each receive is the other side's preceding export.  This
-        # one-slot startup latency is part of this MPMD schedule, not a value
-        # sampled from the Rust replay.
-        if step == 0:
-            a_next[2], b_next[2] = a_next[0], b_next[0]
-        else:
-            a_next[2], b_next[2] = b_next[0], a_next[0]
+        # Setup has already exchanged each side's initial position.  After
+        # every completed iteration, each side imports the other side's fresh
+        # export for its next local tick.
+        a_next[2], b_next[2] = b_next[0], a_next[0]
         a, b = a_next, b_next
         values.append((a[0], a[1], b[0], b[1]))
     return values

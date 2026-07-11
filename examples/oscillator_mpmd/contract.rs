@@ -196,7 +196,17 @@ pub fn run_side_with_trace<Tr: Transport + 'static>(
     transport: Tr,
 ) -> (SideResult, Vec<SideResult>) {
     let (mut parent, steps) = build_side(name, transport);
-    parent.prepare(); // handshake: initial RemotePosition send, then receive.
+    parent.prepare();
+    // Unlike a parent App's scheduler setup, sub-App preparation is lazy.
+    // Complete this mirror's declared setup exchange before the first local
+    // tick, without advancing either solver or consuming an iteration slot.
+    parent
+        .get_mut_resource(TypeId::of::<SubApps>())
+        .expect("registered sub-apps")
+        .borrow_mut()
+        .downcast_mut::<SubApps>()
+        .expect("SubApps resource")
+        .prepare(REMOTE);
     let mut trace = Vec::with_capacity(steps);
     for _ in 0..steps {
         parent.run();

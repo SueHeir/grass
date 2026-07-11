@@ -27,7 +27,7 @@ def recurrence(config):
         return [p["x0"], p["v0"], p["peer_x0"], p]
     a, b = state("a"), state("b")
     result = []
-    for step in range(config["case"]["steps"]):
+    for _ in range(config["case"]["steps"]):
         def tick(q):
             x, v, peer, p = q
             accel = (-p["stiffness"] * x - p["damping"] * v
@@ -35,12 +35,9 @@ def recurrence(config):
             v += accel * p["dt"]
             return [x + v * p["dt"], v, peer, p]
         a, b = tick(a), tick(b)
-        # Match the documented one-slot startup latency of the symmetric
-        # setup pump, then the normal previous-peer export sequence.
-        if step == 0:
-            a[2], b[2] = a[0], b[0]
-        else:
-            a[2], b[2] = b[0], a[0]
+        # Setup has already exchanged each side's initial position.  The
+        # iteration pump then imports the other side's fresh export.
+        a[2], b[2] = b[0], a[0]
         result.append((a[0], a[1], b[0], b[1]))
     return result
 
