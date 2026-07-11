@@ -19,3 +19,9 @@ derive that reads its struct fields, Serde attributes, and documentation.
 and regression tests compare every serialized typed default field with generated
 TOML. This supports defaults, required status, enum choices, narrative comments, and source
 locations without placing a discretization assumption in `grass_app`.
+
+The renderer only emits a value for fields optional to Serde (`Option<T>` or
+`#[serde(default...)]`). A Rust `Default` implementation is not evidence that
+Serde accepts an omitted field: required fields remain commented placeholders,
+and the downstream contract test verifies that their generated sample still
+fails to deserialize until the user supplies one.

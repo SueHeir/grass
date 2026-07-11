@@ -183,6 +183,7 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
     };
     let mut generated_fields = Vec::new();
     let mut default_overrides = Vec::new();
+    let mut optional_field_names = Vec::new();
     for field in &fields.named {
         let ident = field.ident.as_ref().unwrap();
         let field_ty = &field.ty;
@@ -246,6 +247,11 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
             _ => false,
         };
         let required = !(has_default || is_option);
+        if !required {
+            // Serde optionality, rather than Rust's `Default`, decides which
+            // fields may be emitted as usable TOML values.
+            optional_field_names.push(field_name.clone());
+        }
         let ty = config_type_name(&field.ty);
         let description = field
             .attrs
@@ -278,7 +284,7 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
         generated_fields.push(quote! {
             ::grass_io::__private::grass_app::ConfigFieldDescription {
                 name: #field_name.to_string(), ty: #ty.to_string(),
-                default: defaults.remove(#field_name), required: #required,
+                default: defaults.get(#field_name).cloned(), required: #required,
                 choices: <#field_ty as ::grass_io::ConfigChoices>::choices(), description: #description.to_string(), source: #source,
             }
         });
@@ -289,7 +295,13 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
                 let mut defaults: ::std::collections::BTreeMap<::std::string::String, ::std::string::String> = ::grass_io::__private::toml::to_string(&Self::default())
                     .expect("default config must serialize to TOML")
                     .parse::<::grass_io::__private::toml::Table>().expect("serialized default must be a TOML table")
-                    .into_iter().map(|(key, value)| (key, value.to_string())).collect();
+                    .into_iter()
+                    // A `Default` impl can construct a value for a field that
+                    // Serde nevertheless requires callers to supply. Keep
+                    // only fields whose Serde definition explicitly permits
+                    // omission.
+                    .filter(|(key, _)| [#(#optional_field_names),*].contains(&key.as_str()))
+                    .map(|(key, value)| (key, value.to_string())).collect();
                 #(#default_overrides)*
                 ::grass_io::__private::grass_app::ConfigDescription {
                     section: #section.to_string(), array_table: #array_table,

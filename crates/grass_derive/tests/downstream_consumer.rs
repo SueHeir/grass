@@ -39,7 +39,7 @@ serde = {{ version = "1", features = ["derive"] }}
     .unwrap();
     fs::write(
         temp.join("src/main.rs"),
-        r#"use grass_derive::ConfigDescription;
+        r##"use grass_derive::ConfigDescription;
 use grass_io::DescribedConfig;
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +59,7 @@ fn main() {
     assert_eq!(ProbeConfig::description().fields[0].choices, ["fast-mode", "accurate-mode"]);
     assert_eq!(ProbeConfig::description().fields[1].name, "max-steps");
 }
-"#,
+"##,
     )
     .unwrap();
     let status = Command::new("cargo")
@@ -98,6 +98,43 @@ fn main() {
         custom_default.status.success(),
         "custom Serde default consumer must compile: {}",
         String::from_utf8_lossy(&custom_default.stderr)
+    );
+
+    // `Default` alone does not make a field optional to Serde. The generated
+    // sample must keep it as a placeholder and preserve Serde's error when it
+    // is omitted.
+    fs::write(
+        temp.join("src/main.rs"),
+        r##"use grass_derive::ConfigDescription;
+use grass_io::{Config, DescribedConfig};
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Deserialize, Serialize, ConfigDescription)]
+#[config_description(section = "probe")]
+struct ProbeConfig { required_name: String }
+
+fn main() {
+    let description = ProbeConfig::description();
+    let field = &description.fields[0];
+    assert!(field.required);
+    assert_eq!(field.default, None);
+    let sample = description.render_toml();
+    assert!(sample.contains("# required_name = <required string>"));
+    assert!(!sample.contains("\nrequired_name ="));
+    assert!(Config::from_str(&sample).try_section::<ProbeConfig>("probe").is_err());
+}
+"##,
+    )
+    .unwrap();
+    let required_field = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(
+        required_field.status.success(),
+        "required-field consumer must preserve Serde rejection: {}",
+        String::from_utf8_lossy(&required_field.stderr)
     );
     let _ = fs::remove_dir_all(&temp);
 }
