@@ -65,9 +65,10 @@ fingerprint mismatch is a documented warning—not a false failure—when every
 trajectory value satisfies the numerical criterion, because heterogeneous MPI
 ranks or builds may take different floating-point instruction paths.
 
-![LocalTransport full trajectory versus independent recurrence](plots/local_contract_comparison.png)
+![LocalTransport full state trajectory versus independent recurrence](plots/local_contract_comparison.png)
 
-The full 40-step LocalTransport trajectory overlaps the separately implemented
-explicit recurrence within the visible ±`5e-14` criterion (PASS).  The MPI CI
-launch applies that same recurrence comparison to its recorded two-binary
-trajectory.
+The four panels show the full 40-step LocalTransport state vector—A position,
+A velocity, B position, and B velocity—against the separately implemented
+explicit recurrence.  Every checked observable overlaps the visible
+±`5e-14` criterion (PASS).  The MPI CI launch applies that same full-vector
+recurrence comparison to its recorded two-binary trajectory.

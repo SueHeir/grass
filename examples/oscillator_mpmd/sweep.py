@@ -69,8 +69,16 @@ error = max_error(measured, reference)
 assert error <= TOL, f"LocalTransport trajectory error {error:.3e} exceeds {TOL:.1e}"
 
 steps = range(1, len(reference) + 1)
-fig, axes = plt.subplots(2, 1, figsize=(7.4, 5.4), sharex=True)
-for axis, index, name in zip(axes, (0, 2), ("oscillator A position", "oscillator B position")):
+# The acceptance check is over the complete state vector, not position alone.
+# Keep one panel per checked component so a velocity-only regression is visible
+# in the committed artifact as well as in the scalar maximum-error gate.
+fig, axes = plt.subplots(2, 2, figsize=(9.2, 5.8), sharex=True)
+for axis, index, name in zip(
+    axes.flat,
+    (0, 1, 2, 3),
+    ("oscillator A position", "oscillator A velocity",
+     "oscillator B position", "oscillator B velocity"),
+):
     ref = [row[index] for row in reference]
     got = [row[index] for row in measured]
     axis.plot(steps, ref, "-", lw=2, label="independent explicit recurrence")
@@ -79,8 +87,9 @@ for axis, index, name in zip(axes, (0, 2), ("oscillator A position", "oscillator
                       color="C0", alpha=.18, label=f"acceptance band ±{TOL:.0e}")
     axis.set_ylabel(name)
     axis.grid(alpha=.3)
-axes[0].legend(loc="best", fontsize=8)
-axes[-1].set_xlabel("completed coupling step")
+axes[0, 0].legend(loc="best", fontsize=8)
+for axis in axes[-1]:
+    axis.set_xlabel("completed coupling step")
 fig.suptitle(f"full 40-step contract trajectory: max |Local − recurrence| = {error:.1e} (PASS)")
 fig.tight_layout()
 plot = HERE / "plots" / "local_contract_comparison.png"
