@@ -271,6 +271,19 @@ impl MpiRuntime {
         crate::MpiCommBackend::new(crate::get_mpi_world())
     }
 
+    /// Return this role's solver communicator as an MPI Fortran handle.
+    ///
+    /// A Fortran handle is the portable integer representation intended for
+    /// crossing an FFI boundary. Native libraries should recover the C
+    /// communicator with `MPI_Comm_f2c` rather than assuming `MPI_Comm` is an
+    /// integer or reusing `MPI_COMM_WORLD`.
+    pub fn solver_comm_fortran_handle(&self) -> std::os::raw::c_int {
+        use mpi::raw::AsRaw;
+
+        let communicator = crate::get_mpi_world();
+        unsafe { mpi::ffi::RSMPI_Comm_c2f(communicator.as_raw()) }
+    }
+
     /// Finalize MPI after all Apps and communicator-backed resources have been
     /// dropped. Consumes the runtime to prevent accidental reuse.
     pub fn finalize(self) {

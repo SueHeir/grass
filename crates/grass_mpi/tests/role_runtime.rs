@@ -17,6 +17,7 @@ fn run_child() {
     let runtime = MpiRuntime::initialize(topology).unwrap();
     let assignment = runtime.assignment();
     let backend = runtime.solver_backend();
+    let _comm_f = runtime.solver_comm_fortran_handle();
 
     assert_eq!(backend.rank(), assignment.role_rank());
     assert_eq!(backend.size(), assignment.role_size());

@@ -440,12 +440,11 @@ fn world_from_universe_or_external_init(
 pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
     let mut lifecycle = MPI_LIFECYCLE.lock().unwrap();
     if let Some(intra) = lifecycle.intra.as_ref() {
-        // Clone the intra-comm handle for the caller. SimpleCommunicator's
-        // CommunicatorHandle wraps an MPI_Comm raw handle that's safe to
-        // duplicate; rsmpi handles the underlying refcount.
-        use mpi::raw::AsRaw;
-        let raw = intra.comm.as_raw();
-        return unsafe { mpi::raw::FromRaw::from_raw(raw) };
+        // Each `SimpleCommunicator` owns and frees a user communicator. An MPI
+        // duplicate gives the caller independent ownership while the lifecycle
+        // retains the original split communicator.
+        use mpi::topology::Communicator;
+        return intra.comm.duplicate();
     }
 
     let mut guard = MPI_UNIVERSE.lock().unwrap();
