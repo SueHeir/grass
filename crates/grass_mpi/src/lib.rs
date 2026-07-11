@@ -71,6 +71,18 @@
 
 use std::ops::{Deref, DerefMut};
 
+/// The `grass_mpi` application prelude.
+///
+/// Import this when wiring a communication resource into an application. A
+/// custom communication backend implements [`CommBackend`] explicitly at the
+/// crate root; it is intentionally not hidden behind a broader convenience
+/// import.
+pub mod prelude {
+    #[cfg(feature = "mpi_backend")]
+    pub use crate::MpiCommBackend;
+    pub use crate::{CommBackend, CommResource, SingleProcessComm};
+}
+
 #[cfg(feature = "mpi_backend")]
 use std::sync::Mutex;
 

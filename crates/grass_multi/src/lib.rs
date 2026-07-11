@@ -169,3 +169,17 @@ pub use transport::MpiInterCommTransport;
 pub use transport::{LocalTransport, Transport, TransportError, TransportOperation};
 pub use typed_multi::{MultiRes, MultiResMut};
 pub use wire::{Wire, WireUnpackError};
+
+/// The `grass_multi` application prelude.
+///
+/// It contains the local parent-App wiring and exchange-port primitives used by
+/// most coupled applications. Library-author contracts such as [`Physics`],
+/// [`Wire`], and [`Transport`] deliberately stay at the crate root: importing
+/// one of those contracts should be an explicit decision by the implementing
+/// library.
+pub mod prelude {
+    pub use crate::{
+        consume_field, expose_field, tick_n_times, tick_subapp, MultiAppExt, MultiRes, MultiResMut,
+        Namespace, Port,
+    };
+}
