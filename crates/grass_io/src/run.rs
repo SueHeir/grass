@@ -26,7 +26,8 @@ use std::fmt;
 
 use grass_app::{App, Plugin, ScheduleSetupSet, StageNames};
 use grass_scheduler::{
-    first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState,
+    first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
+    SystemLabel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,19 @@ use crate::{advance_step, SimClockPlugin};
 /// Schedule namespace `RunSchedule` sorts at — high enough that it
 /// always runs AFTER user phase enums (which default to namespace 0).
 pub const RUN_NAMESPACE: u32 = 1000;
+
+/// Type-level label for the run driver's cycle-counter update system.
+pub struct UpdateCycleSystem;
+
+impl SystemLabel for UpdateCycleSystem {
+    const NAME: &'static str = "update_cycle";
+}
+
+/// Stable scheduler key for [`update_cycle`].
+///
+/// Systems that must run before the run driver advances its cycle counters can
+/// order against this key without repeating its string label.
+pub const UPDATE_CYCLE: SystemKey<UpdateCycleSystem> = SystemKey::new();
 
 /// Schedule sets owned by the run driver.
 #[derive(Debug, Clone, Copy, ScheduleSet)]
@@ -385,7 +399,7 @@ impl std::error::Error for StageValidationError {}
 ///   - [`advance_step`] in [`RunSchedule::Cycle`] (skipped if user
 ///     pre-registered it).
 ///   - [`update_cycle`] in [`RunSchedule::Cycle`], labelled
-///     `"update_cycle"` so other systems can `.before("update_cycle")`.
+///     [`UPDATE_CYCLE`] so other systems can `.before(UPDATE_CYCLE)`.
 ///
 /// If [`StageNames`] is registered (i.e. a `StageAdvancePlugin` is in
 /// use), [`validate_stages`] is also wired in `ScheduleSetupSet::PreSetup`
@@ -422,7 +436,7 @@ impl Plugin for RunPlugin {
         if !app.has_update_system(advance_step) {
             app.add_update_system(advance_step, RunSchedule::Cycle);
         }
-        app.add_update_system(update_cycle.label("update_cycle"), RunSchedule::Cycle);
+        app.add_update_system(update_cycle.label(UPDATE_CYCLE), RunSchedule::Cycle);
 
         if app.get_resource_ref::<StageNames>().is_some() {
             app.add_setup_system(
@@ -650,6 +664,11 @@ pub fn validate_stages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_cycle_has_a_stable_typed_system_key() {
+        assert_eq!(UPDATE_CYCLE.name(), "update_cycle");
+    }
 
     #[derive(Debug, Default, Deserialize, PartialEq)]
     #[serde(deny_unknown_fields)]
