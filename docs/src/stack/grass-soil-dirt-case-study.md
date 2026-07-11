@@ -57,7 +57,7 @@ so particles are not part of Grass's public model.
 This gives a new library a small extension seam: define its own resources,
 schedule sets, systems, and plugins. A plugin may also provide a TOML snippet
 showing its configuration section and defaults through
-[`Plugin::default_config`](http://192.168.0.170:8082/SueHeir/grass/src/commit/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_app/src/plugin.rs#L171-L176).
+[`Plugin::default_config`](http://192.168.0.170:8082/SueHeir/grass/src/commit/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_app/src/plugin.rs#L96-L102).
 
 ### 2. SOIL owns particle plumbing, not a force law
 
