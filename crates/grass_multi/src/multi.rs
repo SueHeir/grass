@@ -117,16 +117,26 @@ impl SubApps {
         self.physics.iter().map(|p| p.name())
     }
 
-    /// Advance the named sub-App by one step, calling `prepare()` first if
-    /// this is the sub-App's first tick. Panics if the namespace is unknown.
-    pub fn tick(&mut self, ns: &str) {
+    /// Run a named sub-App's one-time preparation without advancing it.
+    ///
+    /// This is useful when a remote coupling's setup-time handshake must
+    /// complete before the outer iteration begins. [`Self::tick`] continues
+    /// to prepare lazily for the usual case.
+    pub fn prepare(&mut self, ns: &str) {
         let idx = self
             .idx_of(ns)
-            .unwrap_or_else(|| panic!("SubApps::tick: unknown namespace `{ns}`"));
+            .unwrap_or_else(|| panic!("SubApps::prepare: unknown namespace `{ns}`"));
         if !self.prepared[idx] {
             self.physics[idx].prepare();
             self.prepared[idx] = true;
         }
+    }
+
+    /// Advance the named sub-App by one step, calling `prepare()` first if
+    /// this is the sub-App's first tick. Panics if the namespace is unknown.
+    pub fn tick(&mut self, ns: &str) {
+        self.prepare(ns);
+        let idx = self.idx_of(ns).expect("known sub-App after preparation");
         self.physics[idx].step();
     }
 

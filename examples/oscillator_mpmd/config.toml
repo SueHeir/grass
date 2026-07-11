@@ -1,0 +1,24 @@
+# Declarative contract for both MPI binaries.  `a` owns world rank 0 and `b`
+# owns world rank 1 in the documented two-rank MPMD launch.
+[case]
+steps = 40
+
+[a.oscillator]
+x0 = 1.0
+v0 = 0.0
+peer_x0 = -0.5
+stiffness = 1.0
+damping = 0.0
+coupling_stiffness = 0.2
+mass = 1.0
+dt = 0.0025
+
+[b.oscillator]
+x0 = -0.5
+v0 = 0.0
+peer_x0 = 1.0
+stiffness = 1.0
+damping = 0.0
+coupling_stiffness = 0.2
+mass = 1.0
+dt = 0.0025
