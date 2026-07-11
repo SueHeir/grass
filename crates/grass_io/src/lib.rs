@@ -56,6 +56,7 @@ pub use dump::{
 pub use run::{
     run_read_input, set_stage_name, try_validate_stages, update_cycle, validate_stages,
     FirstStageOnlyConfigs, RunConfig, RunPlugin, RunSchedule, RunState, StageConfig,
-    StageOverrideSectionError, StageOverrides, StageValidationError, RUN_NAMESPACE,
+    StageOverrideSectionError, StageOverrides, StageValidationError, UpdateCycleSystem,
+    RUN_NAMESPACE, UPDATE_CYCLE,
 };
 pub use term_out::{TermOut, TermOutConfig, TermOutPlugin, TermOutSchedule, TERM_OUT_NAMESPACE};
