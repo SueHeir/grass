@@ -452,6 +452,25 @@ pub fn get_mpi_world() -> mpi::topology::SimpleCommunicator {
     world_from_universe_or_external_init(&mut guard)
 }
 
+/// Return the process-owned solver communicator as an MPI Fortran handle.
+///
+/// The handle remains valid until [`finalize_mpi`] and is intended for native
+/// solver libraries that convert it back with `MPI_Comm_f2c`.
+#[cfg(feature = "mpi_backend")]
+pub fn get_mpi_world_fortran_handle() -> std::os::raw::c_int {
+    use mpi::raw::AsRaw;
+
+    let lifecycle = MPI_LIFECYCLE.lock().unwrap();
+    if let Some(intra) = lifecycle.intra.as_ref() {
+        return unsafe { mpi::ffi::RSMPI_Comm_c2f(intra.comm.as_raw()) };
+    }
+    drop(lifecycle);
+
+    let mut guard = MPI_UNIVERSE.lock().unwrap();
+    let world = world_from_universe_or_external_init(&mut guard);
+    unsafe { mpi::ffi::RSMPI_Comm_c2f(world.as_raw()) }
+}
+
 /// Fallible form of [`init_app_color`].
 ///
 /// This is idempotent only when called again with the same `color`. It returns

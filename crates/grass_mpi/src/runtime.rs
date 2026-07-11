@@ -278,10 +278,7 @@ impl MpiRuntime {
     /// communicator with `MPI_Comm_f2c` rather than assuming `MPI_Comm` is an
     /// integer or reusing `MPI_COMM_WORLD`.
     pub fn solver_comm_fortran_handle(&self) -> std::os::raw::c_int {
-        use mpi::raw::AsRaw;
-
-        let communicator = crate::get_mpi_world();
-        unsafe { mpi::ffi::RSMPI_Comm_c2f(communicator.as_raw()) }
+        crate::get_mpi_world_fortran_handle()
     }
 
     /// Finalize MPI after all Apps and communicator-backed resources have been
