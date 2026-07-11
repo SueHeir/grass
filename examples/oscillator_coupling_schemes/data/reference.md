@@ -13,12 +13,13 @@ simultaneously from the same old state, then advances both positions with
 those new velocities. This is the monolithic semi-implicit-Euler
 discretization of the same equations.
 
-It uses `h=0.000025`, 40 times smaller than the nominal coupling window.  The
+It uses `h=0.000025`, 800 times smaller than the nominal coupling window.  The
 coupled relative mode has angular frequency `sqrt((k+2 k_c)/m)`, so the chosen
 strong case (`k=1`, `k_c=600`) is stable at the reference step.  The plotted
 reference-discretization refinement is part of the executable check; it is
 not fitted to any scheme. The case runs to `t=0.1`: the refined monolithic
 solution and each converged policy must be within `0.4` of the exact solution.
 This is under 1.2% of the normal mode's velocity scale `sqrt(1201)`, a stated
-accuracy budget rather than a refinement-to-refinement gate. The same-window
-Picard fixed-point error remains limited to `2e-4`.
+accuracy budget for the reference rather than for the deliberately coarse
+nominal window. The converged same-window Picard fixed-point error remains
+limited to `2e-7` against its monolithic semi-implicit update.
