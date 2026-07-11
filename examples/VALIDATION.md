@@ -45,5 +45,5 @@ render in Gitea:
   cleanup, and legacy compatibility with independent measurements.
 - [`observed_oscillator`](observed_oscillator/README.md) embeds
   [`plots/generated_config_coverage.png`](observed_oscillator/plots/generated_config_coverage.png),
-  checking generated typed configuration field coverage against the built-in
-  plugin contract.
+  checking generated TOML with Python's independent parser, the executable's
+  normal CLI/Serde path, and an adversarial unknown-field diagnostic.

@@ -72,10 +72,12 @@ fn report_columns(s: Res<OscState>, mut term_out: ResMut<TermOut>) {
 
 fn main() {
     let mut app = App::new();
+    let generating_config = std::env::args().any(|arg| arg == "--generate-config");
 
-    // Keep the normal demo self-contained, but let InputPlugin handle
-    // --generate-config so this proof exercises the emitted reference.
-    if !std::env::args().any(|arg| arg == "--generate-config") {
+    // Keep the no-argument demo self-contained.  With either a TOML path or
+    // `--generate-config`, InputPlugin owns configuration so the generated
+    // file exercises the same CLI parsing route as a real application.
+    if std::env::args().len() == 1 {
         app.add_resource(Config::from_str(CONFIG));
     }
     app.add_plugins(InputPlugin);
@@ -104,6 +106,9 @@ fn main() {
 
     // Self-driving lifecycle: organize -> setup -> run both stages -> cleanup.
     app.start();
+    if generating_config {
+        return;
+    }
 
     let s = app.get_resource_ref::<OscState>().expect("OscState");
     println!(

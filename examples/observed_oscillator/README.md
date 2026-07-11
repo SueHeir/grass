@@ -34,8 +34,9 @@ source ~/projects/.build-env
 $BENCH_PYTHON sweep.py
 ```
 
-The figure shows all 12 fields individually, including each generated type and
-required/default status. It passes only when the generated output contains the
-complete field set and every row has type, status, and source metadata. The
-`grass_io` regression suite independently compares the generated fields and
-defaults with the typed Serde configuration definitions, including enum choices.
+The figure shows three independent outcomes: Python's standard-library TOML
+parser accepts the emitted bytes, the executable accepts that exact file through
+its normal CLI/Serde route, and an injected misspelled key is rejected with an
+actionable diagnostic. It does not claim that generated comments can encode all
+Serde behaviour; flattened maps and custom deserializers remain application
+semantics that need hand-written narrative and tests.
