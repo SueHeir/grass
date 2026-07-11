@@ -6,6 +6,7 @@
 # The Stack
 
 - [How the Stack Fits Together](./stack/how-the-stack-fits-together.md)
+- [Case Study: Grass → SOIL → DIRT](./stack/grass-soil-dirt-case-study.md)
 
 # The Model
 
