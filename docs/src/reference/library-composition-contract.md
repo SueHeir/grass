@@ -22,12 +22,12 @@ or a stable external wire protocol.
 - A library **MUST NOT** rely on undeclared shared state to communicate between
   systems. It **MUST** establish `.before()`, `.after()`, or phase order when a
   reader must observe a particular writer; conflicting same-phase access is not
-  rejected by schedule validation. [Typed-label example](../../examples/typed_system_labels/README.md)
+  rejected by schedule validation. [Typed-label example](https://github.com/SueHeir/grass/tree/main/examples/typed_system_labels)
   checks required and optional ordering.
 - A package for this tier **MUST NOT** embed a discretization assumption in
   Grass-facing abstractions. Particle, mesh, and equation-specific state belongs
   in a lower or physics tier, not `grass_*`. The runnable
-  [heat-diffusion example](../../examples/heat_diffusion_1d/README.md) is the
+  [heat-diffusion example](https://github.com/SueHeir/grass/tree/main/examples/heat_diffusion_1d) is the
   current non-particle scheduler evidence.
 
 ### 2. Systems, labels, and time
@@ -38,7 +38,7 @@ or a stable external wire protocol.
   contract. A system needing a label **SHOULD** use an exported typed
   `SystemLabel`/`SystemKey`, and **MUST** use `.requires(...)` when absence is
   an error; `.after(...)` is only an optional order preference. [Label matrix
-  source](../../examples/typed_system_labels/main.rs) is runnable coverage.
+  source](https://github.com/SueHeir/grass/blob/main/examples/typed_system_labels/main.rs) is runnable coverage.
 - A composed app **MUST** give independently authored phase enums distinct
   namespaces, or install an explicit `Schedule`; otherwise their index-zero
   phases may interleave. [Namespace and schedule-order tests](https://github.com/SueHeir/grass/blob/main/crates/grass_scheduler/src/lib.rs#L705-L771)
@@ -46,7 +46,7 @@ or a stable external wire protocol.
 - A library with stage-specific behavior **MUST** make stage names and order
   agree between `StageEnum` and declarative `[[run]]` configuration. It
   **MUST NOT** treat a bare scheduler's `stage_name` as driven. Startup
-  validation is described and exercised by the [stage contract](../derives.md#stageenum).
+  validation is described and exercised by the [stage contract](./derives.md#stageenum).
 - An external driver that uses `prepare()`/`run()` rather than `start()`
   **MUST** call `run_cleanup()`; a parent that owns sub-Apps **MUST** call
   `SubApps::cleanup_all()`. This is observable lifecycle behavior, not an
@@ -81,7 +81,7 @@ or a stable external wire protocol.
   interface, with `expose_field` and `consume_field`; the consumer **MUST NOT**
   name the producer's private resource type. The producer-to-port-to-consumer
   sequence **MUST** be ordered around producer and consumer ticks. The
-  [port integration test](../../crates/grass_multi/tests/coupling_port.rs)
+  [port integration test](https://github.com/SueHeir/grass/blob/main/crates/grass_multi/tests/coupling_port.rs)
   drives a field-style producer and particle-style consumer against a closed
   form, and also checks independent ports compose.
 - A one-off `MultiRes`/`MultiResMut` coupler **MAY** read/write sub-App state
@@ -96,17 +96,17 @@ or a stable external wire protocol.
   cadence (`send_at_setup`, `recv_at_setup`, `send_each_iter`, or
   `recv_each_iter`) on both peers in matching order. Before a peer tick,
   the local side **MUST** export its current value into the mirror; otherwise
-  the peer can observe stale bounced-back state. [Remote wiring tests](../../crates/grass_multi/tests/multi_phase3.rs)
+  the peer can observe stale bounced-back state. [Remote wiring tests](https://github.com/SueHeir/grass/blob/main/crates/grass_multi/tests/multi_phase3.rs)
   cover both the stale and correctly exported cases.
 - A remote payload type **MUST** implement `Wire`; `pack` and `try_unpack`
   **MUST** agree on exactly one complete transport message. Implementations
   **MUST** reject malformed input through `WireUnpackError` rather than relying
   on a panic. Primitive and malformed-payload coverage lives in
-  [wire tests](../../crates/grass_multi/src/wire.rs#L278-L358).
+  [wire tests](https://github.com/SueHeir/grass/blob/main/crates/grass_multi/src/wire.rs#L278-L358).
 - A `Transport` implementation **MUST** make `try_send` and `try_recv` return
   `TransportError` with its name, operation, and useful failure detail.
   Remote callers **SHOULD** preserve the resulting mirror, phase, direction,
-  slot, and decoding context. [Transport/error integration tests](../../crates/grass_multi/tests/multi_phase3.rs#L711-L870)
+  slot, and decoding context. [Transport/error integration tests](https://github.com/SueHeir/grass/blob/main/crates/grass_multi/tests/multi_phase3.rs#L711-L870)
   check peer drops, send/receive failures, truncation, and invalid UTF-8.
 
 ### 6. Coherence and determinism
