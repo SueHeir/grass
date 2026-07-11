@@ -1459,36 +1459,117 @@ mod tests {
         }
     }
 
-    #[test]
-    fn try_add_plugins_returns_build_error_stops_group_and_cleans_up() {
+    struct FailedPluginGroupObservation {
+        error: AppError,
+        later_builds: usize,
+        cleanup: usize,
+        failing_plugin_registered: bool,
+    }
+
+    fn run_failed_plugin_group() -> FailedPluginGroupObservation {
         let cleanup_count = Arc::new(AtomicUsize::new(0));
         let later_builds = Arc::new(AtomicUsize::new(0));
         let mut app = App::new();
 
-        let Err(err) = app.try_add_plugins(FailingBuildGroup {
+        let Err(error) = app.try_add_plugins(FailingBuildGroup {
             cleanup_count: Arc::clone(&cleanup_count),
             later_builds: Arc::clone(&later_builds),
         }) else {
             panic!("failing plugin group must return an error");
         };
 
+        FailedPluginGroupObservation {
+            error,
+            later_builds: later_builds.load(Ordering::SeqCst),
+            cleanup: cleanup_count.load(Ordering::SeqCst),
+            failing_plugin_registered: app
+                .main()
+                .plugin_names
+                .iter()
+                .any(|name| name.contains("FailingBuildPlugin")),
+        }
+    }
+
+    #[test]
+    fn fallible_plugin_build_returns_app_error() {
+        let observation = run_failed_plugin_group();
+
+        assert!(matches!(observation.error, AppError::PluginBuild { .. }));
+        assert!(observation.error.to_string().contains("FailingBuildPlugin"));
+        assert!(!observation.failing_plugin_registered);
+    }
+
+    #[test]
+    fn fallible_plugin_group_stops_after_failed_build() {
+        let observation = run_failed_plugin_group();
+
+        assert_eq!(observation.later_builds, 0);
+    }
+
+    #[test]
+    fn fallible_plugin_build_failure_runs_cleanup() {
+        let observation = run_failed_plugin_group();
+
+        assert_eq!(observation.cleanup, 1);
+    }
+
+    struct NestedFailingPlugin;
+
+    impl Plugin for NestedFailingPlugin {
+        fn build(&self, _app: &mut App) {}
+
+        fn try_build(&self, _app: &mut App) -> Result<(), AppError> {
+            Err(AppError::message("nested configuration rejected"))
+        }
+    }
+
+    struct NestedRegistrationPlugin;
+
+    impl Plugin for NestedRegistrationPlugin {
+        fn build(&self, _app: &mut App) {}
+
+        fn try_build(&self, app: &mut App) -> Result<(), AppError> {
+            // Plugins that compose their own optional pieces can use the same
+            // fallible boundary; do not turn an inner registration failure into
+            // a panic while unwinding the outer plugin build.
+            app.try_add_plugins(NestedFailingPlugin)?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn nested_fallible_plugin_registration_propagates_app_error() {
+        let mut app = App::new();
+
+        let Err(err) = app.try_add_plugins(NestedRegistrationPlugin) else {
+            panic!("nested registration failure must remain an AppError");
+        };
+
         assert!(matches!(err, AppError::PluginBuild { .. }));
-        assert!(err.to_string().contains("FailingBuildPlugin"));
-        assert_eq!(later_builds.load(Ordering::SeqCst), 0);
-        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        assert!(err.to_string().contains("NestedRegistrationPlugin"));
+        assert!(err.to_string().contains("nested configuration rejected"));
         assert!(!app
             .main()
             .plugin_names
             .iter()
-            .any(|n| n.contains("FailingBuildPlugin")));
+            .any(|name| name.contains("NestedFailingPlugin")));
     }
 
-    #[test]
-    fn fallible_setup_stops_later_setup_and_runs_cleanup() {
+    struct FailedSetupObservation {
+        error: AppError,
+        first: usize,
+        later: usize,
+        cleanup: usize,
+        updates: usize,
+    }
+
+    fn run_failed_setup_lifecycle() -> FailedSetupObservation {
         let first = Arc::new(AtomicUsize::new(0));
         let later = Arc::new(AtomicUsize::new(0));
         let cleanup = Arc::new(AtomicUsize::new(0));
         let mut app = App::new();
+        app.add_resource(UpdateSentinel::default());
+        app.add_update_system(update_sentinel, ScheduleSetupSet::Setup);
         let cleanup_for_callback = Arc::clone(&cleanup);
         app.add_cleanup_with_app(move |_app| {
             cleanup_for_callback.fetch_add(1, Ordering::SeqCst);
@@ -1512,15 +1593,49 @@ mod tests {
             ScheduleSetupSet::PostSetup,
         );
 
-        let Err(err) = app.try_prepare() else {
+        let Err(error) = app.try_start() else {
             panic!("failing setup must return an error");
         };
 
-        assert!(matches!(err, AppError::SetupSystem { .. }));
-        assert!(err.to_string().contains("check-input"));
-        assert_eq!(first.load(Ordering::SeqCst), 1);
-        assert_eq!(later.load(Ordering::SeqCst), 0);
-        assert_eq!(cleanup.load(Ordering::SeqCst), 1);
+        let updates = app.get_resource_ref::<UpdateSentinel>().unwrap().0;
+        FailedSetupObservation {
+            error,
+            first: first.load(Ordering::SeqCst),
+            later: later.load(Ordering::SeqCst),
+            cleanup: cleanup.load(Ordering::SeqCst),
+            updates,
+        }
+    }
+
+    #[test]
+    fn fallible_setup_stops_later_setup() {
+        let observation = run_failed_setup_lifecycle();
+
+        assert!(matches!(observation.error, AppError::SetupSystem { .. }));
+        assert!(observation.error.to_string().contains("check-input"));
+        assert_eq!(observation.first, 1);
+        assert_eq!(observation.later, 0);
+    }
+
+    #[test]
+    fn fallible_setup_failure_prevents_update_execution() {
+        let observation = run_failed_setup_lifecycle();
+
+        assert_eq!(observation.updates, 0);
+    }
+
+    #[test]
+    fn fallible_setup_failure_runs_cleanup() {
+        let observation = run_failed_setup_lifecycle();
+
+        assert_eq!(observation.cleanup, 1);
+    }
+
+    #[derive(Default)]
+    struct UpdateSentinel(usize);
+
+    fn update_sentinel(mut sentinel: ResMut<UpdateSentinel>) {
+        sentinel.0 += 1;
     }
 
     #[derive(Default)]

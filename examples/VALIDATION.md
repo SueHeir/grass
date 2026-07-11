@@ -24,4 +24,5 @@ render in Gitea:
   compatibility.
 - [`fallible_lifecycle`](fallible_lifecycle/README.md) embeds
   [`plots/fallible_lifecycle_matrix.png`](fallible_lifecycle/plots/fallible_lifecycle_matrix.png),
-  checking plugin-build and setup failure propagation, cleanup, and legacy compatibility.
+  checking plugin-group/nested-plugin and setup failure propagation, update short-circuit,
+  cleanup, and legacy compatibility with independent measurements.

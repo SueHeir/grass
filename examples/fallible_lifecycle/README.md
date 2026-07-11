@@ -1,9 +1,10 @@
 # Fallible lifecycle validation
 
-This validation executes the `grass_app` fallible plugin-build and setup tests.
-Each row is measured from the test command; the required value for every row is
-PASS. It checks failure propagation through a plugin group, setup short-circuit,
-cleanup, and the compatibility path for existing plugins and setup systems.
+This validation runs each `grass_app` lifecycle assertion as an independent test
+command. The figure compares each measured result with its required PASS value:
+plugin-group and nested-plugin error propagation, setup and update short-circuit,
+cleanup, and compatibility with existing plugins and setup systems. A failed
+assertion changes only its own measured row to FAIL.
 
 ![Fallible lifecycle validation matrix](plots/fallible_lifecycle_matrix.png)
 
