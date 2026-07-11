@@ -22,7 +22,7 @@ use std::{
 
 use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet};
 
-use crate::{Plugin, Plugins, SubApp, SubApps};
+use crate::{CapabilityId, Plugin, Plugins, SubApp, SubApps};
 
 /// Collected TOML snippets from all plugins that implement [`Plugin::default_config`].
 ///
@@ -137,16 +137,49 @@ impl App {
 
         self.collect_config_snippet(&*plugin);
 
-        // Collect capability contracts after build.
-        for cap in plugin.provides() {
+        let dependencies = plugin
+            .dependencies()
+            .into_iter()
+            .enumerate()
+            .map(|(index, type_id)| PluginDependency {
+                type_id,
+                name: plugin
+                    .dependency_names()
+                    .get(index)
+                    .map(|name| (*name).to_string()),
+            })
+            .collect();
+        self.main_mut()
+            .plugin_dependencies
+            .insert(plugin_name.clone(), dependencies);
+
+        // Collect both hook generations. Keeping the legacy strings here makes
+        // upgrades incremental while new callers use exported CapabilityId values.
+        let provided = plugin
+            .provides()
+            .into_iter()
+            .map(CapabilityId::legacy)
+            .chain(plugin.provides_capabilities())
+            .collect::<std::collections::BTreeSet<_>>();
+        let required = plugin
+            .requires()
+            .into_iter()
+            .map(CapabilityId::legacy)
+            .chain(plugin.requires_capabilities())
+            .collect::<std::collections::BTreeSet<_>>();
+        for capability in provided {
             self.main_mut()
-                .provided_capabilities
-                .insert(cap.to_string());
+                .capability_providers
+                .entry(capability)
+                .or_default()
+                .push(plugin_name.clone());
         }
-        for cap in plugin.requires() {
+        for capability in required {
             self.main_mut()
-                .required_capabilities
-                .push((cap.to_string(), plugin_name.clone()));
+                .capability_requirers
+                .entry(capability)
+                .or_default()
+                .push(plugin_name.clone());
         }
 
         Ok(self)
@@ -191,15 +224,19 @@ impl App {
     /// this before [`try_prepare`](Self::try_prepare) or [`try_start`](Self::try_start)
     /// when they need to surface wiring diagnostics without panicking.
     pub fn validate_capability_contracts_result(&self) -> Result<(), AppError> {
-        let provided = &self.main().provided_capabilities;
-        let required = &self.main().required_capabilities;
-
-        let missing: Vec<_> = required
+        let known_providers = self.known_capability_providers();
+        let missing: Vec<_> = self
+            .main()
+            .capability_requirers
             .iter()
-            .filter(|(cap, _)| !provided.contains(cap))
-            .map(|(cap, plugin_name)| MissingCapability {
-                capability: cap.clone(),
-                requiring_plugin: plugin_name.clone(),
+            .filter(|(capability, _)| !self.main().capability_providers.contains_key(*capability))
+            .flat_map(|(capability, requirers)| {
+                requirers.iter().map(|requiring_plugin| MissingCapability {
+                    capability: capability.as_str().to_string(),
+                    capability_id: capability.clone(),
+                    requiring_plugin: requiring_plugin.clone(),
+                    known_providers: known_providers.clone(),
+                })
             })
             .collect();
 
@@ -221,6 +258,51 @@ impl App {
         if let Err(err) = self.validate_capability_contracts_result() {
             err.panic_with_context();
         }
+    }
+
+    /// Returns a read-only snapshot of registered plugin contracts.
+    ///
+    /// The snapshot is deliberately data-only, making it suitable for generated
+    /// documentation and architecture diagrams without exposing mutable app state.
+    pub fn plugin_contracts(&self) -> PluginContracts {
+        let plugins = self
+            .main()
+            .plugin_dependencies
+            .iter()
+            .map(|(name, dependencies)| PluginContract {
+                plugin_name: name.clone(),
+                dependencies: dependencies.clone(),
+                provides: self
+                    .main()
+                    .capability_providers
+                    .iter()
+                    .filter(|(_, providers)| providers.iter().any(|provider| provider == name))
+                    .map(|(capability, _)| capability.clone())
+                    .collect(),
+                requires: self
+                    .main()
+                    .capability_requirers
+                    .iter()
+                    .filter(|(_, requirers)| requirers.iter().any(|requirer| requirer == name))
+                    .map(|(capability, _)| capability.clone())
+                    .collect(),
+            })
+            .collect();
+        PluginContracts {
+            plugins,
+            capabilities: self.known_capability_providers(),
+        }
+    }
+
+    fn known_capability_providers(&self) -> Vec<CapabilityProvider> {
+        self.main()
+            .capability_providers
+            .iter()
+            .map(|(capability, providers)| CapabilityProvider {
+                capability: capability.clone(),
+                providers: providers.clone(),
+            })
+            .collect()
     }
 
     /// If the plugin provides a [`Plugin::default_config`] snippet, appends it
@@ -618,23 +700,87 @@ pub struct MissingPluginDependency {
     pub name: Option<String>,
 }
 
+/// A concrete plugin dependency declared in a [`PluginContract`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDependency {
+    /// The concrete plugin type required before registration.
+    pub type_id: TypeId,
+    /// Human-readable dependency name, when supplied by the plugin.
+    pub name: Option<String>,
+}
+
+/// One plugin's concrete dependencies and substitutable capability contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginContract {
+    /// The plugin's human-readable name.
+    pub plugin_name: String,
+    /// Concrete, ordering-sensitive plugin dependencies.
+    pub dependencies: Vec<PluginDependency>,
+    /// Capabilities this plugin supplies.
+    pub provides: Vec<CapabilityId>,
+    /// Capabilities this plugin needs from any provider.
+    pub requires: Vec<CapabilityId>,
+}
+
+/// A capability and all plugins that currently provide it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityProvider {
+    /// The capability identifier.
+    pub capability: CapabilityId,
+    /// Registered plugins that provide the capability.
+    pub providers: Vec<String>,
+}
+
+/// Read-only model of all plugin contracts in an [`App`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginContracts {
+    /// Contracts declared by each registered plugin.
+    pub plugins: Vec<PluginContract>,
+    /// Provider index for every supplied capability.
+    pub capabilities: Vec<CapabilityProvider>,
+}
+
 /// A required capability tag that has no registered provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingCapability {
-    /// The capability tag returned by [`Plugin::requires`].
+    /// The missing capability name, retained for compatibility with the
+    /// string-tag contract API.
     pub capability: String,
+    /// The typed missing capability identifier for new consumers.
+    pub capability_id: CapabilityId,
     /// The plugin that required this capability tag.
     pub requiring_plugin: String,
+    /// Capabilities that are known to have registered providers at validation time.
+    pub known_providers: Vec<CapabilityProvider>,
 }
 
 impl fmt::Display for MissingCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "capability `{}` required by `{}`",
-            self.capability, self.requiring_plugin
+            "capability `{}` required by `{}`; known providers: {}",
+            self.capability_id,
+            self.requiring_plugin,
+            format_known_providers(&self.known_providers)
         )
     }
+}
+
+fn format_known_providers(providers: &[CapabilityProvider]) -> String {
+    if providers.is_empty() {
+        return "none registered".to_string();
+    }
+    providers
+        .iter()
+        .map(|provider| {
+            format!(
+                "{} ({})",
+                provider.capability,
+                provider.providers.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 impl fmt::Display for MissingPluginDependency {
@@ -665,7 +811,9 @@ fn format_missing_capabilities(missing: &[MissingCapability]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{dependency_names, type_ids, Plugin, StageAdvancePlugin, StatesPlugin};
+    use crate::{
+        dependency_names, type_ids, CapabilityId, Plugin, StageAdvancePlugin, StatesPlugin,
+    };
     use grass_scheduler::{
         CurrentState, NextState, ResMut, ScheduleSet, SchedulerManager, StageName,
     };
@@ -867,6 +1015,68 @@ mod tests {
         }
     }
 
+    const CONTACT_FORCES: CapabilityId = CapabilityId::new("contact_forces");
+    const PARTICLES: CapabilityId = CapabilityId::new("particles");
+
+    struct AlternativeContactProvider;
+    impl Plugin for AlternativeContactProvider {
+        fn build(&self, _app: &mut App) {}
+        fn provides_capabilities(&self) -> Vec<CapabilityId> {
+            vec![CONTACT_FORCES]
+        }
+    }
+
+    struct TypedConsumer;
+    impl Plugin for TypedConsumer {
+        fn build(&self, _app: &mut App) {}
+        fn requires_capabilities(&self) -> Vec<CapabilityId> {
+            vec![CONTACT_FORCES]
+        }
+    }
+
+    struct ParticleProvider;
+    impl Plugin for ParticleProvider {
+        fn build(&self, _app: &mut App) {}
+        fn provides_capabilities(&self) -> Vec<CapabilityId> {
+            vec![PARTICLES]
+        }
+    }
+
+    struct SecondContactProvider;
+    impl Plugin for SecondContactProvider {
+        fn build(&self, _app: &mut App) {}
+        fn provides_capabilities(&self) -> Vec<CapabilityId> {
+            vec![CONTACT_FORCES]
+        }
+    }
+
+    struct DependencyRoot;
+    impl Plugin for DependencyRoot {
+        fn build(&self, _app: &mut App) {}
+    }
+
+    struct DependencyMiddle;
+    impl Plugin for DependencyMiddle {
+        fn build(&self, _app: &mut App) {}
+        fn dependencies(&self) -> Vec<TypeId> {
+            type_ids![DependencyRoot]
+        }
+        fn dependency_names(&self) -> Vec<&'static str> {
+            dependency_names![DependencyRoot]
+        }
+    }
+
+    struct DependencyLeaf;
+    impl Plugin for DependencyLeaf {
+        fn build(&self, _app: &mut App) {}
+        fn dependencies(&self) -> Vec<TypeId> {
+            type_ids![DependencyMiddle]
+        }
+        fn dependency_names(&self) -> Vec<&'static str> {
+            dependency_names![DependencyMiddle]
+        }
+    }
+
     #[test]
     fn satisfied_dependencies_and_capabilities() {
         let mut app = App::new();
@@ -1036,6 +1246,7 @@ mod tests {
         assert!(msg.contains("feature_missing"));
         assert!(msg.contains("PluginC"));
         assert!(msg.contains("provide"));
+        assert!(msg.contains("known providers"));
     }
 
     #[test]
@@ -1064,5 +1275,84 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert_eq!(ids[0], TypeId::of::<PluginA>());
         assert_eq!(ids[1], TypeId::of::<PluginB>());
+    }
+
+    #[test]
+    fn typed_capability_accepts_an_alternative_provider() {
+        let mut app = App::new();
+        app.add_plugins(TypedConsumer);
+        app.add_plugins(AlternativeContactProvider);
+
+        app.validate_capability_contracts_result().unwrap();
+    }
+
+    #[test]
+    fn typed_capability_contracts_expose_duplicate_providers() {
+        let mut app = App::new();
+        app.add_plugins(AlternativeContactProvider);
+        app.add_plugins(SecondContactProvider);
+
+        let contracts = app.plugin_contracts();
+        let providers = contracts
+            .capabilities
+            .iter()
+            .find(|entry| entry.capability == CONTACT_FORCES)
+            .expect("typed capability should be introspectable");
+        assert_eq!(providers.providers.len(), 2);
+        assert!(providers
+            .providers
+            .iter()
+            .any(|name| name.contains("AlternativeContactProvider")));
+        assert!(providers
+            .providers
+            .iter()
+            .any(|name| name.contains("SecondContactProvider")));
+    }
+
+    #[test]
+    fn missing_typed_capability_reports_known_providers() {
+        let mut app = App::new();
+        app.add_plugins(TypedConsumer);
+        app.add_plugins(ParticleProvider);
+
+        let err = app.validate_capability_contracts_result().unwrap_err();
+        let AppError::MissingCapabilities { missing } = err else {
+            panic!("expected missing capabilities");
+        };
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].capability_id, CONTACT_FORCES);
+        assert!(missing[0].requiring_plugin.contains("TypedConsumer"));
+        assert!(missing[0]
+            .known_providers
+            .iter()
+            .any(|provider| provider.capability == PARTICLES));
+    }
+
+    #[test]
+    fn introspection_preserves_a_concrete_dependency_path() {
+        let mut app = App::new();
+        app.try_add_plugins(DependencyRoot).unwrap();
+        app.try_add_plugins(DependencyMiddle).unwrap();
+        app.try_add_plugins(DependencyLeaf).unwrap();
+
+        let contracts = app.plugin_contracts();
+        let middle = contracts
+            .plugins
+            .iter()
+            .find(|contract| contract.plugin_name.contains("DependencyMiddle"))
+            .unwrap();
+        let leaf = contracts
+            .plugins
+            .iter()
+            .find(|contract| contract.plugin_name.contains("DependencyLeaf"))
+            .unwrap();
+        assert!(middle.dependencies[0]
+            .name
+            .as_deref()
+            .is_some_and(|name| name.contains("DependencyRoot")));
+        assert!(leaf.dependencies[0]
+            .name
+            .as_deref()
+            .is_some_and(|name| name.contains("DependencyMiddle")));
     }
 }

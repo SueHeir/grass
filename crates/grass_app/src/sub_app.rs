@@ -7,10 +7,12 @@
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
 };
 
 use grass_scheduler::{IntoScheduledSystem, IntoSystem, ScheduleSet, Scheduler};
+
+use crate::CapabilityId;
 
 /// A self-contained simulation world: one [`Scheduler`] with its resource store
 /// and system lists.
@@ -25,10 +27,12 @@ pub struct SubApp {
     pub(crate) plugin_names: HashSet<String>,
     /// TypeIds of all registered plugins (used for TypeId-based dependency checks).
     pub(crate) plugin_type_ids: HashSet<TypeId>,
-    /// Capability tags provided by registered plugins.
-    pub(crate) provided_capabilities: HashSet<String>,
-    /// Capability tags required by registered plugins: (capability, requiring plugin name).
-    pub(crate) required_capabilities: Vec<(String, String)>,
+    /// Typed capabilities and the registered plugins that provide them.
+    pub(crate) capability_providers: BTreeMap<CapabilityId, Vec<String>>,
+    /// Typed capabilities and the registered plugins that require them.
+    pub(crate) capability_requirers: BTreeMap<CapabilityId, Vec<String>>,
+    /// Concrete dependencies declared by each registered plugin.
+    pub(crate) plugin_dependencies: BTreeMap<String, Vec<crate::PluginDependency>>,
 }
 
 impl SubApp {
