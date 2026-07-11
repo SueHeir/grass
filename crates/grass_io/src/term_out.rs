@@ -175,6 +175,17 @@ impl Plugin for TermOutPlugin {
     fn config_description(&self) -> Option<ConfigDescription> {
         Some(TermOutConfig::description())
     }
+
+    fn schedule_labels(&self) -> Vec<&'static str> {
+        vec![
+            "TermOutSchedule::Compute (namespace 100)",
+            "TermOutSchedule::Print (namespace 100)",
+        ]
+    }
+
+    fn extension_points(&self) -> Vec<&'static str> {
+        vec!["TermOut::set(name, value)"]
+    }
 }
 
 // ─── Systems ────────────────────────────────────────────────────────────────

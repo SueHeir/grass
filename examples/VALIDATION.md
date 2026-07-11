@@ -3,6 +3,11 @@
 Validated examples commit their result plots beside the runnable example so they
 render in Gitea:
 
+- [`contract_reference`](contract_reference/README.md) embeds
+  [`plots/contract_reference_coverage.png`](contract_reference/plots/contract_reference_coverage.png),
+  comparing the live generated contract page with an independent fixture and
+  checking each generated configuration-field link against its Rust source span.
+
 - [`oscillator_demo`](oscillator_demo/README.md) embeds
   [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
   comparing an uncoupled numerical oscillator with its analytical solution, and

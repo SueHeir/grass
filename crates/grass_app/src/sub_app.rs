@@ -33,6 +33,8 @@ pub struct SubApp {
     pub(crate) capability_requirers: BTreeMap<CapabilityId, Vec<String>>,
     /// Concrete dependencies declared by each registered plugin.
     pub(crate) plugin_dependencies: BTreeMap<String, Vec<crate::PluginDependency>>,
+    /// Declarative contract metadata retained for generated documentation.
+    pub(crate) plugin_metadata: BTreeMap<String, crate::PluginMetadata>,
 }
 
 impl SubApp {

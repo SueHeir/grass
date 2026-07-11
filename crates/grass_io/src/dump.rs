@@ -190,6 +190,17 @@ impl<F: DumpFormat> Plugin for DumpPlugin<F> {
     fn config_description(&self) -> Option<ConfigDescription> {
         Some(DumpConfig::description())
     }
+
+    fn schedule_labels(&self) -> Vec<&'static str> {
+        vec![
+            "DumpSchedule::Build (namespace 200)",
+            "DumpSchedule::Write (namespace 200)",
+        ]
+    }
+
+    fn extension_points(&self) -> Vec<&'static str> {
+        vec!["DumpFormat::write_frame"]
+    }
 }
 
 /// Resource holding the live `DumpFormat` instance the write system

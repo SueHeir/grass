@@ -149,6 +149,22 @@ impl Plugin for OscillatorPlugin {
     fn config_description(&self) -> Option<ConfigDescription> {
         Some(OscillatorConfig::description())
     }
+
+    fn schedule_labels(&self) -> Vec<&'static str> {
+        vec!["OscillatorSchedule::Integrate"]
+    }
+
+    fn extension_points(&self) -> Vec<&'static str> {
+        vec![
+            "OscillatorPlugin",
+            "OscillatorSchedule",
+            "OscillatorPosition",
+        ]
+    }
+
+    fn exchange_contracts(&self) -> Vec<&'static str> {
+        vec!["PositionPort&lt;Source&gt; (local Port&lt;T&gt;)"]
+    }
 }
 
 /// Deterministic two-oscillator summary suitable for regression output.

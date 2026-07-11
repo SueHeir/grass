@@ -176,6 +176,28 @@ impl App {
 
         self.collect_config_snippet(&*plugin);
 
+        self.main_mut().plugin_metadata.insert(
+            plugin_name.clone(),
+            PluginMetadata {
+                config: plugin.config_description(),
+                schedule_labels: plugin
+                    .schedule_labels()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                extension_points: plugin
+                    .extension_points()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                exchange_contracts: plugin
+                    .exchange_contracts()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            },
+        );
+
         let dependencies = plugin
             .dependencies()
             .into_iter()
@@ -311,6 +333,12 @@ impl App {
             .map(|(name, dependencies)| PluginContract {
                 plugin_name: name.clone(),
                 dependencies: dependencies.clone(),
+                metadata: self
+                    .main()
+                    .plugin_metadata
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default(),
                 provides: self
                     .main()
                     .capability_providers
@@ -883,6 +911,21 @@ pub struct PluginContract {
     pub provides: Vec<CapabilityId>,
     /// Capabilities this plugin needs from any provider.
     pub requires: Vec<CapabilityId>,
+    /// Declarative configuration, schedule, extension, and exchange metadata.
+    pub metadata: PluginMetadata,
+}
+
+/// Documentation-facing metadata declared by a plugin.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginMetadata {
+    /// Typed declarative configuration, if this plugin parses a TOML section.
+    pub config: Option<crate::ConfigDescription>,
+    /// Schedule labels installed or reserved by this plugin.
+    pub schedule_labels: Vec<String>,
+    /// Public contracts downstream libraries are intended to implement or use.
+    pub extension_points: Vec<String>,
+    /// Stable local-port or remote-wire contracts exposed by this plugin.
+    pub exchange_contracts: Vec<String>,
 }
 
 /// A capability and all plugins that currently provide it.
@@ -1803,6 +1846,34 @@ mod tests {
             .providers
             .iter()
             .any(|name| name.contains("SecondContactProvider")));
+    }
+
+    struct DocumentedPlugin;
+
+    impl Plugin for DocumentedPlugin {
+        fn build(&self, _app: &mut App) {}
+
+        fn schedule_labels(&self) -> Vec<&'static str> {
+            vec!["DocumentedPhase::Run"]
+        }
+
+        fn extension_points(&self) -> Vec<&'static str> {
+            vec!["DocumentedExtension"]
+        }
+
+        fn exchange_contracts(&self) -> Vec<&'static str> {
+            vec!["DocumentedPort"]
+        }
+    }
+
+    #[test]
+    fn plugin_contracts_retain_documentation_metadata() {
+        let mut app = App::new();
+        app.add_plugins(DocumentedPlugin);
+        let contract = app.plugin_contracts().plugins.pop().unwrap();
+        assert_eq!(contract.metadata.schedule_labels, ["DocumentedPhase::Run"]);
+        assert_eq!(contract.metadata.extension_points, ["DocumentedExtension"]);
+        assert_eq!(contract.metadata.exchange_contracts, ["DocumentedPort"]);
     }
 
     #[test]

@@ -27,4 +27,5 @@
 - [Scientific Library Composition Contract](./reference/library-composition-contract.md)
 - [Configuration metadata preflight](./reference/config-metadata-preflight.md)
 - [Public API and extension points](./reference/public-api.md)
+- [Generated plugin contracts](./reference/generated-contracts.md)
 - [Derive Macros](./reference/derives.md)
