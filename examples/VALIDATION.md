@@ -3,6 +3,10 @@
 Validated examples commit their result plots beside the runnable example so they
 render in Gitea:
 
+- [`oscillator_demo`](oscillator_demo/README.md) embeds
+  [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
+  comparing an uncoupled numerical oscillator with its analytical solution.
+
 - [`heat_diffusion_1d`](heat_diffusion_1d/README.md) embeds
   [`plots/heat_diffusion_validation.png`](heat_diffusion_1d/plots/heat_diffusion_validation.png).
 - [`hello_app`](hello_app/README.md) embeds
