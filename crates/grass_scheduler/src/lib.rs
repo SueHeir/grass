@@ -169,7 +169,7 @@ pub mod prelude {
         ConvergenceState,
         CurrentState,
         IntoScheduledSystem,
-        // System label (function-handle or string ordering)
+        // System labels (typed keys, function handles, or migration strings)
         IntoSystemLabel,
         IterationError,
         IterationReport,
@@ -196,6 +196,8 @@ pub mod prelude {
         // System groups
         SystemGroup,
         SystemGroupInfo,
+        SystemKey,
+        SystemLabel,
     };
     // Proc-macro derive (re-exported so users get it via the prelude).
     pub use grass_derive::ScheduleSet;
@@ -577,6 +579,87 @@ mod tests {
         scheduler.run();
         let c = scheduler.get_resource_ref::<Counter>().unwrap();
         assert_eq!(c.0, 2);
+    }
+
+    // ─── typed system labels ────────────────────────────────────────────────
+
+    struct TypedFirst;
+    impl SystemLabel for TypedFirst {
+        const NAME: &'static str = "typed_first";
+    }
+    struct TypedSecond;
+    impl SystemLabel for TypedSecond {
+        const NAME: &'static str = "typed_second";
+    }
+    const TYPED_FIRST: SystemKey<TypedFirst> = SystemKey::new();
+    const TYPED_SECOND: SystemKey<TypedSecond> = SystemKey::new();
+
+    #[test]
+    fn typed_constants_label_and_order_systems() {
+        let mut scheduler = Scheduler::default();
+        scheduler.suppress_warnings = true;
+        scheduler.add_resource(Counter(0));
+        scheduler.add_update_system(
+            sys_second.label(TYPED_SECOND).requires(TYPED_FIRST),
+            TestSchedule::Force,
+        );
+        scheduler.add_update_system(sys_first.label(TYPED_FIRST), TestSchedule::Force);
+        scheduler.add_scheduler_manager();
+        scheduler.organize_systems();
+        scheduler.run();
+        assert_eq!(scheduler.get_resource_ref::<Counter>().unwrap().0, 2);
+    }
+
+    #[test]
+    fn required_typed_label_typo_is_actionable() {
+        let mut scheduler = Scheduler::default();
+        scheduler.suppress_warnings = true;
+        scheduler.add_update_system(force_b.requires(TYPED_SECOND), TestSchedule::Force);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.organize_systems();
+        }))
+        .expect_err("missing required typed key must fail validation");
+        let message = panic_message(panic);
+        assert!(
+            message.contains("requires label \"typed_second\""),
+            "{message}"
+        );
+        assert!(message.contains(".after(...)"), "{message}");
+    }
+
+    #[test]
+    fn optional_after_missing_target_is_allowed() {
+        let mut scheduler = Scheduler::default();
+        scheduler.suppress_warnings = true;
+        scheduler.add_update_system(force_b.after(TYPED_SECOND), TestSchedule::Force);
+        scheduler.organize_systems();
+    }
+
+    #[test]
+    fn duplicate_typed_labels_are_rejected() {
+        let mut scheduler = Scheduler::default();
+        scheduler.suppress_warnings = true;
+        scheduler.add_update_system(force_a.label(TYPED_FIRST), TestSchedule::Force);
+        scheduler.add_update_system(force_b.label(TYPED_FIRST), TestSchedule::Force);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.organize_systems();
+        }))
+        .expect_err("duplicate labels must fail validation");
+        let message = panic_message(panic);
+        assert!(
+            message.contains("Duplicate system label \"typed_first\""),
+            "{message}"
+        );
+    }
+
+    fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+        panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string")
     }
 
     // ─── Custom ScheduleSet tests ─────────────────────────────────────────

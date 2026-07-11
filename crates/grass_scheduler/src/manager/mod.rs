@@ -538,9 +538,24 @@ impl Scheduler {
 
         let mut errors: Vec<String> = Vec::new();
         for mut group in groups {
-            topo_sort_group(&mut group);
+            // Validate explicit labels before sorting. `before`/`after` remain
+            // optional edges, while `requires` is the opt-in hard dependency.
+            let mut explicit_labels: HashMap<&str, &str> = HashMap::new();
+            for (entry, phase) in &group {
+                if let Some(label) = entry.label.as_deref() {
+                    if let Some(previous) = explicit_labels.insert(label, entry.name.as_str()) {
+                        errors.push(format!(
+                            "  Duplicate system label \"{}\" in {}: systems \"{}\" and \"{}\". Give each system a distinct `.label(...)` key.",
+                            label,
+                            phase.phase_name(),
+                            previous,
+                            entry.name,
+                        ));
+                    }
+                }
+            }
 
-            // Validate requires_label: every required label/name must exist in this group
+            // Validate required targets: every target must exist in this group.
             let mut known_labels: Vec<&str> = Vec::new();
             for (entry, _) in &group {
                 known_labels.push(&entry.name);
@@ -552,12 +567,14 @@ impl Scheduler {
                 for req in &entry.requires {
                     if !known_labels.contains(&req.as_str()) {
                         errors.push(format!(
-                            "  System \"{}\" in {} requires label \"{}\" which is not present in that ScheduleSet",
-                            entry.name, phase.phase_name(), req
+                            "  System \"{}\" in {} requires label \"{}\", but no such system label is present in that ScheduleSet. Add `.label(...)` to the target, correct the key, or use `.after(...)` for optional ordering.",
+                            entry.name, phase.phase_name(), req,
                         ));
                     }
                 }
             }
+
+            topo_sort_group(&mut group);
 
             self.update_systems.extend(group);
         }

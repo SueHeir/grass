@@ -14,3 +14,7 @@ render in Gitea:
 - [`fallible_config_matrix`](fallible_config_matrix/README.md) embeds
   [`plots/fallible_config_matrix.png`](fallible_config_matrix/plots/fallible_config_matrix.png),
   checking typed errors from malformed and missing configuration paths.
+- [`typed_system_labels`](typed_system_labels/README.md) embeds
+  [`plots/typed_system_labels_matrix.png`](typed_system_labels/plots/typed_system_labels_matrix.png),
+  checking typed ordering keys, required-target diagnostics, optional ordering, and legacy string
+  compatibility.

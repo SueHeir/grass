@@ -517,10 +517,62 @@ impl_into_system!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 
 // ─── IntoSystemLabel ─────────────────────────────────────────────────────────
 
+/// A type-level name for a system ordering key.
+///
+/// Implement this on a zero-sized marker type, then use [`SystemKey`] at call
+/// sites. This keeps schedule relationships free of repeated string literals:
+///
+/// ```rust
+/// # use grass_scheduler::prelude::*;
+/// struct Integrate;
+/// impl SystemLabel for Integrate { const NAME: &'static str = "integrate"; }
+/// const INTEGRATE: SystemKey<Integrate> = SystemKey::new();
+/// # fn integrate() {}
+/// # fn output() {}
+/// # let mut scheduler = Scheduler::default();
+/// scheduler.add_update_system(integrate.label(INTEGRATE), TestSet::Update);
+/// scheduler.add_update_system(output.after(INTEGRATE), TestSet::Update);
+/// # #[derive(Clone, Copy, Debug)] enum TestSet { Update }
+/// # impl ScheduleSet for TestSet { fn to_index(&self) -> u32 { 0 } fn name(&self) -> &'static str { "Update" } }
+/// ```
+pub trait SystemLabel: 'static {
+    /// Stable, human-readable key used in diagnostics and schedule output.
+    const NAME: &'static str;
+}
+
+/// A zero-sized, typed key for a [`SystemLabel`].
+///
+/// Keys are `Copy`, so applications can expose them as `const` values and use
+/// the same key for `.label()`, `.before()`, `.after()`, and `.requires()`.
+#[derive(Debug, Default)]
+pub struct SystemKey<L: SystemLabel>(PhantomData<fn() -> L>);
+
+impl<L: SystemLabel> SystemKey<L> {
+    /// Creates the typed key. Prefer a named `const` for public schedules.
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+
+    /// Returns the stable string representation used by the scheduler.
+    pub const fn name(self) -> &'static str {
+        L::NAME
+    }
+}
+
+impl<L: SystemLabel> Copy for SystemKey<L> {}
+
+impl<L: SystemLabel> Clone for SystemKey<L> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 /// Marker for string-based labels (`&str`, `String`).
 pub struct StrLabelMarker;
 /// Marker for function-handle-based labels.
 pub struct FnLabelMarker<I>(PhantomData<I>);
+/// Marker for typed [`SystemKey`] labels.
+pub struct TypedLabelMarker<L>(PhantomData<L>);
 
 /// Converts a label source (string or function handle) into a `String` label.
 ///
@@ -540,6 +592,12 @@ impl IntoSystemLabel<StrLabelMarker> for &str {
 impl IntoSystemLabel<StrLabelMarker> for String {
     fn into_label(self) -> String {
         self
+    }
+}
+
+impl<L: SystemLabel> IntoSystemLabel<TypedLabelMarker<L>> for SystemKey<L> {
+    fn into_label(self) -> String {
+        self.name().to_string()
     }
 }
 
@@ -680,8 +738,8 @@ pub struct SystemDescriptor<S: System + 'static> {
 
 impl<S: System + 'static> SystemDescriptor<S> {
     /// Assigns a label to this system, making it addressable by `.before()` / `.after()`.
-    pub fn label(mut self, lbl: impl Into<String>) -> Self {
-        self.label = Some(lbl.into());
+    pub fn label<M>(mut self, lbl: impl IntoSystemLabel<M>) -> Self {
+        self.label = Some(lbl.into_label());
         self
     }
 
@@ -703,6 +761,17 @@ impl<S: System + 'static> SystemDescriptor<S> {
     /// Panics during [`crate::Scheduler::organize_systems`] if the label is missing.
     pub fn requires_label<M>(mut self, target: impl IntoSystemLabel<M>) -> Self {
         self.requires.push(target.into_label());
+        self
+    }
+
+    /// Requires `target` to be present and orders this system after it.
+    ///
+    /// Unlike [`after`](Self::after), a missing target is a schedule validation
+    /// error. Use `.after()` when the target is intentionally optional.
+    pub fn requires<M>(mut self, target: impl IntoSystemLabel<M>) -> Self {
+        let target = target.into_label();
+        self.afters.push(target.clone());
+        self.requires.push(target);
         self
     }
 
@@ -747,10 +816,10 @@ where
 
     /// Attaches an explicit ordering label so other systems can target this
     /// one with `.before()` / `.after()` / `.requires_label()`.
-    fn label(self, lbl: impl Into<String>) -> SystemDescriptor<Self::System> {
+    fn label<M>(self, lbl: impl IntoSystemLabel<M>) -> SystemDescriptor<Self::System> {
         SystemDescriptor {
             system: self.into_system(),
-            label: Some(lbl.into()),
+            label: Some(lbl.into_label()),
             befores: vec![],
             afters: vec![],
             requires: vec![],
@@ -788,6 +857,20 @@ where
             befores: vec![],
             afters: vec![],
             requires: vec![target.into_label()],
+        }
+    }
+
+    /// Requires `target` to exist and orders this system after it.
+    ///
+    /// Use [`after`](Self::after) for intentionally optional ordering.
+    fn requires<M>(self, target: impl IntoSystemLabel<M>) -> SystemDescriptor<Self::System> {
+        let target = target.into_label();
+        SystemDescriptor {
+            system: self.into_system(),
+            label: None,
+            befores: vec![],
+            afters: vec![target.clone()],
+            requires: vec![target],
         }
     }
 }
