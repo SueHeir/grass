@@ -5,7 +5,9 @@ render in Gitea:
 
 - [`oscillator_demo`](oscillator_demo/README.md) embeds
   [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
-  comparing an uncoupled numerical oscillator with its analytical solution.
+  comparing an uncoupled numerical oscillator with its analytical solution, and
+  [`plots/generated_config_contract.png`](oscillator_demo/plots/generated_config_contract.png),
+  which independently parses and executes the generated namespaced two-subapp config.
 
 - [`oscillator_coupling_schemes`](oscillator_coupling_schemes/README.md) embeds
   [`plots/coupling_schemes.png`](oscillator_coupling_schemes/plots/coupling_schemes.png),

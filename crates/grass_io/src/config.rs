@@ -45,7 +45,7 @@ use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use grass_app::{App, ConfigDescription, GenerateConfigFlag, Plugin};
+use grass_app::{App, ConfigDescription, ConfigSnippets, GenerateConfigFlag, Plugin};
 use serde::{Deserialize, Serialize};
 
 // ─── Config resource ────────────────────────────────────────────────────────
@@ -876,6 +876,30 @@ impl MultiIoExt for App {
         });
         build(&mut sub);
 
+        // A generated parent config must be directly usable for the same
+        // namespaced sub-app setup.  Re-home each child table beneath its
+        // sub-app key while preserving all generated comments and values.
+        let generated = sub
+            .get_resource_ref::<ConfigSnippets>()
+            .map(|snippets| snippets.snippets.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|snippet| namespace_generated_table(name, snippet))
+            .collect::<Vec<_>>();
+        if !generated.is_empty() {
+            if let Some(cell) = self.get_mut_resource(TypeId::of::<ConfigSnippets>()) {
+                cell.borrow_mut()
+                    .downcast_mut::<ConfigSnippets>()
+                    .expect("ConfigSnippets resource has wrong type")
+                    .snippets
+                    .extend(generated);
+            } else {
+                self.add_resource(ConfigSnippets {
+                    snippets: generated,
+                });
+            }
+        }
+
         use grass_multi::MultiAppExt;
         self.add_subapp(name, sub);
         Ok(self)
@@ -885,6 +909,26 @@ impl MultiIoExt for App {
         self.try_add_subapp_with_config(name, build)
             .unwrap_or_else(|error| panic!("App::add_subapp_with_config: {error}"))
     }
+}
+
+fn namespace_generated_table(namespace: &str, snippet: String) -> String {
+    let mut namespaced = String::with_capacity(snippet.len() + namespace.len());
+    let mut changed = false;
+    for line in snippet.lines() {
+        if !changed && (line.starts_with('[') && !line.starts_with("[[")) {
+            let section = line.trim_start_matches('[').trim_end_matches(']');
+            namespaced.push_str(&format!("[{namespace}.{section}]\n"));
+            changed = true;
+        } else if !changed && line.starts_with("[[") {
+            let section = line.trim_start_matches("[[").trim_end_matches("]]");
+            namespaced.push_str(&format!("[[{namespace}.{section}]]\n"));
+            changed = true;
+        } else {
+            namespaced.push_str(line);
+            namespaced.push('\n');
+        }
+    }
+    namespaced
 }
 
 /// Recursive merge — for each key in `overrides`, if both sides have a

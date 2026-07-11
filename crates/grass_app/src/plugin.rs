@@ -215,6 +215,12 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// systems, and sub-plugins here.
     fn build(&self, app: &mut App);
 
+    /// Fallible compatibility hook for plugin construction.
+    fn try_build(&self, app: &mut App) -> Result<(), AppError> {
+        self.build(app);
+        Ok(())
+    }
+
     /// Returns the plugin's name, used for duplicate detection and diagnostics.
     ///
     /// Defaults to the Rust type name (e.g. `"my_crate::MyPlugin"`).
@@ -298,6 +304,16 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// fn requires(&self) -> Vec<&str> { vec!["dem_particles", "neighbor_list"] }
     /// ```
     fn requires(&self) -> Vec<&str> {
+        Vec::new()
+    }
+
+    /// Typed capabilities this plugin provides.
+    fn provides_capabilities(&self) -> Vec<CapabilityId> {
+        Vec::new()
+    }
+
+    /// Typed capabilities this plugin requires.
+    fn requires_capabilities(&self) -> Vec<CapabilityId> {
         Vec::new()
     }
 }
