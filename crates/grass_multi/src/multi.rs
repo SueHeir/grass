@@ -108,6 +108,23 @@ impl SubApps {
         self.name_to_idx.get(ns).map(|&i| &*self.physics[i])
     }
 
+    /// Configure a local sub-App before its first tick.
+    ///
+    /// Returns `None` for an unknown namespace or a non-local physics (for
+    /// example a remote mirror). Panics if the sub-App was already prepared.
+    pub fn configure_local_app<R>(
+        &mut self,
+        ns: &str,
+        configure: impl FnOnce(&mut App) -> R,
+    ) -> Option<R> {
+        let idx = self.idx_of(ns)?;
+        assert!(
+            !self.prepared[idx],
+            "SubApps::configure_local_app: `{ns}` was already prepared"
+        );
+        self.physics[idx].local_app_mut().map(configure)
+    }
+
     fn idx_of(&self, ns: &str) -> Option<usize> {
         self.name_to_idx.get(ns).copied()
     }
@@ -381,6 +398,12 @@ pub trait MultiAppExt {
     /// resource on the parent on the first call.
     fn add_subapp(&mut self, name: &str, app: App) -> &mut Self;
 
+    /// Configure an already registered local sub-App before it is prepared.
+    ///
+    /// This is primarily intended for coupling plugins which install seam
+    /// adapters into otherwise independent solver Apps.
+    fn configure_subapp(&mut self, name: &str, configure: impl FnOnce(&mut App)) -> &mut Self;
+
     /// Typed counterpart of [`add_subapp`](Self::add_subapp). Registers
     /// `app` under `NS::NAME`. Use when the namespace is known at compile
     /// time and you'd rather catch typos than chase a runtime panic.
@@ -445,6 +468,22 @@ impl MultiAppExt for App {
     fn add_subapp(&mut self, name: &str, app: App) -> &mut Self {
         let physics: Box<dyn Physics> = Box::new(AppPhysics::new(name.to_string(), app));
         register_physics(self, physics);
+        self
+    }
+
+    fn configure_subapp(&mut self, name: &str, configure: impl FnOnce(&mut App)) -> &mut Self {
+        {
+            let cell = self
+                .get_mut_resource(TypeId::of::<SubApps>())
+                .unwrap_or_else(|| panic!("configure_subapp: no sub-Apps registered"));
+            let mut resource = cell.borrow_mut();
+            let subapps = resource
+                .downcast_mut::<SubApps>()
+                .expect("SubApps resource type mismatch");
+            subapps
+                .configure_local_app(name, configure)
+                .unwrap_or_else(|| panic!("configure_subapp: `{name}` is not a local sub-App"));
+        }
         self
     }
 
