@@ -1,16 +1,13 @@
-# One physical model; policies in main.rs choose only exchange order, rollback,
-# relaxation, and retry cadence.  The oscillator library is unchanged.
+# The policies differ only in parent-side exchange, rollback, relaxation, and retry.
 [case]
-final_time = 0.1
-nominal_dt = 0.02
-adaptive_initial_dt = 0.08
-minimum_dt = 0.02
-reference_dt = 0.000025
+final_time = 0.04
+nominal_dt = 0.01
+adaptive_initial_dt = 0.02
+minimum_dt = 0.01
 picard_tolerance = 1.0e-9
-picard_max_iterations = 20
-# For the antisymmetric mode, the Picard map has eigenvalue
-# -k_c dt^2 = -0.24.  omega = 1/(1 + 0.24) cancels that mode.
-relaxation = 0.8064516129032258
+picard_max_iterations = 14
+# Conservative fixed under-relaxation, deliberately not the q-specific optimum.
+relaxation = 0.7
 
 [a.oscillator]
 x0 = 1.0
@@ -18,9 +15,9 @@ v0 = 0.0
 peer_x0 = -1.0
 stiffness = 1.0
 damping = 0.0
-coupling_stiffness = 600.0
+coupling_stiffness = 2000.0
 mass = 1.0
-dt = 0.04
+dt = 0.01
 
 [b.oscillator]
 x0 = -1.0
@@ -28,6 +25,6 @@ v0 = 0.0
 peer_x0 = 1.0
 stiffness = 1.0
 damping = 0.0
-coupling_stiffness = 600.0
+coupling_stiffness = 2000.0
 mass = 1.0
-dt = 0.04
+dt = 0.01

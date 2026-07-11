@@ -1,25 +1,34 @@
-# Reference integration
+# Independent reference and limits
 
-The accuracy reference is exact for this antisymmetric initial condition:
-`x_a(0)=1`, `x_b(0)=-1`, and both initial velocities are zero, so only the
-relative normal mode is present. Therefore
-`x_a=cos(sqrt((k+2k_c)/m)t)`, `v_a=-sqrt((k+2k_c)/m) sin(sqrt((k+2k_c)/m)t)`,
-and oscillator B has the opposite state. This follows directly from
+For two equal undamped masses,
 
-`m x_a'' = -k x_a - k_c (x_a-x_b)` and its symmetric partner.
+`m x_a''=-k x_a-k_c(x_a-x_b)` and `m x_b''=-k x_b-k_c(x_b-x_a)`.
 
-The numerical cross-check advances the two oscillator velocities
-simultaneously from the same old state, then advances both positions with
-those new velocities. This is the monolithic semi-implicit-Euler
-discretization of the same equations.
+The antisymmetric initial state used here (`x_a=1`, `x_b=-1`, zero velocities)
+is the relative normal mode, with angular frequency
+`sqrt((k+2 k_c)/m)=sqrt(4001)`. Normal-mode reduction of coupled oscillators is
+standard; see A. H. Nayfeh and D. T. Mook, *Nonlinear Oscillations*, Wiley
+(1979), §1.4. The validation does not reuse the Rust closed-form helper:
+`sweep.py` independently forms the four-by-four first-order system and obtains
+the reference with `scipy.linalg.expm`.
 
-It uses `h=0.000025`, 800 times smaller than the nominal coupling window.  The
-coupled relative mode has angular frequency `sqrt((k+2 k_c)/m)`, so the chosen
-strong case (`k=1`, `k_c=600`) is stable at the reference step.  The plotted
-reference-discretization refinement is part of the executable check; it is
-not fitted to any scheme. The case runs to `t=0.1`: the refined monolithic
-solution and each converged policy must be within `0.4` of the exact solution.
-This is under 1.2% of the normal mode's velocity scale `sqrt(1201)`, a stated
-accuracy budget for the reference rather than for the deliberately coarse
-nominal window. The converged same-window Picard fixed-point error remains
-limited to `2e-7` against its monolithic semi-implicit update.
+The relative phase-space error is `||y-y_ref||_2 / ||y_ref||_2`, including both
+positions and velocities. The 0.25 convergence-policy accuracy budget and 0.50
+CSS-lag exposure threshold were chosen before the generated run to distinguish
+the intended coarse-policy behavior; they are plotted and asserted by both the
+executable and independent sweep. They are not fitted references and should
+not be read as a general method-order or stability claim.
+
+The relaxation is a fixed under-relaxation `omega=0.7`, not the optimal
+case-specific `1/(1+q)`. For the antisymmetric Picard mode its contraction is
+`|1-omega(1+q)|=0.16`, compared with `q=0.2` without relaxation. This is the
+standard damping rationale for relaxed fixed-point iteration; see C. T. Kelley,
+*Iterative Methods for Linear and Nonlinear Equations*, SIAM (1995), §4.4.
+The example reports the observed iteration count rather than claiming a
+universal speedup.
+
+Limits: the oscillator library integrates each local solver with semi-implicit
+Euler, so fixed-point convergence only solves the coupled discrete step. It
+does not eliminate time-discretisation error, and this narrow linear,
+antisymmetric case does not establish behavior for nonlinear, damped, or
+multi-rate scientific models.

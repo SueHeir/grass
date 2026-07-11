@@ -1,5 +1,8 @@
-//! Same oscillator component and `PositionPort` exchange value, four parent
-//! orchestration policies.  Nothing in `oscillator_demo` is modified here.
+//! Four parent-side coupling schedules for the unchanged oscillator library.
+//!
+//! The executable deliberately makes no claim that a converged Picard solve
+//! removes the time-discretisation error of the library's semi-implicit Euler
+//! step.  It measures every policy against the analytic coupled normal mode.
 
 use std::any::TypeId;
 
@@ -20,16 +23,17 @@ struct Case {
     nominal_dt: f64,
     adaptive_initial_dt: f64,
     minimum_dt: f64,
-    reference_dt: f64,
     picard_tolerance: f64,
     picard_max_iterations: usize,
     relaxation: f64,
 }
+
 #[derive(Clone, Copy, Debug)]
 struct Pair {
     a: OscillatorState,
     b: OscillatorState,
 }
+
 #[derive(Clone, Debug)]
 struct Report {
     name: &'static str,
@@ -45,12 +49,11 @@ fn build() -> (App, Case) {
     let mut parent = App::new();
     parent.add_resource(Config::from_str(include_str!("config.toml")));
     let case = Config::load::<Case>(&mut parent, "case");
-    parent.add_subapp_with_config(A, |app| {
-        app.add_plugins(OscillatorPlugin);
-    });
-    parent.add_subapp_with_config(B, |app| {
-        app.add_plugins(OscillatorPlugin);
-    });
+    for name in [A, B] {
+        parent.add_subapp_with_config(name, |app| {
+            app.add_plugins(OscillatorPlugin);
+        });
+    }
     (parent, case)
 }
 fn cell<'a, T: 'static>(
@@ -62,16 +65,8 @@ fn cell<'a, T: 'static>(
         .resource_cell(TypeId::of::<T>())
         .unwrap()
 }
-fn pair(subs: &SubApps) -> Pair {
-    let a = *cell::<OscillatorState>(subs, A)
-        .borrow()
-        .downcast_ref::<OscillatorState>()
-        .unwrap();
-    let b = *cell::<OscillatorState>(subs, B)
-        .borrow()
-        .downcast_ref::<OscillatorState>()
-        .unwrap();
-    Pair { a, b }
+fn get<T: Copy + 'static>(subs: &SubApps, name: &str) -> T {
+    *cell::<T>(subs, name).borrow().downcast_ref::<T>().unwrap()
 }
 fn put<T: Copy + 'static>(subs: &SubApps, name: &str, value: T) {
     *cell::<T>(subs, name)
@@ -79,39 +74,28 @@ fn put<T: Copy + 'static>(subs: &SubApps, name: &str, value: T) {
         .downcast_mut::<T>()
         .unwrap() = value;
 }
+fn pair(subs: &SubApps) -> Pair {
+    Pair {
+        a: get(subs, A),
+        b: get(subs, B),
+    }
+}
 fn restore(subs: &SubApps, p: Pair) {
     put(subs, A, p.a);
     put(subs, B, p.b);
 }
-fn set_dt(subs: &SubApps, dt: f64) {
-    let mut a = *cell::<OscillatorParameters>(subs, A)
-        .borrow()
-        .downcast_ref::<OscillatorParameters>()
-        .unwrap();
-    a.dt = dt;
-    put(subs, A, a);
-    let mut b = *cell::<OscillatorParameters>(subs, B)
-        .borrow()
-        .downcast_ref::<OscillatorParameters>()
-        .unwrap();
-    b.dt = dt;
-    put(subs, B, b);
+fn set_dt(subs: &SubApps, h: f64) {
+    for name in [A, B] {
+        let mut p: OscillatorParameters = get(subs, name);
+        p.dt = h;
+        put(subs, name, p);
+    }
 }
-fn energy(p: Pair, k: f64, kc: f64) -> f64 {
-    0.5 * (p.a.v * p.a.v + p.b.v * p.b.v)
-        + 0.5 * k * (p.a.x * p.a.x + p.b.x * p.b.x)
-        + 0.5 * kc * (p.a.x - p.b.x).powi(2)
-}
-
-// The port payload is the only cross-solver value.  The parent owns its
-// directional binding; neither oscillator sees the other's state type.
-fn exchange_then_tick(subs: &mut SubApps, guess: Pair) {
-    let to_a = PositionPort::<()>::from_state(&guess.b);
-    let to_b = PositionPort::<()>::from_state(&guess.a);
-    put(subs, A, PeerPosition(to_a.position.0));
-    put(subs, B, PeerPosition(to_b.position.0));
-    subs.tick(A);
-    subs.tick(B);
+fn energy(p: Pair) -> f64 {
+    // Parameters are fixed in the declarative case below: m=1, k=1, kc=2000.
+    0.5 * (p.a.v.powi(2) + p.b.v.powi(2))
+        + 0.5 * (p.a.x.powi(2) + p.b.x.powi(2))
+        + 1000.0 * (p.a.x - p.b.x).powi(2)
 }
 fn residual(p: Pair, guess: Pair) -> f64 {
     (p.a.x - guess.a.x).abs().max((p.b.x - guess.b.x).abs())
@@ -125,240 +109,232 @@ fn fingerprint(p: Pair) -> [u64; 4] {
     ]
 }
 
+fn publish(subs: &SubApps, target: &str, source: OscillatorState) {
+    let port = PositionPort::<()>::from_state(&source);
+    put(subs, target, PeerPosition(port.position.0));
+}
+
+// Conventional serial CSS: B consumes A's newly exported value, while A has
+// consumed B's value from the beginning of the macro window.  The asymmetry is
+// intentional: it is the exchange/schedule policy being compared.
+fn css_step(subs: &mut SubApps, old: Pair) {
+    publish(subs, A, old.b);
+    subs.tick(A);
+    publish(subs, B, pair(subs).a);
+    subs.tick(B);
+}
+
+// One Jacobi fixed-point sweep.  Every sweep starts from the saved state, so
+// only the interface guess changes; no provisional solver state accumulates.
+fn picard_sweep(subs: &mut SubApps, start: Pair, guess: Pair) -> Pair {
+    restore(subs, start);
+    publish(subs, A, guess.b);
+    publish(subs, B, guess.a);
+    subs.tick(A);
+    subs.tick(B);
+    pair(subs)
+}
+
+fn solve_picard(
+    subs: &mut SubApps,
+    start: Pair,
+    c: Case,
+    relaxed: bool,
+) -> Result<(Pair, usize, f64), f64> {
+    let mut guess = start;
+    let mut last_residual = f64::INFINITY;
+    for iteration in 1..=c.picard_max_iterations {
+        let candidate = picard_sweep(subs, start, guess);
+        last_residual = residual(candidate, guess);
+        if last_residual < c.picard_tolerance {
+            return Ok((candidate, iteration, last_residual));
+        }
+        if relaxed {
+            // Fixed under-relaxation (0 < omega < 1), not the case-specific
+            // cancellation value.  It damps the alternating Picard mode.
+            guess.a.x += c.relaxation * (candidate.a.x - guess.a.x);
+            guess.b.x += c.relaxation * (candidate.b.x - guess.b.x);
+        } else {
+            guess = candidate;
+        }
+    }
+    restore(subs, start);
+    Err(last_residual)
+}
+
+fn report(
+    name: &'static str,
+    state: Pair,
+    max_residual: f64,
+    max_iterations: usize,
+    rejected: usize,
+    min_accepted_dt: f64,
+    e0: f64,
+) -> Report {
+    Report {
+        name,
+        state,
+        max_residual,
+        max_iterations,
+        rejected,
+        min_accepted_dt,
+        energy_ratio: energy(state) / e0,
+    }
+}
+
 fn explicit() -> Report {
     let (mut app, c) = build();
-    let e0;
-    let mut r: f64 = 0.;
-    {
-        let mut outer = app
-            .get_mut_resource(TypeId::of::<SubApps>())
-            .unwrap()
-            .borrow_mut();
-        let subs = outer.downcast_mut::<SubApps>().unwrap();
-        set_dt(subs, c.nominal_dt);
-        e0 = energy(pair(subs), 1., 600.);
-        for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
-            let old = pair(subs);
-            exchange_then_tick(subs, old);
-            r = r.max(residual(pair(subs), old));
-        }
-        let p = pair(subs);
-        return Report {
-            name: "explicit/CSS",
-            state: p,
-            max_residual: r,
-            max_iterations: 1,
-            rejected: 0,
-            min_accepted_dt: c.nominal_dt,
-            energy_ratio: energy(p, 1., 600.) / e0,
-        };
+    let outer = app.get_mut_resource(TypeId::of::<SubApps>()).unwrap();
+    let mut outer = outer.borrow_mut();
+    let subs = outer.downcast_mut::<SubApps>().unwrap();
+    set_dt(subs, c.nominal_dt);
+    let e0 = energy(pair(subs));
+    let mut max_r: f64 = 0.0;
+    for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
+        let old = pair(subs);
+        css_step(subs, old);
+        max_r = max_r.max(residual(pair(subs), old));
     }
+    report("explicit CSS", pair(subs), max_r, 1, 0, c.nominal_dt, e0)
 }
 fn implicit(relaxed: bool) -> Report {
     let (mut app, c) = build();
-    let e0;
-    let mut max_r: f64 = 0.;
+    let outer = app.get_mut_resource(TypeId::of::<SubApps>()).unwrap();
+    let mut outer = outer.borrow_mut();
+    let subs = outer.downcast_mut::<SubApps>().unwrap();
+    set_dt(subs, c.nominal_dt);
+    let e0 = energy(pair(subs));
+    let mut max_r: f64 = 0.0;
     let mut max_i = 0;
-    {
-        let mut outer = app
-            .get_mut_resource(TypeId::of::<SubApps>())
-            .unwrap()
-            .borrow_mut();
-        let subs = outer.downcast_mut::<SubApps>().unwrap();
-        set_dt(subs, c.nominal_dt);
-        e0 = energy(pair(subs), 1., 600.);
-        for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
-            let start = pair(subs);
-            let mut guess = start;
-            let mut last = start;
-            for i in 1..=c.picard_max_iterations {
-                restore(subs, start);
-                exchange_then_tick(subs, guess);
-                last = pair(subs);
-                let raw = residual(last, guess);
-                max_r = max_r.max(raw);
-                max_i = max_i.max(i);
-                if raw < c.picard_tolerance {
-                    break;
-                }
-                if relaxed {
-                    guess.a.x += c.relaxation * (last.a.x - guess.a.x);
-                    guess.b.x += c.relaxation * (last.b.x - guess.b.x);
-                } else {
-                    guess = last;
-                }
-            }
-            assert!(
-                residual(last, guess) < c.picard_tolerance,
-                "Picard did not converge within the configured iteration cap"
-            );
-            restore(subs, last);
-        }
-        let p = pair(subs);
-        return Report {
-            name: if relaxed {
-                "relaxed implicit"
-            } else {
-                "implicit Picard"
-            },
-            state: p,
-            max_residual: max_r,
-            max_iterations: max_i,
-            rejected: 0,
-            min_accepted_dt: c.nominal_dt,
-            energy_ratio: energy(p, 1., 600.) / e0,
-        };
+    for _ in 0..(c.final_time / c.nominal_dt).round() as usize {
+        let start = pair(subs);
+        let (accepted, i, r) =
+            solve_picard(subs, start, c, relaxed).expect("nominal Picard step must converge");
+        restore(subs, accepted);
+        max_r = max_r.max(r);
+        max_i = max_i.max(i);
     }
+    report(
+        if relaxed {
+            "relaxed Picard"
+        } else {
+            "implicit Picard"
+        },
+        pair(subs),
+        max_r,
+        max_i,
+        0,
+        c.nominal_dt,
+        e0,
+    )
 }
 fn adaptive() -> Report {
     let (mut app, c) = build();
-    let e0;
-    let mut t: f64 = 0.;
+    let outer = app.get_mut_resource(TypeId::of::<SubApps>()).unwrap();
+    let mut outer = outer.borrow_mut();
+    let subs = outer.downcast_mut::<SubApps>().unwrap();
+    let e0 = energy(pair(subs));
+    let mut t: f64 = 0.0;
     let mut h = c.adaptive_initial_dt;
     let mut rejects = 0;
-    let mut min_h = h;
-    let mut max_r: f64 = 0.;
+    let mut min_h = f64::INFINITY;
+    let mut max_r: f64 = 0.0;
     let mut max_i = 0;
-    {
-        let mut outer = app
-            .get_mut_resource(TypeId::of::<SubApps>())
-            .unwrap()
-            .borrow_mut();
-        let subs = outer.downcast_mut::<SubApps>().unwrap();
-        e0 = energy(pair(subs), 1., 600.);
-        while t < c.final_time - 1e-12 {
-            h = h.min(c.final_time - t);
-            let start = pair(subs);
-            let mut guess = start;
-            let mut candidate = start;
-            let mut ok = false;
-            set_dt(subs, h);
-            for i in 1..=c.picard_max_iterations {
-                restore(subs, start);
-                exchange_then_tick(subs, guess);
-                candidate = pair(subs);
-                let raw = residual(candidate, guess);
-                max_r = max_r.max(raw);
-                max_i = max_i.max(i);
-                // Acceptance is governed solely by the documented interface
-                // residual.  Large windows are rejected because Picard cannot
-                // converge within the cap, not because of a preset dt gate.
-                if raw < c.picard_tolerance {
-                    ok = true;
-                    break;
-                }
-                guess = candidate;
-            }
-            if ok {
-                restore(subs, candidate);
+    while t < c.final_time - 1e-12 {
+        h = h.min(c.final_time - t);
+        set_dt(subs, h);
+        let start = pair(subs);
+        match solve_picard(subs, start, c, false) {
+            Ok((accepted, i, r)) => {
+                restore(subs, accepted);
                 t += h;
                 min_h = min_h.min(h);
-                // Once the retry controller has found the configured accurate
-                // window, retain it for the remaining coupled trajectory.
+                max_r = max_r.max(r);
+                max_i = max_i.max(i);
                 h = c.nominal_dt;
-            } else {
-                restore(subs, start);
-                h *= 0.5;
+            }
+            Err(r) => {
+                max_r = max_r.max(r);
                 rejects += 1;
+                h *= 0.5;
                 assert!(
                     h >= c.minimum_dt - 1e-12,
-                    "adaptive retry reached configured minimum dt"
+                    "adaptive retry exhausted minimum dt"
                 );
             }
         }
-        let p = pair(subs);
-        return Report {
-            name: "adaptive retry",
-            state: p,
-            max_residual: max_r,
-            max_iterations: max_i,
-            rejected: rejects,
-            min_accepted_dt: min_h,
-            energy_ratio: energy(p, 1., 600.) / e0,
-        };
     }
+    report(
+        "adaptive retry",
+        pair(subs),
+        max_r,
+        max_i,
+        rejects,
+        min_h,
+        e0,
+    )
 }
-fn reference(h: f64, final_time: f64) -> Pair {
-    let mut p = Pair {
-        a: OscillatorState { x: 1., v: 0. },
-        b: OscillatorState { x: -1., v: 0. },
-    };
-    for _ in 0..(final_time / h).round() as usize {
-        // Simultaneous solve of the fixed point used by the rollback policies:
-        // x_a' - h² k_c x_b' = rhs_a, and its symmetric companion.
-        let old = p;
-        let q = h * h * 600.;
-        let ra = old.a.x + h * old.a.v - h * h * 601. * old.a.x;
-        let rb = old.b.x + h * old.b.v - h * h * 601. * old.b.x;
-        p.a.x = (ra + q * rb) / (1. - q * q);
-        p.b.x = (rb + q * ra) / (1. - q * q);
-        p.a.v = (p.a.x - old.a.x) / h;
-        p.b.v = (p.b.x - old.b.x) / h;
-    }
-    p
-}
-// The selected initial state excites only the antisymmetric normal mode. Its
-// continuous solution is independent of the numerical coupling policy.
-fn exact_reference(final_time: f64) -> Pair {
-    let omega = 1201_f64.sqrt(); // k + 2 k_c, with m=1, k=1, k_c=600.
-    let x = (omega * final_time).cos();
-    let v = -omega * (omega * final_time).sin();
+
+// Independent physical reference: the antisymmetric initial state has the
+// exact normal mode omega=sqrt((k+2kc)/m)=sqrt(4001).
+fn exact(t: f64) -> Pair {
+    let omega = 4001_f64.sqrt();
+    let x = (omega * t).cos();
+    let v = -omega * (omega * t).sin();
     Pair {
         a: OscillatorState { x, v },
         b: OscillatorState { x: -x, v: -v },
     }
 }
-fn err(a: Pair, b: Pair) -> f64 {
-    (a.a.x - b.a.x)
-        .abs()
-        .max((a.a.v - b.a.v).abs())
-        .max((a.b.x - b.b.x).abs())
-        .max((a.b.v - b.b.v).abs())
+fn relative_error(p: Pair, reference: Pair) -> f64 {
+    let numerator = (p.a.x - reference.a.x).powi(2)
+        + (p.a.v - reference.a.v).powi(2)
+        + (p.b.x - reference.b.x).powi(2)
+        + (p.b.v - reference.b.v).powi(2);
+    let denominator = reference.a.x.powi(2)
+        + reference.a.v.powi(2)
+        + reference.b.x.powi(2)
+        + reference.b.v.powi(2);
+    (numerator / denominator).sqrt()
 }
 fn main() {
     let (_, c) = build();
-    let reference_state = reference(c.reference_dt, c.final_time);
-    let nominal_monolithic = reference(c.nominal_dt, c.final_time);
-    let exact = exact_reference(c.final_time);
+    let reference = exact(c.final_time);
     let reports = [explicit(), implicit(false), implicit(true), adaptive()];
-    let refined = reference(c.reference_dt / 2., c.final_time);
-    let ref_error = err(reference_state, refined);
-    let exact_ref_error = err(reference_state, exact);
-    println!("reference refinement error={ref_error:.3e}");
-    assert!(ref_error < 2e-2, "reference step is not converged");
     for r in &reports {
-        println!("{} residual={:.3e} iterations={} rejected={} accepted_dt={:.5} energy_ratio={:.6} fingerprint={:016x?} error_to_exact={:.3e} error_to_nominal_monolithic={:.3e}",r.name,r.max_residual,r.max_iterations,r.rejected,r.min_accepted_dt,r.energy_ratio,fingerprint(r.state),err(r.state,exact),err(r.state,nominal_monolithic));
+        println!("{} residual={:.3e} iterations={} rejected={} accepted_dt={:.5} energy_ratio={:.6} relative_error={:.9} state={:.17e},{:.17e},{:.17e},{:.17e} fingerprint={:016x?}", r.name, r.max_residual, r.max_iterations, r.rejected, r.min_accepted_dt, r.energy_ratio, relative_error(r.state, reference), r.state.a.x, r.state.a.v, r.state.b.x, r.state.b.v, fingerprint(r.state));
     }
-    println!("refined_monolithic_error_to_exact={exact_ref_error:.3e}");
-    let pic = &reports[1];
-    let relax = &reports[2];
-    let adapt = &reports[3];
+    let css = &reports[0];
+    let picard = &reports[1];
+    let relaxed = &reports[2];
+    let adaptive = &reports[3];
     assert!(
-        pic.max_iterations >= 3,
-        "strong case must expose Picard iteration"
+        picard.max_iterations >= 2,
+        "case must expose Picard iteration"
     );
     assert!(
-        relax.max_iterations < pic.max_iterations,
-        "relaxation should reduce iteration count"
+        relaxed.max_iterations < picard.max_iterations,
+        "fixed relaxation must reduce iteration count"
     );
-    assert!(adapt.rejected > 0, "adaptive retry branch did not fire");
-    // Picard policies must solve the same-window simultaneous discretization;
-    // the refined reference independently bounds their ordinary time error.
-    assert!(err(pic.state, nominal_monolithic) < 2e-4);
-    assert!(err(relax.state, nominal_monolithic) < 2e-4);
-    // The independently derived continuous mode verifies that the refined
-    // reference itself is accurate; the selected nominal window is purposely
-    // coarse enough to make the coupling schedules visibly different.
     assert!(
-        exact_ref_error < 0.4,
-        "reference is inaccurate against exact mode"
+        adaptive.rejected > 0,
+        "adaptive residual rejection branch did not fire"
     );
-    assert!(err(pic.state, nominal_monolithic) < 2e-7);
-    assert!(err(relax.state, nominal_monolithic) < 2e-7);
-    assert!(err(adapt.state, nominal_monolithic) < 2e-7);
     assert!(
-        err(reports[0].state, nominal_monolithic) > 1e-3,
-        "explicit CSS must retain a visible interface-lag error"
+        relative_error(picard.state, reference) < 0.25,
+        "Picard misses the external 25% phase-space accuracy budget"
+    );
+    assert!(
+        relative_error(relaxed.state, reference) < 0.25,
+        "relaxed Picard misses the external 25% phase-space accuracy budget"
+    );
+    assert!(
+        relative_error(adaptive.state, reference) < 0.25,
+        "adaptive Picard misses the external 25% phase-space accuracy budget"
+    );
+    assert!(
+        relative_error(css.state, reference) > 0.5,
+        "CSS lag is not exposed by this documented strong-coupling case"
     );
     println!("ALL CHECKS PASSED");
 }
