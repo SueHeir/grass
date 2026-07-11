@@ -130,10 +130,17 @@ impl App {
     /// returns an [`AppError`] instead of panicking when a unique plugin is
     /// added twice or a TypeId dependency has not been registered yet. Use this
     /// in applications that need to surface plugin-wiring diagnostics through
-    /// their own CLI, GUI, or test harness.
+    /// their own CLI, GUI, or test harness. If registration fails after an
+    /// earlier plugin has initialized work, all registered cleanup callbacks
+    /// are drained before the error is returned.
     pub fn try_add_plugins<M>(&mut self, plugins: impl Plugins<M>) -> Result<&mut Self, AppError> {
-        plugins.try_add_to_app(self)?;
-        Ok(self)
+        match plugins.try_add_to_app(self) {
+            Ok(()) => Ok(self),
+            Err(error) => {
+                self.run_cleanup();
+                Err(error)
+            }
+        }
     }
 
     /// Internal: adds a boxed plugin, checking uniqueness and dependencies.
@@ -527,7 +534,10 @@ impl App {
     /// Returns [`AppError::MissingCapabilities`] instead of panicking when a
     /// required capability tag has no registered provider.
     pub fn try_prepare(&mut self) -> Result<&mut Self, AppError> {
-        self.validate_capability_contracts_result()?;
+        if let Err(error) = self.validate_capability_contracts_result() {
+            self.run_cleanup();
+            return Err(error);
+        }
         if self.fallible_setup_systems.is_empty() {
             self.sub_apps.main.prepare();
             return Ok(self);
@@ -607,7 +617,10 @@ impl App {
             self.run_cleanup();
             return Ok(());
         }
-        self.validate_capability_contracts_result()?;
+        if let Err(error) = self.validate_capability_contracts_result() {
+            self.run_cleanup();
+            return Err(error);
+        }
         if self.fallible_setup_systems.is_empty() {
             self.sub_apps.main.start();
             self.run_cleanup();
@@ -1304,6 +1317,68 @@ mod tests {
         assert!(err.to_string().contains("PluginA"));
     }
 
+    struct CleanupPlugin(Arc<AtomicUsize>);
+
+    impl Plugin for CleanupPlugin {
+        fn build(&self, app: &mut App) {
+            let cleanup_count = Arc::clone(&self.0);
+            app.add_cleanup_with_app(move |_app| {
+                cleanup_count.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+    }
+
+    struct DuplicateAfterCleanupGroup(Arc<AtomicUsize>);
+
+    impl crate::PluginGroup for DuplicateAfterCleanupGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .add(CleanupPlugin(self.0))
+                .add(PluginA)
+                .add(PluginA)
+        }
+    }
+
+    #[test]
+    fn duplicate_plugin_error_after_group_initialization_runs_cleanup() {
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+
+        let err = app
+            .try_add_plugins(DuplicateAfterCleanupGroup(Arc::clone(&cleanup_count)))
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, AppError::DuplicatePlugin { .. }));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    struct MissingDependencyAfterCleanupGroup(Arc<AtomicUsize>);
+
+    impl crate::PluginGroup for MissingDependencyAfterCleanupGroup {
+        fn build(self) -> crate::PluginGroupBuilder {
+            crate::PluginGroupBuilder::start::<Self>()
+                .add(CleanupPlugin(self.0))
+                .add(PluginB)
+        }
+    }
+
+    #[test]
+    fn missing_dependency_after_group_initialization_runs_cleanup() {
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+
+        let err = app
+            .try_add_plugins(MissingDependencyAfterCleanupGroup(Arc::clone(
+                &cleanup_count,
+            )))
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, AppError::MissingDependencies { .. }));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     #[should_panic(expected = "already added in application")]
     fn plugin_group_add_plugins_still_panics() {
@@ -1419,6 +1494,32 @@ mod tests {
         let err = app.try_start().err().unwrap();
 
         assert!(matches!(err, AppError::MissingCapabilities { .. }));
+    }
+
+    #[test]
+    fn try_prepare_missing_capability_runs_cleanup() {
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+        app.add_plugins(CleanupPlugin(Arc::clone(&cleanup_count)));
+        app.add_plugins(PluginC);
+
+        let err = app.try_prepare().err().unwrap();
+
+        assert!(matches!(err, AppError::MissingCapabilities { .. }));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn try_start_missing_capability_runs_cleanup() {
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+        app.add_plugins(CleanupPlugin(Arc::clone(&cleanup_count)));
+        app.add_plugins(PluginC);
+
+        let err = app.try_start().err().unwrap();
+
+        assert!(matches!(err, AppError::MissingCapabilities { .. }));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
     }
 
     struct FailingBuildPlugin {

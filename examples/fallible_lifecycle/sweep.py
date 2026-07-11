@@ -15,6 +15,10 @@ CHECKS = [
     ("update blocked", "app::tests::fallible_setup_failure_prevents_update_execution"),
     ("cleanup after build", "app::tests::fallible_plugin_build_failure_runs_cleanup"),
     ("cleanup after setup", "app::tests::fallible_setup_failure_runs_cleanup"),
+    ("cleanup after duplicate", "app::tests::duplicate_plugin_error_after_group_initialization_runs_cleanup"),
+    ("cleanup after dependency", "app::tests::missing_dependency_after_group_initialization_runs_cleanup"),
+    ("cleanup after prepare cap.", "app::tests::try_prepare_missing_capability_runs_cleanup"),
+    ("cleanup after start cap.", "app::tests::try_start_missing_capability_runs_cleanup"),
     ("legacy compatibility", "app::tests::legacy_plugins_and_setup_systems_remain_compatible"),
 ]
 
@@ -28,7 +32,7 @@ for label, test_name in CHECKS:
     )
     results.append((label, result.returncode == 0, result))
 
-canvas = Canvas(800, 300)
+canvas = Canvas(800, 480)
 canvas.text(30, 20, "FALLIBLE LIFECYCLE VALIDATION", scale=3)
 canvas.text(30, 58, "INDEPENDENT MEASUREMENTS VS EXPECTED PASS", scale=2)
 canvas.text(500, 78, "EXPECTED", scale=2)
