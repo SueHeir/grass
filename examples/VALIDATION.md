@@ -46,6 +46,10 @@ render in Gitea:
   [`plots/typed_system_labels_matrix.png`](typed_system_labels/plots/typed_system_labels_matrix.png),
   checking typed ordering keys, required-target diagnostics, optional ordering, and legacy string
   compatibility.
+- [`composite_system_param_validation`](composite_system_param_validation/README.md) embeds
+  [`plots/composite_system_param_validation_matrix.png`](composite_system_param_validation/plots/composite_system_param_validation_matrix.png),
+  checking that the public scheduler preparation path accepts an enabled nested
+  resource contract and rejects a disabled one with its precise diagnostic.
 - [`fallible_lifecycle`](fallible_lifecycle/README.md) embeds
   [`plots/fallible_lifecycle_matrix.png`](fallible_lifecycle/plots/fallible_lifecycle_matrix.png),
   checking plugin-group/nested-plugin and setup failure propagation, update short-circuit,

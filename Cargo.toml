@@ -54,6 +54,10 @@ name = "contract_reference"
 path = "examples/contract_reference/main.rs"
 
 [[example]]
+name = "composite_system_param_validation"
+path = "examples/composite_system_param_validation/main.rs"
+
+[[example]]
 name = "oscillator_coupling_schemes"
 path = "examples/oscillator_coupling_schemes/main.rs"
 
