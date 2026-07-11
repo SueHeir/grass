@@ -1,0 +1,6 @@
+# Expected outcomes for the typed scheduler-label matrix.
+[checks]
+typed_required_order = "PASS"
+required_missing_target = "PASS"
+optional_missing_target = "PASS"
+legacy_string_compatibility = "PASS"
