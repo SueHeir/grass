@@ -1,9 +1,10 @@
-# GRASS: **General Rust App System Scheduler**
+# GRASS: General Rust App System Scheduler
 
 <!-- disclaimer-banner -->
 > **Research-software status:** This ecosystem was created with heavy usage of AI. GRASS, SOIL, and DIRT are the core architecture and DEM implementation; repositories prefixed `dev_` are experimental method demonstrations outside the author's domain expertise. Treat claims according to their linked evidence and documented limitations. See [DISCLAIMER.md](DISCLAIMER.md).
 <!-- /disclaimer-banner -->
 
+## Why GRASS exists
 
 Most simulation codes begin the same way: define a state, call functions in a
 particular order to edit the state, repeat. GRASS provides a formalized way to define your state (resources) and call functions (systems) via plugins, schedules, apps and sub-apps. (This is very similar to [Bevy's](https://bevyengine.org) ECS; however, it's just the S of ECS). Every aspect of a simulation's codebase is added as a plugin, making every aspect of the code swappable and replaceable via additional plugins.
@@ -14,6 +15,7 @@ assumptions, etc. Editing existing simulation codebases is typically done throug
 
 With GRASS, there is no locked structure; however, it does ask you to get your hands a little dirty with some programming. GRASS is a library, and plugins you would write with GRASS are also libraries. If everything is a library, what do you run? The answer is you build your own executable to do exactly what you want! The following is a 'simulation' counting by one every step and checking if it has reached 5 every step.
 
+### A complete app
 
 ```rust
 use grass_app::prelude::*;
@@ -60,16 +62,19 @@ fn main() {
     app.add_plugins(CounterPlugin);
     app.start();
 }
-
 ```
 
-This is a lot of code to count to 5, but it explains the following very well
+This is a lot of code to count to 5, but it explains the following very well:
+
 - **Resources** hold state.
 - **Systems** are ordinary functions that declare the state they read and write.
 - **Schedules** define when those functions run.
 - **Plugins** package capabilities that can be added, replaced, or removed.
 
+### From one solver to two
+
 If that's how much code is required to count to 5, how much would be required to couple two independent codebases?
+
 ```rust
 fn main() {
     let mut app = App::new();
@@ -80,215 +85,230 @@ fn main() {
 }
 ```
 
-Only 5 lines? Well not really, DemCfdCouplingPlugin does all the heavy lifting here. The important thing is that the code of the subapps for the DEM solver and CFD solver were NOT edited, both codes know nothing about each other. All changes to both codes and added systems for coupling codes to transfer information were done via the Coupling plugin we add.
+Only 5 lines? Well not really, `DemCfdCouplingPlugin` does all the heavy lifting here. The important thing is that the code of the subapps for the DEM solver and CFD solver were NOT edited, both codes know nothing about each other. All changes to both codes and added systems for coupling codes to transfer information were done via the Coupling plugin we add.
 
 GRASS knows nothing about particles,
 meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
 that domain crates and complete solvers build on.
 
+## What makes that composition possible
 
-## The deal
+GRASS does not make two arbitrary closed programs compatible. The boundary has
+to be designed into the libraries: each solver owns its internal state and
+behavior, while the application that combines them owns the schedule, exchange,
+and stopping policy.
 
-Everything is three primitives and one scheduler.
-
-- **Resources** — your state, stored by type; reached from any system as
-  `Res<T>` (shared read) or `ResMut<T>` (exclusive write).
-- **Systems** — plain functions whose parameter types *are* their read/write
-  declaration. The scheduler injects the borrows and picks the run order from
-  them. Execution is single-threaded and deterministic — "order" is the sequence
-  systems run in, not parallel dispatch.
-- **Plugins & plugin groups** — the modular unit. A plugin's `build(&mut app)`
-  wires its resources and systems; a group bundles plugins and lets a consumer
-  `disable::<T>()` one and substitute their own. This is exactly how SOIL and
-  DIRT layer on, and how you swap an integrator or output law.
-
-Because a solver here *is* Rust — resources, systems, plugins — you extend or
-change one the same way you read it: add a system, add a plugin, override a group.
-There is no separate input-script language to learn or grow out of; a new feature
-is type-checked code you can read, modify, and step through in a debugger. (`grass_io`
-does offer TOML config for values you'd rather not hard-code — parameters, run
-stages — but the *behavior* stays in Rust, where you can see it.)
-
-**Nothing is first-class — every aspect of a solver is a plugin.** There are no
-privileged, built-in parts of the physics: a one-line debug print is registered
-the same way inter-particle communication is — as a **system** (with its
-**resources**), bundled in a **plugin**. Plugins add systems and resources, and
-they can also **remove** them — so any part of any simulation, from a core force
-law to I/O to a diagnostic, can be added to, swapped for a replacement, or
-deleted, without editing the code it changes. The model is lifted from
-[Bevy](https://bevyengine.org)'s scheduler. That uniform flexibility is the whole
-point — and an honest double edge: with no fixed skeleton, behavior lives across
-many small plugins rather than one linear main loop, so the power comes with
-indirection to trace. The goal it buys: write a capability **once** and reuse it
-across every solver on the stack, instead of re-implementing it in each code.
-
-Three things worth spotlighting:
-
-- **The DI scheduler.** Systems declare what they touch by argument type; the
-  scheduler records those read/write sets and injects the borrows into each
-  system as it runs.
-  Borrows are checked at *run time* (resources live in `RefCell`s), so two
-  systems never race. Systems in the same phase that both touch a resource are
-  not rejected automatically; use `.before()` / `.after()` when the data order
-  matters. A single system taking the same resource as `Res` and `ResMut` at
-  once panics with a `RefCell` borrow error. That trade-off is deliberate and
-  [documented](https://sueheir.github.io/grass/model/scheduler.html).
-- **The `Schedule { Phase, Sequence, Loop, Branch }` tree.** A timestep is a tree
-  of nodes: a `Phase` is a named set of systems, a `Sequence` runs children in
-  order, a `Loop` repeats one (the per-step loop), a `Branch` picks conditionally.
-  You usually address phases through a `ScheduleSet` enum whose variant order
-  fixes execution order — no graph wiring by hand.
-- **Cross-MPI coupling (`grass_multi`).** Several `App`s run as sub-Apps under one
-  parent; the parent's own schedule *is* the orchestrator (`Tick → Couple →
-  Check`). `MultiRes<T, NS>` / `MultiResMut<T, NS>` move state across namespaces;
-  `add_subapp` couples in-process, `add_remote_subapp` + `MpiInterCommTransport`
-  couples across separate MPI binaries — the same `SubApps` machinery either way.
-
-## When to use it — and when not
-
-**Use GRASS when** your solver's step decomposes into **systems with separable
-read/write sets** — each stage reads some resources and writes others. That is
-the shape of a particle code, a finite-volume sweep, a cellular update, *and*
-(as it turns out) an implicit assemble-and-solve: the payoff is that you write
-the physics, not the plumbing, and you can couple your solver to someone else's.
-
-**Mesh and implicit/global solves fit the same shape** — an assemble-and-solve
-step (a sparse `K u = b`, a mesh sweep) is just another schedule of systems and
-resources, so GRASS is designed to be agnostic to the discretization, not only to
-particles. The mesh side of the ecosystem (**FIELD**) is still being built out, so
-treat non-particle support as **in progress** rather than a finished, broadly
-validated capability — we'll point to concrete validated examples here as they
-land.
-
-## The stack
-
-GRASS is the framework tier of a multi-repo stack. Lower tiers never depend on
-higher ones. DIRT (DEM) is the validated proof that a full physics tier rides
-this framework; the same seams are open for other methods.
-
-```
-GRASS    framework: App, Plugin, Scheduler, IO, coupling      (no particles, no mesh)
-  ├─ SOIL    substrate: Atom, domain decomposition, comm, neighbor lists   (no physics)
-  │    └─ DIRT   physics: Discrete Element Method
-  └─ FIELD   substrate: Mesh, FieldData, halo, AMR                         (no equations)
-       └─ dev_field_efvm   physics: compressible CFD (Riemann/EOS/IBM)  - in progress
+```text
+ solver A                    coupling application                    solver B
+┌──────────────┐           ┌────────────────────────┐             ┌──────────────┐
+│ private state│           │ parent schedule        │             │ private state│
+│ systems      │── expose ─▶ exchange contract ────▶│ consume     │ systems      │
+│ plugins      │           │ cadence + stop policy  │             │ plugins      │
+└──────────────┘           └────────────────────────┘             └──────────────┘
+       │                               │                                 │
+       └──────────── GRASS App · resources · systems · plugins ──────────┘
 ```
 
-- **GRASS** (this repo) — App + Plugin + dependency-injection scheduler, I/O,
-  MPI, coupling primitives. No particles, no mesh, no physics.
-- **[SOIL](https://github.com/SueHeir/soil)** — a method-agnostic particle
-  substrate on GRASS (base `Atom`, `AtomData` registry, domain decomposition,
-  communication, neighbor lists). See the [SOIL book](https://sueheir.github.io/soil).
-- **[DIRT](https://github.com/SueHeir/dirt)** — the Discrete Element Method on
-  the SOIL substrate (contact, parallel bonds, walls, clumps). See the
-  [DIRT book](https://sueheir.github.io/dirt).
-- **[FIELD](https://github.com/SueHeir/field)** — the mesh/Eulerian substrate on
-  GRASS (`UniformMesh`, `FieldData`, halo), equation-agnostic the way SOIL is
-  method-agnostic. It already hosts the `fem_poisson` implicit-solve proof; its
-  compressible-CFD physics tier (**dev_field_efvm**) is in progress.
+That division of ownership is the important part:
 
-Several development-stage tiers also ride the stack as demonstrations of the
-same substrate boundaries. They are not peer-reviewed or presented as
-domain-validated; `dev_` marks that status plainly:
+- A **solver library** owns its resources, systems, phases, and plugins.
+- A **coupling package** owns the data conversion and exchange systems.
+- The **parent application** selects the plugins, orders the solver ticks and
+  exchanges, and decides when the combined run is finished.
+- A stable interface uses a `Port<T>` whose exchange type belongs to the
+  interface—not either solver's private resource type.
 
-- **[dev_soil_sph](https://github.com/SueHeir/dev_soil_sph)** —
-  granular SPH (`mu(I)` continuum) on SOIL.
-- **[dev_soil_peri](https://github.com/SueHeir/dev_soil_peri)** —
-  bond-based peridynamics on SOIL.
-- **[dev_field_efvm](https://github.com/SueHeir/dev_field_efvm)** —
-  compressible CFD on the sibling FIELD mesh substrate.
+The full, test-linked rules are in the
+[Scientific Library Composition Contract](docs/src/reference/library-composition-contract.md).
 
-Those examples keep GRASS honest about the abstraction: the framework is not a
-particle code or a mesh code, it is the scheduler, plugin, I/O, and coupling
-layer underneath both.
+## The programming model
 
-Today the stack has two substrates — **SOIL** (particles) and **FIELD** (meshes)
-— and both are primarily **short-range/local**. Reaching **long-range / global**
-methods (FMM/Ewald far-field for particles; multigrid and implicit/global solves
-for meshes) is a second, orthogonal axis on the roadmap — and the current plan is
-to grow that reach *inside* SOIL and FIELD themselves, not as separate substrates.
-FIELD's `fem_poisson` example (one implicit `K u = b` solve) is an early proof in
-that direction; a general long-range/global capability is still future work.
+### Resources make ownership visible
 
-The App + scheduler crates here were extracted from that particle codebase; GRASS
-retains nothing particle- or physics-specific.
+Shared simulation state is stored by Rust type. A system requests `Res<T>` for a
+shared read or `ResMut<T>` for an exclusive write. Those function parameters are
+both the system's inputs and its access declaration; the scheduler injects the
+actual borrows when the system runs.
 
-## How the three fit together
+Resources use runtime-checked borrows. GRASS currently executes systems
+sequentially, so there is no parallel system dispatch, but meaningful data order
+still needs to be explicit. Put causal stages in different phases or use typed
+`.before()` / `.after()` relationships. A single system that requests the same
+resource mutably and immutably will panic with a `RefCell` borrow error.
 
-GRASS gives you the `App`/scheduler/coupling; SOIL turns that into a parallel
-particle substrate via one `AtomData` contract; DIRT is the proof that a full
-LAMMPS-validated physics tier rides it — and the same seams are open for SPH,
-peridynamics, or your own method.
+### Schedules make time visible
 
-One line per tier, worded identically wherever these three repos describe
-themselves:
+A `ScheduleSet` enum usually describes the ordered phases of one step. More
+complex applications can use a schedule tree built from `Phase`, `Sequence`,
+`Loop`, and `Branch` nodes. Independently authored solvers can occupy separate
+schedule namespaces, while a parent schedule places their ticks and exchanges in
+one explicit order.
 
-- **[GRASS](https://github.com/SueHeir/grass)** — Build solvers as composable
-  plugins instead of a hand-rolled main loop — explicit time-stepping or a
-  single implicit global solve, particles or a mesh — and couple several
-  together, in-process or across MPI.
-- **[SOIL](https://github.com/SueHeir/soil)** — Write your own particle method
-  without hand-writing domain decomposition, halo exchange, migration, and
-  neighbor lists — declare your state once, SOIL carries it through all of it.
-- **[DIRT](https://github.com/SueHeir/dirt)** — A Rust granular-DEM code you read
-  and extend as composable plugins — cross-checked against LAMMPS and closed-form
-  theory.
+Current execution is deterministic: phase and namespace order, explicit system
+dependencies, and finally registration order determine the sequence. This is a
+sequential determinism contract, not a promise of reproducibility across every
+transport, platform, compiler, or floating-point implementation.
 
-**Where to start:** to *run* granular simulations, start at
-[DIRT](https://github.com/SueHeir/dirt), the batteries-included physics tier; to
-*write your own* particle method or solver, start at
-[SOIL](https://github.com/SueHeir/soil) (the particle substrate) or
-[GRASS](https://github.com/SueHeir/grass) (the framework). The full walkthrough
-of how the tiers compose — one timestep end to end, and where the seams are — is
-the canonical [How the stack fits together](https://sueheir.github.io/grass/stack/how-the-stack-fits-together.html)
-page in the GRASS book.
+### Plugins make capabilities replaceable
 
-## Depend on it
+A plugin registers the resources and systems for one capability. A plugin group
+provides a useful default collection while allowing an application to disable a
+member and install a replacement. Dependencies and capability contracts can be
+validated before the run starts, and the fallible lifecycle APIs return setup
+errors instead of requiring a panic.
 
-GRASS is a library workspace — the consumers are SOIL, DIRT, and your own
-solver — but the workspace ships runnable top-level `cargo` examples, so you can
-get your hands dirty before you depend on anything:
+Plugin configuration is declarative TOML. Behavior remains ordinary typed Rust,
+so extending a solver means adding or replacing code you can read, test, and
+debug rather than growing a separate simulation scripting language. GRASS can
+also generate configuration examples and field references from plugin metadata.
+
+### Sub-apps keep complete solvers independent
+
+`grass_multi` places several `App`s under a parent. For one-off local coupling,
+`MultiRes<T, NS>` and `MultiResMut<T, NS>` provide namespaced access to a
+sub-app's resources. For a stable library boundary, `Port<T>` exposes an
+interface-owned exchange value without making the consumer depend on the
+producer's private state.
+
+The same parent/sub-app model supports separate MPI binaries through
+`add_remote_subapp`, `Wire`, `Transport`, and `MpiInterCommTransport`. Remote
+coupling is explicit: both peers must agree on message order, direction, cadence,
+and wire representation.
+
+## What is demonstrated today
+
+The repository keeps runnable examples, tests, numerical acceptance criteria,
+and committed result figures together. The evidence is intentionally narrower
+than “GRASS can run every scientific method.” It demonstrates specific pieces of
+the composition model:
+
+| Example | What it demonstrates |
+|---|---|
+| [`hello_app`](examples/hello_app/README.md) | Minimal App lifecycle and scheduled execution |
+| [`verlet_minisolver`](examples/verlet_minisolver/README.md) | A small explicit time-stepping solver built from resources and systems |
+| [`heat_diffusion_1d`](examples/heat_diffusion_1d/README.md) | A non-particle mesh-style update checked against theory |
+| [`matrix_free_poisson_cg`](examples/matrix_free_poisson_cg/README.md) | An iterative global solve and convergence history |
+| [`oscillator_demo`](examples/oscillator_demo/README.md) | Independent solver libraries, sub-app composition, ports, and generated configuration |
+| [`oscillator_coupling_schemes`](examples/oscillator_coupling_schemes/README.md) | Explicit, Picard, relaxed, and adaptive exchanges compared with an independent reference |
+| [`oscillator_mpmd`](examples/oscillator_mpmd/README.md) | The coupling contract exercised across separate MPI binaries |
+| [`typed_system_labels`](examples/typed_system_labels/README.md) | Typed ordering, required dependencies, and failure diagnostics |
+| [`fallible_lifecycle`](examples/fallible_lifecycle/README.md) | Setup failure propagation, update short-circuiting, and cleanup |
+
+The complete index is [Example Validation](examples/VALIDATION.md). These checks
+validate framework behavior and the particular examples; they do not validate
+every physics package built on GRASS.
+
+## Where the claim stops
+
+GRASS is a useful fit when a codebase can expose typed state and decompose its
+work into scheduled operations. It earns the extra structure when you expect to
+reuse capabilities, replace infrastructure, assemble a family of solvers, or
+couple independently useful methods.
+
+It may be the wrong fit when:
+
+- a small calculation will remain permanently standalone;
+- an existing solver cannot expose a meaningful library boundary without a
+  major rewrite;
+- the desired extension must depend on undocumented private state;
+- a separate input language is a hard requirement;
+- parallel execution of independent systems is required today.
+
+Current limitations worth stating plainly:
+
+- The scheduler is single-threaded. GRASS coordinates MPI and remote sub-apps,
+  but it does not currently dispatch independent systems in parallel.
+- Runtime resource borrowing moves some mistakes from compile time to startup or
+  execution time.
+- `Wire` is a deliberately small transport contract, not a version-negotiated
+  protocol for independently evolving binaries.
+- Host/device coherence has framework hooks and tests, not evidence of a
+  production GPU backend.
+- Non-DEM repositories prefixed `dev_` are architecture demonstrations outside
+  the author's domain expertise; their own validation determines what can be
+  claimed about their physics.
+
+## The ecosystem
+
+GRASS is the framework tier. Physics and discretization belong above it, so
+lower tiers never depend on higher ones:
+
+```text
+GRASS   App, plugins, scheduling, I/O, MPI, coupling
+  │
+  ├── SOIL   particle state, decomposition, migration, ghosts, neighbors
+  │     └── DIRT   granular DEM physics and DEM validation
+  │
+  └── FIELD  mesh and field substrate
+        └── dev_field_efvm   experimental finite-volume physics
+```
+
+- **[SOIL](https://github.com/SueHeir/soil)** is the reusable particle substrate.
+  It carries registered particle data through decomposition, migration, ghost
+  exchange, and neighbor construction without owning a force law.
+- **[DIRT](https://github.com/SueHeir/dirt)** is the granular DEM code built on
+  SOIL. Its LAMMPS and closed-form comparisons support claims about the DEM tier.
+- **[FIELD](https://github.com/SueHeir/field)** is the sibling mesh/field
+  substrate. Its equation and physics tiers remain separate.
+
+Experimental particle and mesh methods live in visibly named `dev_` repositories,
+including [`dev_soil_sph`](https://github.com/SueHeir/dev_soil_sph),
+[`dev_soil_peri`](https://github.com/SueHeir/dev_soil_peri), and
+[`dev_field_efvm`](https://github.com/SueHeir/dev_field_efvm). They test whether
+the boundaries are usable; they are not presented as domain-validated peers of
+DIRT.
+
+## Run something
+
+Clone the repository and run the smallest examples:
 
 ```console
-cargo run --example hello_app            # the smallest App
-cargo run --example verlet_minisolver    # a tiny falling-body solver (the quickstart, in code)
-cargo run --example heat_diffusion_1d    # a non-particle 1D mesh solver, checked against theory
-cargo run --example observed_oscillator  # clock + observer + dump
+cargo run --example hello_app
+cargo run --example verlet_minisolver
+cargo run --example heat_diffusion_1d
+cargo run --example oscillator_demo
 ```
 
-To build against it, point at the crates you need:
+Then follow [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html)
+or build a complete solver with
+[Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html).
+
+GRASS is a library workspace. Depend only on the crates your application needs:
 
 ```toml
 [dependencies]
 grass_app       = { git = "https://github.com/SueHeir/grass" }
 grass_scheduler = { git = "https://github.com/SueHeir/grass" }
-# optional companions:
-grass_io        = { git = "https://github.com/SueHeir/grass" }  # config, clock, dump
-grass_multi     = { git = "https://github.com/SueHeir/grass" }  # coupling
-```
 
-Then **read the book** — start with
-[GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html), then
-[Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html).
-The book is the primary docs; it builds from `docs/` with `mdbook build`.
+# Optional companions
+grass_io        = { git = "https://github.com/SueHeir/grass" }
+grass_multi     = { git = "https://github.com/SueHeir/grass" }
+grass_mpi       = { git = "https://github.com/SueHeir/grass" }
+```
 
 ## Crate map
 
-| crate | role |
+| Crate | Role |
 |---|---|
-| [`grass_app`](crates/grass_app/README.md) | `App` / `Plugin` / `PluginGroup` — container, lifecycle, plugin-group overrides |
-| [`grass_scheduler`](crates/grass_scheduler/README.md) | typed-resource scheduler; `Schedule { Phase, Sequence, Loop, Branch }` tree; run conditions; states and stages |
-| [`grass_derive`](crates/grass_derive/README.md) | `#[derive(ScheduleSet)]`, `#[derive(StageEnum)]`, `#[derive(Namespace)]` |
-| [`grass_multi`](crates/grass_multi/README.md) | cross-namespace coupling — `MultiRes<T, NS>` / `MultiResMut<T, NS>`, `add_subapp` / `add_remote_subapp`, `Wire` / `Transport` / `MpiInterCommTransport` |
-| [`grass_io`](crates/grass_io/README.md) | optional companion: TOML config (`Config` + `InputPlugin`), `SimClock`, `RunPlugin`, `TermOut`, `Dump` |
-| [`grass_mpi`](crates/grass_mpi/README.md) | thin MPI abstraction (`CommBackend`); powers `MpiInterCommTransport` |
+| [`grass_app`](crates/grass_app/README.md) | `App`, lifecycle, `Plugin`, `PluginGroup`, dependency/capability validation, generated configuration |
+| [`grass_scheduler`](crates/grass_scheduler/README.md) | Typed resources and systems, schedule tree, phases, labels, conditions, states, stages, coherence hooks |
+| [`grass_derive`](crates/grass_derive/README.md) | Derives for schedules, stages, namespaces, and configuration metadata |
+| [`grass_multi`](crates/grass_multi/README.md) | Sub-apps, namespaced resource access, ports, wire types, and local/remote transports |
+| [`grass_io`](crates/grass_io/README.md) | TOML configuration, simulation clock, run control, terminal output, and dumps |
+| [`grass_mpi`](crates/grass_mpi/README.md) | MPI backend abstraction used by remote coupling |
 
-## Next
+## Choose your route
 
-- [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html) — the fastest path from zero to a running step.
-- [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html) — a complete time-stepping solver, from scratch.
-- [The Scheduler](https://sueheir.github.io/grass/model/scheduler.html) — resources, systems, the schedule tree, and the borrow rules.
-- [MPI and Coupling](https://sueheir.github.io/grass/model/mpi-coupling.html) — running across processes and coupling several solvers.
+- **Building your first App:** [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html)
+- **Writing a solver library:** [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html)
+- **Coupling solvers:** [Coupling Two Solvers](https://sueheir.github.io/grass/tutorial/coupling-two-solvers.html)
+- **Understanding execution:** [The Scheduler](https://sueheir.github.io/grass/model/scheduler.html)
+- **Authoring compatible libraries:** [Scientific Library Composition Contract](docs/src/reference/library-composition-contract.md)
+- **Writing a particle method:** start with [SOIL](https://sueheir.github.io/soil)
+- **Running or extending DEM:** start with [DIRT](https://sueheir.github.io/dirt)
+
+The book in `docs/` is the primary detailed documentation and builds with
+`mdbook build`.
 
 ## License
 
