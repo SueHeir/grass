@@ -4,16 +4,27 @@
 > **Research-software status:** This ecosystem was created with heavy usage of AI. GRASS, SOIL, and DIRT are the core architecture and DEM implementation; repositories prefixed `dev_` are experimental method demonstrations outside the author's domain expertise. Treat claims according to their linked evidence and documented limitations. See [DISCLAIMER.md](DISCLAIMER.md).
 <!-- /disclaimer-banner -->
 
+Most simulation codes begin the same way: define some state, call functions in a
+particular order to change that state, and repeat. GRASS formalizes that pattern:
+state becomes **resources**, operations become **systems**, and plugins package
+them into reusable capabilities. Schedules determine when systems run; apps and
+sub-apps determine how complete solvers compose. This is similar to
+[Bevy's](https://bevyengine.org) ECS, except GRASS is really just the **S**.
 
-Most simulation codes begin the same way: define a state, call functions in a
-particular order to edit the state, repeat. GRASS provides a formalized way to define a your state (resources) and call functions (systems) via plugins, schedules, apps and sub-apps. (This is very similar to [Bevy's](https://bevyengine.org) ECS; however, its just the S of ECS). Every aspect of a simulation's codebase is added as a plugin, making every aspect of the code swappable and replaceable via additional plugins. 
+GRASS grew out of my frustration with editing scientific codebases. Scientific
+solvers are usually built as closed applications. Each grows its own state
+containers, lifecycle, timestep driver, I/O, communication assumptions, and
+extension mechanism. Editing one typically means learning its particular
+"plugin" or "fix" system, while much of the core behavior remains locked into
+the application's structure. Coupling two solvers later means reconciling two
+private worlds, maintaining an adapter between them forever, or editing the
+locked structure of both.
 
-GRASS stems from my frustration of editing scientific codebases. Scientific solvers are usually built as closed applications. Each grows
-its own state containers, lifecycle, timestep driver, I/O, and communication
-assumptions, etc. Editing existing simulation codebases is typically done through each codebases' unique "plugin" or "fix" system. These codebases have many core functionalities locked into the structure. Editing these core structures is typically not a frictionless path. Coupling two of them later means reconciling two private worlds and/or maintaining an adapter between them forever, both of which can require editing this locked structure. 
-
-With GRASS, there is no locked structure; however, it does ask you to get your hands a little dirty with some programming. GRASS is a library, plugins you would write with GRASS are also libraries. If everything is a library what do you run? The anwser is you built your own executable to do exactly what you want! The following is a 'simulation' counting by one every step and checking if it has reached 5 every step. 
-
+GRASS has no locked application skeleton, but it does ask you to get your hands
+a little dirty with programming. GRASS is a library, and the plugins you write
+with it are libraries too. If everything is a library, what do you run? You build
+an executable that does exactly what you want. Here is a complete "simulation"
+that increments a counter and stops after five steps:
 
 ```rust
 use grass_app::prelude::*;
@@ -37,7 +48,7 @@ fn tick(mut counter: ResMut<Counter>) {
     counter.steps += 1;
 }
 
-/// Done-condition: stop the run loop once we've taken 5 steps.
+/// Done-condition: stop the run loop once we've taken five steps.
 fn check_done(counter: Res<Counter>, mut sm: ResMut<SchedulerManager>) {
     if counter.steps >= 5 {
         sm.state = SchedulerState::End;
@@ -63,13 +74,16 @@ fn main() {
 
 ```
 
-This is a lot of code to count to 5, but it explains the following very well
+This is a lot of code to count to five, but it makes the pieces explicit:
+
 - **Resources** hold state.
 - **Systems** are ordinary functions that declare the state they read and write.
 - **Schedules** define when those functions run.
 - **Plugins** package capabilities that can be added, replaced, or removed.
 
-If thats how much code is required to count to 5, how much would be requried to couple two independent codebases? 
+So if counting to five takes that much code, how much does it take to couple two
+independent solvers?
+
 ```rust
 fn main() {
     let mut app = App::new();
@@ -80,12 +94,15 @@ fn main() {
 }
 ```
 
-Only 5 lines? Well not really, DemCfdCouplingPlugin does all the heavy lifting here. The important thing is that the code of the subapps for the DEM solver and CFD solver were NOT edited, both codes know nothing about eachother. All changes to both codes and added systems for coupling codes to transfer information was done via the Coupling plugin we add.
+Only five lines? Not really: `DemCfdCouplingPlugin` does the heavy lifting. The
+important part is that neither solver was modified for coupling. The DEM and CFD
+solvers know nothing about each other; the coupling plugin contains the exchange
+systems, accesses both solvers' resources, and schedules the data transfer
+between them.
 
-GRASS knows nothing about particles,
-meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
-that domain crates and complete solvers build on.
-
+GRASS itself knows nothing about particles, meshes, or physics. It provides the
+App, scheduler, I/O, MPI, and coupling layers that domain crates and complete
+solvers build on.
 
 ## The deal
 
