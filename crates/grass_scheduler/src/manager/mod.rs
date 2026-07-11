@@ -511,7 +511,7 @@ impl Scheduler {
             // Still prepare setup systems
             let mut errors: Vec<String> = Vec::new();
             for (entry, _) in &mut self.setup_systems {
-                for missing in entry.system.prepare(&self.resource_index) {
+                for missing in entry.system.prepare(&self.resource_index, &self.resources) {
                     errors.push(format!(
                         "  System \"{}\" requires `{}`",
                         entry.name, missing
@@ -581,7 +581,7 @@ impl Scheduler {
 
         // Prepare all systems with cached resource indices, collecting missing resource errors
         for (entry, _) in &mut self.setup_systems {
-            for missing in entry.system.prepare(&self.resource_index) {
+            for missing in entry.system.prepare(&self.resource_index, &self.resources) {
                 errors.push(format!(
                     "  System \"{}\" requires `{}`",
                     entry.name, missing
@@ -589,7 +589,7 @@ impl Scheduler {
             }
         }
         for (entry, _) in &mut self.update_systems {
-            for missing in entry.system.prepare(&self.resource_index) {
+            for missing in entry.system.prepare(&self.resource_index, &self.resources) {
                 errors.push(format!(
                     "  System \"{}\" requires `{}`",
                     entry.name, missing
