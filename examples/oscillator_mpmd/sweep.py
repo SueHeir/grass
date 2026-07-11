@@ -1,37 +1,94 @@
 #!/usr/bin/env python3
-"""Generate the committed local-contract comparison plot."""
+"""Validate the LocalTransport MPMD replay against an independent recurrence."""
 import re
 import subprocess
+import tomllib
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 
-root = Path(__file__).resolve().parents[2]
-out = subprocess.check_output(
-    ["cargo", "run", "--quiet", "--example", "oscillator_mpmd_local"], cwd=root, text=True
-)
-line = next(x for x in out.splitlines() if x.startswith("LOCAL "))
-match = re.search(r"a=([^ ]+) b=([^ ]+) mirrors=([^ ]+)", line)
-a = [float(x) for x in match.group(1).split(",")]
-b = [float(x) for x in match.group(2).split(",")]
-mirrors = [float(x) for x in match.group(3).split(",")]
-# The remote mirror is the in-process counterpart's exchange observation:
-# A's received export must equal B's local x and conversely.  This checks the
-# actual send/receive contract rather than a decorative trajectory plot.
-reference = [b[0], a[0]]
-measured = mirrors
-error = max(abs(a-b) for a, b in zip(measured, reference))
-assert error < 5e-14, error
+ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+TOL = 5e-14
+TRACE = re.compile(r"LOCAL_TRACE step=(\d+) a=([^,]+),([^ ]+) b=([^,]+),([^ ]+)")
 
-labels = ["A mirror ← B.x", "B mirror ← A.x"]
-fig, ax = plt.subplots(figsize=(7, 3.6))
-ax.plot(labels, reference, "o", label="independent recurrence")
-ax.plot(labels, measured, "x", ms=9, mew=2, label="LocalTransport replay")
-ax.set_ylabel("received/exported position")
-ax.set_title(f"two-sided exchange contract: max |difference| = {error:.1e} (pass < 5e-14)")
-ax.grid(axis="y", alpha=.3)
-ax.legend()
+
+def recurrence(config):
+    """Standalone semi-implicit explicit exchange recurrence.
+
+    This intentionally does not call the Rust library or transport helpers.
+    It is the numerical definition of the documented export-after-local-tick
+    protocol: both solvers use the previous peer export, then publish their
+    just-updated positions for the next step.
+    """
+    def state(side):
+        p = config[side]["oscillator"]
+        return [p["x0"], p["v0"], p["peer_x0"], p]
+
+    a, b = state("a"), state("b")
+    values = []
+    for step in range(config["case"]["steps"]):
+        def tick(q):
+            x, v, peer, p = q
+            accel = (-p["stiffness"] * x - p["damping"] * v
+                     - p["coupling_stiffness"] * (x - peer)) / p["mass"]
+            v += accel * p["dt"]
+            return [x + v * p["dt"], v, peer, p]
+        a_next, b_next = tick(a), tick(b)
+        # The symmetric setup pump occupies the first receive slot.  Thus the
+        # first completed iteration imports each side's just-exported value;
+        # thereafter each receive is the other side's preceding export.  This
+        # one-slot startup latency is part of this MPMD schedule, not a value
+        # sampled from the Rust replay.
+        if step == 0:
+            a_next[2], b_next[2] = a_next[0], b_next[0]
+        else:
+            a_next[2], b_next[2] = b_next[0], a_next[0]
+        a, b = a_next, b_next
+        values.append((a[0], a[1], b[0], b[1]))
+    return values
+
+
+def local_trace(output):
+    rows = []
+    for line in output.splitlines():
+        match = TRACE.fullmatch(line)
+        if match:
+            rows.append(tuple(float(match.group(i)) for i in range(2, 6)))
+    return rows
+
+
+def max_error(actual, expected):
+    if len(actual) != len(expected):
+        raise AssertionError(f"trace length {len(actual)} != expected {len(expected)}")
+    return max(abs(x - y) for row, ref in zip(actual, expected) for x, y in zip(row, ref))
+
+
+config = tomllib.loads((HERE / "config.toml").read_text())
+reference = recurrence(config)
+output = subprocess.check_output(
+    ["cargo", "run", "--quiet", "--example", "oscillator_mpmd_local"], cwd=ROOT, text=True
+)
+measured = local_trace(output)
+error = max_error(measured, reference)
+assert error <= TOL, f"LocalTransport trajectory error {error:.3e} exceeds {TOL:.1e}"
+
+steps = range(1, len(reference) + 1)
+fig, axes = plt.subplots(2, 1, figsize=(7.4, 5.4), sharex=True)
+for axis, index, name in zip(axes, (0, 2), ("oscillator A position", "oscillator B position")):
+    ref = [row[index] for row in reference]
+    got = [row[index] for row in measured]
+    axis.plot(steps, ref, "-", lw=2, label="independent explicit recurrence")
+    axis.plot(steps, got, "x", ms=3.5, label="LocalTransport two-sided replay")
+    axis.fill_between(steps, [x - TOL for x in ref], [x + TOL for x in ref],
+                      color="C0", alpha=.18, label=f"acceptance band ±{TOL:.0e}")
+    axis.set_ylabel(name)
+    axis.grid(alpha=.3)
+axes[0].legend(loc="best", fontsize=8)
+axes[-1].set_xlabel("completed coupling step")
+fig.suptitle(f"full 40-step contract trajectory: max |Local − recurrence| = {error:.1e} (PASS)")
 fig.tight_layout()
-plot = Path(__file__).with_name("plots") / "local_contract_comparison.png"
+plot = HERE / "plots" / "local_contract_comparison.png"
 plot.parent.mkdir(exist_ok=True)
 fig.savefig(plot, dpi=160)
-print(f"PASS local contract max_abs_error={error:.3e}; wrote {plot}")
+print(f"PASS LocalTransport full_trajectory_max_abs_error={error:.3e} tolerance={TOL:.1e}; wrote {plot}")

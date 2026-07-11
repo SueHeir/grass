@@ -61,6 +61,14 @@ pub struct PairResult {
     pub b: SideResult,
 }
 
+/// One completed coupling iteration, retained by the example runner so a
+/// transport implementation can be compared over its whole trajectory.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PairTrace {
+    pub result: PairResult,
+    pub steps: Vec<PairResult>,
+}
+
 impl PairResult {
     pub fn fingerprint(self) -> [u64; 4] {
         [
@@ -183,27 +191,53 @@ pub fn build_side<Tr: Transport + 'static>(name: &str, transport: Tr) -> (App, u
     (parent, steps)
 }
 
-pub fn run_side<Tr: Transport + 'static>(name: &str, transport: Tr) -> SideResult {
+pub fn run_side_with_trace<Tr: Transport + 'static>(
+    name: &str,
+    transport: Tr,
+) -> (SideResult, Vec<SideResult>) {
     let (mut parent, steps) = build_side(name, transport);
     parent.prepare(); // handshake: initial RemotePosition send, then receive.
+    let mut trace = Vec::with_capacity(steps);
     for _ in 0..steps {
         parent.run();
+        trace.push(SideResult {
+            state: get(&parent, LOCAL),
+            mirrored_peer: get(&parent, REMOTE),
+        });
     }
-    SideResult {
-        state: get(&parent, LOCAL),
-        mirrored_peer: get(&parent, REMOTE),
-    }
+    (
+        trace.last().copied().expect("at least one coupling step"),
+        trace,
+    )
+}
+
+pub fn run_side<Tr: Transport + 'static>(name: &str, transport: Tr) -> SideResult {
+    run_side_with_trace(name, transport).0
 }
 
 /// In-process reference using the exact same `RemotePosition` wire contract
 /// and parent schedule, with `LocalTransport` replacing MPI.
 pub fn run_local_pair() -> PairResult {
+    run_local_pair_trace().result
+}
+
+/// Replay both MPMD parents with `LocalTransport`, preserving every completed
+/// coupling step for comparison with the independently written recurrence.
+pub fn run_local_pair_trace() -> PairTrace {
     let (a_transport, b_transport) = LocalTransport::pair();
-    let a = thread::spawn(move || run_side(A, a_transport));
-    let b = thread::spawn(move || run_side(B, b_transport));
-    PairResult {
-        a: a.join().expect("local A thread"),
-        b: b.join().expect("local B thread"),
+    let a = thread::spawn(move || run_side_with_trace(A, a_transport));
+    let b = thread::spawn(move || run_side_with_trace(B, b_transport));
+    let (a, a_steps) = a.join().expect("local A thread");
+    let (b, b_steps) = b.join().expect("local B thread");
+    assert_eq!(a_steps.len(), b_steps.len(), "two-sided trace length");
+    let steps = a_steps
+        .into_iter()
+        .zip(b_steps)
+        .map(|(a, b)| PairResult { a, b })
+        .collect();
+    PairTrace {
+        result: PairResult { a, b },
+        steps,
     }
 }
 
@@ -218,4 +252,17 @@ pub fn print_pair(label: &str, result: PairResult) {
         result.b.mirrored_peer.0,
         result.fingerprint()
     );
+}
+
+pub fn print_trace(label: &str, steps: &[PairResult]) {
+    for (step, result) in steps.iter().enumerate() {
+        println!(
+            "{label}_TRACE step={} a={:.17e},{:.17e} b={:.17e},{:.17e}",
+            step + 1,
+            result.a.state.x,
+            result.a.state.v,
+            result.b.state.x,
+            result.b.state.v,
+        );
+    }
 }

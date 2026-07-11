@@ -14,10 +14,18 @@ fn main() {
         1,
         "oscillator_mpmd_b must occupy absolute WORLD rank 1; check MPMD launch order"
     );
-    let result = contract::run_side(contract::B, MpiInterCommTransport::new(0));
+    let (result, trace) = contract::run_side_with_trace(contract::B, MpiInterCommTransport::new(0));
     println!(
         "MPI side=b local={:.17e},{:.17e} mirror={:.17e}",
         result.state.x, result.state.v, result.mirrored_peer.0
     );
+    for (step, state) in trace.iter().enumerate() {
+        println!(
+            "MPI_TRACE side=b step={} local={:.17e},{:.17e}",
+            step + 1,
+            state.state.x,
+            state.state.v,
+        );
+    }
     grass_mpi::finalize_mpi();
 }

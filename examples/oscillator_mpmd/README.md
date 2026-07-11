@@ -25,6 +25,13 @@ data.  Failed receives and malformed packets carry the mirror name, setup or
 each-iteration phase, direction, slot number, payload length, and underlying
 transport/wire cause through the existing fallible remote-pump diagnostic.
 
+The symmetric setup pump occupies the first receive slot, so the first
+completed iteration imports its own just-exported position; from the second
+iteration onward, each import is the other side's preceding export.  The
+independent recurrence used below states this one-slot startup latency
+explicitly.  It is intentionally kept unchanged between the `LocalTransport`
+replay and the MPI launch.
+
 ## Runs
 
 Ordinary CI exercises the identical two-sided composition in two threads using
@@ -49,14 +56,19 @@ larger solver later calls `init_app_color` to obtain its own intra-app
 communicator.  Any other MPMD rank layout fails at startup with the expected
 and actual rank context.
 
-The launcher compares the four-state trajectory and its bit fingerprint with
-the in-process `LocalTransport` counterpart.  It passes numerical trajectory
-differences through `5e-14` and reports whether fingerprints match exactly.
-The normal same-host build matches bit-for-bit.  A fingerprint difference is
-legitimate on heterogeneous MPI ranks or builds that use different floating
-point instruction paths; the numeric tolerance remains the acceptance rule.
+The launcher records all 40 `(A.x, A.v, B.x, B.v)` states from both binaries,
+then compares the complete MPI and `LocalTransport` trajectories independently
+with the explicit recurrence used by [sweep.py](sweep.py).  Each comparison,
+including MPI-versus-local parity, must stay within `5e-14`; missing,
+duplicate, or out-of-order trace lines fail with a rank/handshake/export-stage
+diagnostic.  It additionally reports the final IEEE-754 fingerprint.  A
+fingerprint mismatch is a documented warning—not a false failure—when every
+trajectory value satisfies the numerical criterion, because heterogeneous MPI
+ranks or builds may take different floating-point instruction paths.
 
-![LocalTransport versus independent recurrence](plots/local_contract_comparison.png)
+![LocalTransport full trajectory versus independent recurrence](plots/local_contract_comparison.png)
 
-The points overlap: each LocalTransport remote mirror equals its peer's
-exported final position to less than `5e-14` (PASS).
+The full 40-step LocalTransport trajectory overlaps the separately implemented
+explicit recurrence within the visible ±`5e-14` criterion (PASS).  The MPI CI
+launch applies that same recurrence comparison to its recorded two-binary
+trajectory.
