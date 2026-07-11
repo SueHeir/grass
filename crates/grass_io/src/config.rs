@@ -46,7 +46,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use grass_app::{App, ConfigDescription, GenerateConfigFlag, Plugin};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ─── Config resource ────────────────────────────────────────────────────────
 
@@ -425,7 +425,11 @@ impl Config {
 /// A Serde-compatible config type that publishes declarative metadata for the
 /// same section it parses. The metadata powers generated TOML examples and
 /// field-reference comments; Serde remains the source of parsing semantics.
-pub trait DescribedConfig: for<'de> Deserialize<'de> + Default {
+///
+/// It deliberately requires [`Serialize`] as well as [`Deserialize`]: the
+/// `ConfigDescription` derive serializes defaults into TOML, and therefore
+/// cannot truthfully describe a deserialize-only type.
+pub trait DescribedConfig: for<'de> Deserialize<'de> + Serialize + Default {
     /// The section and fields represented by this parsing type.
     fn description() -> ConfigDescription;
 }

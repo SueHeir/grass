@@ -51,6 +51,8 @@ extern crate self as grass_io;
 pub mod __private {
     /// Re-export used by generated configuration metadata.
     pub use grass_app;
+    /// Re-export used to name the serialization contract in derive diagnostics.
+    pub use serde;
     /// Re-export used to serialize typed defaults in generated metadata.
     pub use toml;
 }

@@ -44,14 +44,20 @@ use grass_io::DescribedConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Deserialize, Serialize, ConfigDescription)]
-enum Mode { #[default] Fast, Accurate }
+#[serde(rename_all = "kebab-case")]
+enum Mode { #[default] FastMode, AccurateMode }
 
 #[derive(Default, Deserialize, Serialize, ConfigDescription)]
+#[serde(rename_all = "kebab-case")]
 #[config_description(section = "probe")]
-struct ProbeConfig { #[serde(default)] mode: Mode }
+struct ProbeConfig {
+    #[serde(default)] mode: Mode,
+    #[serde(default)] max_steps: u32,
+}
 
 fn main() {
-    assert_eq!(ProbeConfig::description().fields[0].choices, ["Fast", "Accurate"]);
+    assert_eq!(ProbeConfig::description().fields[0].choices, ["fast-mode", "accurate-mode"]);
+    assert_eq!(ProbeConfig::description().fields[1].name, "max-steps");
 }
 "#,
     )
@@ -61,6 +67,37 @@ fn main() {
         .current_dir(&temp)
         .status()
         .unwrap();
-    let _ = fs::remove_dir_all(&temp);
     assert!(status.success(), "minimal documented consumer must compile");
+
+    // A function-valued Serde default can disagree with Default. Metadata must
+    // invoke the parser's actual default function rather than guessing.
+    fs::write(
+        temp.join("src/main.rs"),
+        r#"use grass_derive::ConfigDescription;
+use serde::{Deserialize, Serialize};
+
+fn parser_default() -> u32 { 7 }
+
+#[derive(Default, Deserialize, Serialize, ConfigDescription)]
+#[config_description(section = "probe")]
+struct ProbeConfig { #[serde(default = "parser_default")] steps: u32 }
+
+fn main() {
+    use grass_io::DescribedConfig;
+    assert_eq!(ProbeConfig::description().fields[0].default.as_deref(), Some("7"));
+}
+"#,
+    )
+    .unwrap();
+    let custom_default = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(
+        custom_default.status.success(),
+        "custom Serde default consumer must compile: {}",
+        String::from_utf8_lossy(&custom_default.stderr)
+    );
+    let _ = fs::remove_dir_all(&temp);
 }
