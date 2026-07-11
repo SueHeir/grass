@@ -71,6 +71,11 @@
 
 use std::ops::{Deref, DerefMut};
 
+mod runtime;
+#[cfg(feature = "mpi_backend")]
+pub use runtime::{MpiRuntime, MpiRuntimeError};
+pub use runtime::{RoleAssignment, RoleSpec, RoleTopology, RoleTopologyError};
+
 /// The `grass_mpi` application prelude.
 ///
 /// Import this when wiring a communication resource into an application. A
@@ -109,8 +114,10 @@ use std::ops::{Deref, DerefMut};
 /// ```
 pub mod prelude {
     #[cfg(feature = "mpi_backend")]
-    pub use crate::{finalize_mpi, get_mpi_world, init_app_color, MpiCommBackend};
-    pub use crate::{CommResource, SingleProcessComm};
+    pub use crate::{
+        finalize_mpi, get_mpi_world, init_app_color, MpiCommBackend, MpiRuntime, MpiRuntimeError,
+    };
+    pub use crate::{CommResource, RoleAssignment, RoleSpec, RoleTopology, SingleProcessComm};
 }
 
 #[cfg(feature = "mpi_backend")]
