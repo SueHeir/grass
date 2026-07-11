@@ -158,16 +158,23 @@ long as no two touch the *same* `(T, NS)` cell.
 > the `SubApps` cell and panics at run time. That is exactly why ticking and
 > coupling live in separate phases (Tick vs Couple). Keep them apart.
 
-## 6b. The coupling contract: exchange ports
+## 6b. Optional reusable interfaces: exchange ports
 
-The coupler above works, but notice what it costs: the `Mass` side of the
-system signature names `SpringState` — the *producer's own* resource type. The
-two solvers are now coupled at the source level. Swap the spring for a
-different driver and every consumer that read `SpringState` must change.
+For a dedicated pair-specific coupling package, the direct `MultiRes` coupler
+above is usually the right default. The coupling package is supposed to know
+both participants: it owns the physical conversion, while neither solver
+depends on the other. Keeping that conversion in one system is simple, visible,
+and avoids an intermediate copy.
 
-The **exchange port** removes that. A `Port<T>` is a typed slot on the parent
-that a producer *exposes* a value into and a consumer *consumes*. The only
-thing the two solvers share is the contract type `T` — never each other's
+An exchange port is useful when the exchange itself has become a reusable
+interface. For example, several independently developed producers might all
+publish the same force contract, or one consumer adapter might be reused in
+several applications. In that case, splitting the conversion into producer and
+consumer adapters can prevent every pair from needing a new monolithic coupler.
+
+The **exchange port** supports that pattern. A `Port<T>` is a typed slot on the
+parent that a producer *exposes* a value into and a consumer *consumes*. The
+only thing the two solvers share is the contract type `T` — never each other's
 internal structs. `T` is whatever the physics needs: a scalar source term, a
 boundary value, a sampled field `Vec<f64>`, particle data — anything. That is
 what makes coupling *paradigm-agnostic*: it works whether the two solvers are
@@ -205,11 +212,27 @@ consume before the consumer's tick:
 TickProducer → expose_field (→ Port) → consume_field (→ consumer) → TickConsumer → Check
 ```
 
-Because the consumer now depends only on `Port<Force>`, any producer that
-publishes a `Force` can drive it, and any consumer that reads `Force` can be
-added — ports compose, and each solver compiles without the others. Prefer a
-port when the exchange is a stable interface; a bare `Multi` coupler is fine
-for a one-off, tightly-bound pair.
+Because the consumer adapter now accepts only `Force`, any producer adapter
+that publishes the same contract can drive it. This benefit appears only when
+the adapters or contract are genuinely reused; putting both adapters in one
+pair-specific package does not remove that package's dependency on both
+solvers.
+
+Use the smallest mechanism that matches the ownership:
+
+- **Default to `MultiRes` / `MultiResMut`** for one coupling package that owns a
+  specific pair and its conversion. It is direct and keeps the physics in one
+  place.
+- **Consider `Port<T>`** when multiple interchangeable producers or consumers
+  already share a scientifically meaningful contract; when one side's adapter
+  must be reusable without the other side; or when the exchanged value needs
+  independent relaxation, logging, validation, or convergence handling.
+- **Do not invent a generic contract prematurely.** A renamed copy of one
+  solver's private state adds indirection without decoupling anything.
+
+`Port<T>` stores only the latest value. It is not a queue, does not choose units
+or cadence, and does not perform MPI transfer automatically. Multiple writes to
+one port in an iteration are last-writer-wins and therefore order-dependent.
 
 A full runnable example that couples a mesh-style field solver to a
 point-particle solver through a port — and checks the coupled physics against a
@@ -354,18 +377,16 @@ must make those resources reachable and stable.
   `expect_write`) panics at run time with `sub-App … has no resource of type …`.
   Everything a peer reads or writes must be a registered resource, not a local
   variable.
-- [ ] **Keep the exchanged data in a resource you own, never in the peer's
-  type.** The producer exposes a value *derived from its own state*; the
-  consumer applies a value *into its own state*. Neither should hold or name the
-  other's resource type. A bare `MultiRes<ProducerState, …>` in the consumer
-  works but source-couples the two — see §6/§6b.
-- [ ] **For a decoupled interface, share only a contract type `T` via a
-  `Port<T>`.** `add_port::<T>()` registers the parent-side slot;
+- [ ] **Put knowledge of both participants in the coupling package, not either
+  solver.** A direct `MultiRes` coupler may name both private resource types;
+  that is appropriate when the package owns one specific pair. Neither solver
+  should import the other's private state merely to participate.
+- [ ] **When an exchange contract is genuinely reused, a `Port<T>` can split
+  it into independent adapters.** `add_port::<T>()` registers the parent-side slot;
   `expose_field::<Own, T>` publishes, `consume_field::<Own, T>` reads. `T` is
   the *entire* shared surface — a scalar, a boundary value, `Vec<f64>`, particle
-  data, anything `'static`. This is what makes the coupling paradigm-agnostic:
-  the two solvers need not be the same kind of discretization, or any
-  discretization at all.
+  data, anything `'static`. Prefer direct `MultiRes` when no adapter or contract
+  reuse exists.
 - [ ] **`consume_field` is a no-op until its port has been published**, so a
   consumer is safe to schedule before the first expose (e.g. iteration 0). Don't
   add your own "is it ready yet" guard.

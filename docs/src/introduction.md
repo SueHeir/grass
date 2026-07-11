@@ -22,11 +22,11 @@ The [coupled-oscillator walkthrough](./tutorial/coupled-oscillator-walkthrough.m
 
 ```text
 solver/library A                         application or coupling owner                 solver/library B
-private resources ── expose_field ──►    Port<Exchange>, schedule, termination   ◄── consume_field ── private resources
-systems and plugins                      GRASS App / Plugin / scheduler                         systems and plugins
+private resources ─────────────────►     conversion, schedule, termination      ─────────────────► private resources
+systems and plugins                      direct MultiRes or optional Port<T>                     systems and plugins
 ```
 
-At the framework level, a library owns typed resources and systems, packages them as plugins, and declares dependencies/capabilities. Systems make their read/write access visible as `Res<T>`/`ResMut<T>`; execution is currently single-threaded and deterministic. A coupling owner owns the parent schedule and stop policy. A stable boundary uses a `Port<T>` with an interface-owned exchange type, not either participant's private resource type.
+At the framework level, a library owns typed resources and systems, packages them as plugins, and declares dependencies/capabilities. Systems make their read/write access visible as `Res<T>`/`ResMut<T>`; execution is currently single-threaded and deterministic. A coupling owner owns the parent schedule and stop policy. A pair-specific coupling can access both sides directly with `MultiRes`; an optional `Port<T>` is useful when several implementations genuinely share one interface-owned exchange contract.
 
 Read the precise requirements and their executable checks in the [library composition contract](./reference/library-composition-contract.md). They define how libraries designed for this boundary can compose; they are not a universal adapter for arbitrary software.
 

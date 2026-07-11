@@ -61,7 +61,9 @@ Keep configuration declarative: plugins describe defaults and schemas through
 typed metadata or TOML; they do not run scripts that alter registration or
 scheduling structure. A coupling package or parent application owns the seam
 between independently useful solver libraries and should exchange a stable
-`Port<T>` contract instead of another library's private resource type.
+interface-owned `Port<T>` contract when that exchange is reused across
+implementations. A pair-specific coupling package may instead use direct
+`MultiRes` access to both participants' private resources.
 
 ## Surface and migration policy
 

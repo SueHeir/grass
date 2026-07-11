@@ -74,7 +74,7 @@ or a stable external wire protocol.
   and its [collection during plugin registration](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L308-L326)
   are exercised by the runnable [observed-oscillator example](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/observed_oscillator/main.rs#L1-L17).
 
-### 4. Coupling ownership and exchange ports
+### 4. Coupling ownership and exchange choices
 
 - A coupling between two independently useful solver/substrate tiers **MUST**
   be owned by the coupling package or parent application that owns their seam;
@@ -82,15 +82,20 @@ or a stable external wire protocol.
   couple. The coupling owner **MUST** own the parent schedule and termination
   policy. The [parent/sub-App integration test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase0.rs#L91-L195)
   demonstrates a parent owning the tick, exchange, and stop policy.
-- A stable exchange **MUST** use `Port<T>` and a contract type owned by the
-  interface, with `expose_field` and `consume_field`; the consumer **MUST NOT**
-  name the producer's private resource type. The producer-to-port-to-consumer
+- A pair-specific coupling package **MAY** use `MultiRes`/`MultiResMut` to name
+  and convert both participants' private resources directly. This is the
+  preferred simple path when one package owns one coupling and no adapter reuse
+  is required. The participant libraries **MUST NOT** import one another merely
+  to couple; knowledge of both sides belongs in the coupling package.
+- A reusable exchange interface **MAY** use `Port<T>` with an interface-owned
+  contract type and separate `expose_field` / `consume_field` adapters. This is
+  appropriate when multiple producers or consumers genuinely share `T`, or the
+  exchanged value needs independent processing. The producer-to-port-to-consumer
   sequence **MUST** be ordered around producer and consumer ticks. The
   [port integration test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/coupling_port.rs#L1-L178)
   drives a field-style producer and particle-style consumer against a closed
   form, and also checks independent ports compose.
-- A one-off `MultiRes`/`MultiResMut` coupler **MAY** read/write sub-App state
-  directly, but ticking and `Multi*` access **MUST NOT** share one system:
+- Ticking and `Multi*` access **MUST NOT** share one system:
   their incompatible `SubApps` borrows panic at runtime. [Runnable tutorial
   example](../tutorial/coupling-two-solvers.md#6-write-the-coupler) shows the
   separate Tick and Couple phases.
@@ -136,7 +141,7 @@ or a stable external wire protocol.
 - [ ] Lifecycle, stages, and cleanup are owned and explicitly driven.
 - [ ] Plugins declare concrete dependencies and exported capability contracts.
 - [ ] Configuration is declarative TOML.
-- [ ] A coupling owns the seam; stable data crosses a `Port<T>`, not private state types.
+- [ ] A coupling owns the seam; use direct `MultiRes` for a specific pair and introduce a `Port<T>` only for a genuinely reusable exchange contract.
 - [ ] Remote transfer has matched direction/cadence, `Wire` validation, and fallible errors.
 - [ ] Device mirrors register coherence and honor dirty-state transitions.
 - [ ] Documentation links a runnable example or test for each public claim and labels unproven behavior as such.
