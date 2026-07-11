@@ -117,8 +117,8 @@ app.add_plugins(InputPlugin);   // sees Config already present, does nothing to 
 
 ### `--generate-config`
 
-`grass_app` collects a TOML snippet from every plugin's `default_config` into the
-`ConfigSnippets` resource. Wiring the `GenerateConfigFlag` resource to a
+`grass_app` collects generated TOML from every plugin's `config_description`
+(or a legacy `default_config` snippet) into the `ConfigSnippets` resource. Wiring the `GenerateConfigFlag` resource to a
 `--generate-config` CLI flag makes `start()` print the assembled example config
 and exit without running (see
 [App, Plugin, PluginGroup](./app-plugin.md#the---generate-config-recipe)). This
@@ -309,8 +309,8 @@ for a named sub-App and propagates its `[output] dir`; see
 [MPI and Coupling](./mpi-coupling.md).
 # Generated configuration reference
 
-Plugins can expose a simulation-agnostic `ConfigDescription` for the same
-Serde type they parse. `--generate-config` then emits valid TOML defaults plus
+Plugins can derive a simulation-agnostic `ConfigDescription` from the same
+Serde fields they parse. `--generate-config` then emits valid TOML defaults plus
 comments containing each field's type, required/optional status, choices (for
 enum-like fields), and Rust source location. Keep scenario-specific explanation
 in the description's narrative text or in an example's `config.toml`; the

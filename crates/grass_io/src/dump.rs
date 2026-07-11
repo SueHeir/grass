@@ -34,7 +34,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -99,8 +100,9 @@ fn default_path_template() -> String {
 }
 
 /// `[dump]` section.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(section = "dump", narrative = "Periodic per-frame file output.")]
 pub struct DumpConfig {
     /// Write a frame every N steps. 0 disables.
     #[serde(default)]
@@ -116,37 +118,6 @@ impl Default for DumpConfig {
         Self {
             interval: 0,
             path_template: default_path_template(),
-        }
-    }
-}
-
-impl DescribedConfig for DumpConfig {
-    fn description() -> ConfigDescription {
-        ConfigDescription {
-            section: "dump",
-            array_table: false,
-            narrative: "Periodic per-frame file output.",
-            fields: &[
-                ConfigFieldDescription {
-                    name: "interval",
-                    ty: "integer",
-                    default: Some("0"),
-                    required: false,
-                    choices: &[],
-                    description: "Write interval in steps; 0 disables output.",
-                    source: "crates/grass_io/src/dump.rs:DumpConfig.interval",
-                },
-                ConfigFieldDescription {
-                    name: "path_template",
-                    ty: "string",
-                    default: Some("\"frame_{step:06}.bin\""),
-                    required: false,
-                    choices: &[],
-                    description:
-                        "Per-frame path; {step}, {step:0N}, and {time} expand when writing.",
-                    source: "crates/grass_io/src/dump.rs:DumpConfig.path_template",
-                },
-            ],
         }
     }
 }

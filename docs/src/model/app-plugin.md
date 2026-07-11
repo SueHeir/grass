@@ -45,6 +45,7 @@ Optional hooks let plugins declare ordering and requirements:
 | `dependencies` | `TypeId` ordering against other plugins |
 | `provides_capabilities` / `requires_capabilities` | typed, substitutable capabilities, checked at `start()` |
 | `default_config` | a TOML snippet this plugin contributes |
+| `config_description` | typed TOML metadata this plugin contributes (`default_config` remains for legacy snippets) |
 
 A bare `Fn(&mut App)` closure also implements `Plugin`, so quick wiring needs no
 struct. Registration validates as it goes: a duplicate unique plugin or an unmet
@@ -194,7 +195,7 @@ cleanup tears the world down (e.g. `grass_mpi::finalize_mpi`).
 
 ## The `--generate-config` recipe
 
-Each plugin can return a TOML snippet from `Plugin::default_config`; the `App`
+Each plugin can return typed TOML metadata from `Plugin::config_description` (or a legacy snippet from `Plugin::default_config`); the `App`
 accumulates them all into the `ConfigSnippets` resource as plugins register. If
 the `GenerateConfigFlag` resource is present when `start` is called, the `App`
 prints the assembled config to stdout and exits **without running the

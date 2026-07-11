@@ -63,35 +63,35 @@ impl std::fmt::Display for CapabilityId {
 /// discretization, so particle, mesh, and other plugins can use the same
 /// contract.  Keep narrative intent in `narrative` or field `description`;
 /// the renderer only automates facts that have a stable representation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ConfigDescription {
     /// TOML top-level key, without brackets.
-    pub section: &'static str,
+    pub section: String,
     /// Whether this description emits a normal table or an array-table sample.
     pub array_table: bool,
     /// Hand-written context preserved above the generated fields.
-    pub narrative: &'static str,
+    pub narrative: String,
     /// Fields in declaration order.
-    pub fields: &'static [ConfigFieldDescription],
+    pub fields: Vec<ConfigFieldDescription>,
 }
 
 /// Declarative metadata for one configuration field.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ConfigFieldDescription {
     /// Serde/TOML field name.
-    pub name: &'static str,
+    pub name: String,
     /// Human-readable TOML type.
-    pub ty: &'static str,
+    pub ty: String,
     /// TOML expression representing the parsed default, if optional.
-    pub default: Option<&'static str>,
+    pub default: Option<String>,
     /// Whether this field must be supplied by the user.
     pub required: bool,
     /// Allowed symbolic values, when this field is an enum.
-    pub choices: &'static [&'static str],
+    pub choices: Vec<String>,
     /// Hand-written field intent.
-    pub description: &'static str,
+    pub description: String,
     /// Rust definition location, kept close to the typed parser definition.
-    pub source: &'static str,
+    pub source: String,
 }
 
 impl ConfigDescription {
@@ -108,19 +108,19 @@ impl ConfigDescription {
         } else {
             out.push('[');
         }
-        out.push_str(self.section);
+        out.push_str(&self.section);
         out.push_str(if self.array_table { "]]\n" } else { "]\n" });
-        for field in self.fields {
+        for field in &self.fields {
             out.push_str("# ");
-            out.push_str(field.description);
+            out.push_str(&field.description);
             out.push_str(" Type: ");
-            out.push_str(field.ty);
+            out.push_str(&field.ty);
             out.push_str(". ");
             if field.required {
                 out.push_str("Required.");
             } else {
                 out.push_str("Optional; default: ");
-                out.push_str(field.default.unwrap_or("not set (None)"));
+                out.push_str(field.default.as_deref().unwrap_or("not set (None)"));
                 out.push('.');
             }
             if !field.choices.is_empty() {
@@ -129,18 +129,18 @@ impl ConfigDescription {
                 out.push('.');
             }
             out.push_str(" Source: ");
-            out.push_str(field.source);
+            out.push_str(&field.source);
             out.push('\n');
-            if let Some(default) = field.default {
-                out.push_str(field.name);
+            if let Some(default) = &field.default {
+                out.push_str(&field.name);
                 out.push_str(" = ");
-                out.push_str(default);
+                out.push_str(&default);
                 out.push('\n');
             } else if field.required {
                 out.push_str("# ");
-                out.push_str(field.name);
+                out.push_str(&field.name);
                 out.push_str(" = <required ");
-                out.push_str(field.ty);
+                out.push_str(&field.ty);
                 out.push_str(">\n");
             }
         }

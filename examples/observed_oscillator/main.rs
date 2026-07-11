@@ -9,7 +9,7 @@
 //!
 //! [`InputPlugin`] is what reads the TOML in a real binary
 //! (`myapp config.toml`), and `--generate-config` makes it install a
-//! `GenerateConfigFlag` so `start()` prints every plugin's `default_config()`
+//! `GenerateConfigFlag` so `start()` prints every plugin's generated config
 //! and exits. Here we seed the same TOML programmatically with
 //! `Config::from_str` so the example is self-contained — adding `InputPlugin`
 //! afterwards is a no-op because a `Config` is already present.

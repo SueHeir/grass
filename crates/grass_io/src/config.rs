@@ -266,7 +266,7 @@ impl Config {
     /// the TOML key used for parsing and the key used for generated examples
     /// coupled to the same Rust config type.
     pub fn load_described<T: DescribedConfig + Clone + 'static>(app: &mut App) -> T {
-        Self::load(app, T::description().section)
+        Self::load(app, &T::description().section)
     }
 
     /// Fallible form of [`Self::load`]. It preserves the optional-section
@@ -445,7 +445,7 @@ mod described_config_tests {
         if description.array_table {
             config
                 .table
-                .get(description.section)
+                .get(&description.section)
                 .expect("generated array table")
                 .as_array()
                 .expect("array table")
@@ -455,7 +455,7 @@ mod described_config_tests {
                 .try_into()
                 .expect("generated defaults deserialize")
         } else {
-            config.section(description.section)
+            config.section(&description.section)
         }
     }
 
@@ -472,26 +472,29 @@ mod described_config_tests {
 
         let generated = Config::from_str(&description.render_toml());
         let generated = if description.array_table {
-            generated.table[description.section]
+            generated.table[&description.section]
                 .as_array()
                 .expect("generated array table")[0]
                 .as_table()
                 .expect("generated sample table")
         } else {
-            generated.table[description.section]
+            generated.table[&description.section]
                 .as_table()
                 .expect("generated table")
         };
 
-        let described: std::collections::BTreeSet<_> =
-            description.fields.iter().map(|field| field.name).collect();
+        let described: std::collections::BTreeSet<_> = description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
         let typed_fields: std::collections::BTreeSet<_> =
             typed.keys().map(String::as_str).collect();
         let unset_fields: std::collections::BTreeSet<_> = description
             .fields
             .iter()
             .filter(|field| field.default.is_none())
-            .map(|field| field.name)
+            .map(|field| field.name.as_str())
             .collect();
         assert_eq!(
             described,
@@ -503,14 +506,14 @@ mod described_config_tests {
             assert!(description
                 .fields
                 .iter()
-                .any(|field| field.name == name && field.default.is_some()));
+                .any(|field| field.name == *name && field.default.is_some()));
         }
         for field in description
             .fields
             .iter()
             .filter(|field| field.default.is_none())
         {
-            assert!(!generated.contains_key(field.name));
+            assert!(!generated.contains_key(&field.name));
         }
     }
 
@@ -559,7 +562,58 @@ mod described_config_tests {
     fn generated_reference_includes_status_and_source_locations() {
         let text = TermOutConfig::description().render_toml();
         assert!(text.contains("Optional; default: 100."));
-        assert!(text.contains("Source: crates/grass_io/src/term_out.rs:TermOutConfig.every"));
+        assert!(text.contains("Source: crates/grass_io/src/term_out.rs:"));
+        assert!(text.contains("TermOutConfig.every"));
+    }
+
+    /// This is deliberately stricter than round-tripping defaults: it checks
+    /// the complete user-visible field contract (names, TOML types,
+    /// requiredness, defaults, docs, and per-field source locations). A
+    /// renamed, added, removed, or retyped Serde field changes the derive
+    /// output and fails this test rather than leaving a parallel descriptor
+    /// quietly stale.
+    #[test]
+    fn generated_contract_covers_every_builtin_field() {
+        fn check<T: DescribedConfig>(expected: &[(&str, &str, bool, Option<&str>)]) {
+            let description = T::description();
+            assert_eq!(description.fields.len(), expected.len());
+            for (field, (name, ty, required, default)) in
+                description.fields.iter().zip(expected.iter().copied())
+            {
+                assert_eq!(field.name, name);
+                assert_eq!(field.ty, ty);
+                assert_eq!(field.required, required);
+                assert_eq!(field.default.as_deref(), default);
+                assert!(!field.description.is_empty());
+                assert!(field.source.contains(':'));
+                assert!(field.source.ends_with(&format!(".{}", name)));
+            }
+        }
+        check::<ClockConfig>(&[
+            ("start_step", "integer", false, Some("0")),
+            ("start_time", "float", false, Some("0.0")),
+        ]);
+        check::<DumpConfig>(&[
+            ("interval", "integer", false, Some("0")),
+            (
+                "path_template",
+                "string",
+                false,
+                Some("\"frame_{step:06}.bin\""),
+            ),
+        ]);
+        check::<TermOutConfig>(&[
+            ("every", "integer", false, Some("100")),
+            ("columns", "array", false, Some("[\"step\", \"time\"]")),
+            ("width", "integer", false, Some("14")),
+        ]);
+        check::<StageConfig>(&[
+            ("name", "optional", false, None),
+            ("steps", "integer", false, Some("1000")),
+            ("dt", "float", false, Some("0.0")),
+            ("skip", "boolean", false, Some("false")),
+            ("save_at_end", "boolean", false, Some("false")),
+        ]);
     }
 
     #[test]
@@ -579,7 +633,8 @@ mod described_config_tests {
         assert!(snippets
             .snippets
             .iter()
-            .any(|text| text.contains("Source: crates/grass_io/src/run.rs:StageConfig.steps")));
+            .any(|text| text.contains("Source: crates/grass_io/src/run.rs:")
+                && text.contains("StageConfig.steps")));
     }
 
     #[test]

@@ -35,7 +35,8 @@
 
 use std::collections::HashMap;
 
-use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -96,8 +97,12 @@ fn default_columns() -> Vec<String> {
 
 /// `[term_out]` section. All fields optional; defaults give every-100
 /// printing of `step` and `time`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(
+    section = "term_out",
+    narrative = "Periodic terminal log line. `step` and `time` columns are filled by SimClock."
+)]
 pub struct TermOutConfig {
     /// Print every N steps. 0 disables term_out output.
     #[serde(default = "default_every")]
@@ -119,16 +124,6 @@ impl Default for TermOutConfig {
             columns: default_columns(),
             width: default_width(),
         }
-    }
-}
-
-impl DescribedConfig for TermOutConfig {
-    fn description() -> ConfigDescription {
-        ConfigDescription { section: "term_out", array_table: false, narrative: "Periodic terminal log line. `step` and `time` columns are filled by SimClock.", fields: &[
-            ConfigFieldDescription { name: "every", ty: "integer", default: Some("100"), required: false, choices: &[], description: "Print interval in steps; 0 disables output.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.every" },
-            ConfigFieldDescription { name: "columns", ty: "array of strings", default: Some("[\"step\", \"time\"]"), required: false, choices: &[], description: "Columns in display order; user systems supply custom values through TermOut::set.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.columns" },
-            ConfigFieldDescription { name: "width", ty: "integer", default: Some("14"), required: false, choices: &[], description: "Display width per column.", source: "crates/grass_io/src/term_out.rs:TermOutConfig.width" },
-        ] }
     }
 }
 

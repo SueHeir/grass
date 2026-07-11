@@ -24,9 +24,8 @@
 use std::any::TypeId;
 use std::fmt;
 
-use grass_app::{
-    App, ConfigDescription, ConfigFieldDescription, Plugin, ScheduleSetupSet, StageNames,
-};
+use grass_app::{App, ConfigDescription, Plugin, ScheduleSetupSet, StageNames};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{
     first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
     SystemLabel,
@@ -69,7 +68,12 @@ fn default_steps() -> u32 {
 
 /// Per-stage settings: step count, optional name/dt, plus an arbitrary
 /// `overrides` catch-all for codebase-specific keys.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, DeriveConfigDescription)]
+#[config_description(
+    section = "run",
+    narrative = "One run stage. Repeat [[run]] for multi-stage workflows; unrecognised keys are preserved as stage overrides.",
+    array_table
+)]
 pub struct StageConfig {
     /// Optional human-readable stage name. Used by [`StageNames`]
     /// validation when a `StageEnum` is wired.
@@ -108,18 +112,6 @@ impl Default for StageConfig {
             save_at_end: false,
             overrides: toml::Table::new(),
         }
-    }
-}
-
-impl DescribedConfig for StageConfig {
-    fn description() -> ConfigDescription {
-        ConfigDescription { section: "run", array_table: true, narrative: "One run stage. Repeat [[run]] for multi-stage workflows; unrecognised keys are preserved as stage overrides.", fields: &[
-            ConfigFieldDescription { name: "name", ty: "string", default: None, required: false, choices: &[], description: "Human-readable stage name when stage validation is enabled.", source: "crates/grass_io/src/run.rs:StageConfig.name" },
-            ConfigFieldDescription { name: "steps", ty: "integer", default: Some("1000"), required: false, choices: &[], description: "Number of timesteps in this stage.", source: "crates/grass_io/src/run.rs:StageConfig.steps" },
-            ConfigFieldDescription { name: "dt", ty: "float", default: Some("0.0"), required: false, choices: &[], description: "Stage timestep; 0.0 leaves the integrator setting unchanged.", source: "crates/grass_io/src/run.rs:StageConfig.dt" },
-            ConfigFieldDescription { name: "skip", ty: "boolean", default: Some("false"), required: false, choices: &[], description: "Advance past this stage immediately.", source: "crates/grass_io/src/run.rs:StageConfig.skip" },
-            ConfigFieldDescription { name: "save_at_end", ty: "boolean", default: Some("false"), required: false, choices: &[], description: "Hint that plugins may use to write final output at the stage end.", source: "crates/grass_io/src/run.rs:StageConfig.save_at_end" },
-        ] }
     }
 }
 

@@ -6,7 +6,7 @@ Optional companion to [`grass_app`](../grass_app/). It provides the things every
 
 ## What it does
 
-`InputPlugin` parses the CLI, reads the TOML file at `args[1]`, and installs a `Config` resource holding the parsed table. Each plugin's `build()` then calls `Config::load::<MyConfig>(app, "section")` for optional config or `Config::load_required::<MyConfig>(app, "section")` for required config, deserializing its own slice and registering it as a resource. Because every plugin here implements `Plugin::default_config`, `--generate-config` assembles a complete starter TOML from all registered plugins.
+`InputPlugin` parses the CLI, reads the TOML file at `args[1]`, and installs a `Config` resource holding the parsed table. Each plugin's `build()` then calls `Config::load::<MyConfig>(app, "section")` for optional config or `Config::load_required::<MyConfig>(app, "section")` for required config, deserializing its own slice and registering it as a resource. Built-ins expose typed `Plugin::config_description` metadata, so `--generate-config` assembles a complete starter TOML from their parsed config definitions; legacy plugins may still use `default_config` snippets.
 
 The remaining plugins gate periodic work on a shared step/time clock.
 
@@ -25,7 +25,7 @@ The remaining plugins gate periodic work on a shared step/time clock.
 
 ```
 myapp <config.toml>          # run
-myapp --generate-config      # print every plugin's default_config snippet,
+myapp --generate-config      # print every plugin's generated config metadata,
                              # assembled into a complete starter TOML, then exit
 ```
 

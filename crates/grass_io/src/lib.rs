@@ -40,6 +40,10 @@
 
 #![warn(missing_docs)]
 
+// Lets `#[derive(ConfigDescription)]` use the same absolute path in this
+// crate and in downstream config crates.
+extern crate self as grass_io;
+
 mod clock;
 mod config;
 mod dump;

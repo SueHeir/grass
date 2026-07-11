@@ -28,7 +28,8 @@
 //! );
 //! ```
 
-use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
+use grass_app::{App, ConfigDescription, Plugin};
+use grass_derive::ConfigDescription as DeriveConfigDescription;
 use grass_scheduler::{Res, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -51,8 +52,12 @@ pub struct SimClock {
 
 /// `[clock]` section of the input TOML — optional starting values for
 /// restart scenarios. Both default to zero.
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, DeriveConfigDescription)]
 #[serde(deny_unknown_fields)]
+#[config_description(
+    section = "clock",
+    narrative = "Simulation step + time accumulator. Set non-zero values to resume a saved state."
+)]
 pub struct ClockConfig {
     /// Starting step count. Default: 0.
     #[serde(default)]
@@ -60,37 +65,6 @@ pub struct ClockConfig {
     /// Starting simulated time (in whatever units the app uses). Default: 0.0.
     #[serde(default)]
     pub start_time: f64,
-}
-
-impl DescribedConfig for ClockConfig {
-    fn description() -> ConfigDescription {
-        ConfigDescription {
-            section: "clock",
-            array_table: false,
-            narrative:
-                "Simulation step + time accumulator. Set non-zero values to resume a saved state.",
-            fields: &[
-                ConfigFieldDescription {
-                    name: "start_step",
-                    ty: "integer",
-                    default: Some("0"),
-                    required: false,
-                    choices: &[],
-                    description: "Starting step count.",
-                    source: "crates/grass_io/src/clock.rs:ClockConfig.start_step",
-                },
-                ConfigFieldDescription {
-                    name: "start_time",
-                    ty: "float",
-                    default: Some("0.0"),
-                    required: false,
-                    choices: &[],
-                    description: "Starting simulated time in application units.",
-                    source: "crates/grass_io/src/clock.rs:ClockConfig.start_time",
-                },
-            ],
-        }
-    }
 }
 
 // ─── Plugin ─────────────────────────────────────────────────────────────────

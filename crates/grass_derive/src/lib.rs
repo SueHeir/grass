@@ -45,8 +45,161 @@
 #![warn(missing_docs)]
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
+
+// ─── #[derive(ConfigDescription)] ───────────────────────────────────────────
+
+/// Generates `grass_io::DescribedConfig` directly from a Serde config struct.
+///
+/// The derive reads the same field names, `#[serde(rename = ...)]`,
+/// `#[serde(default)]`, and doc comments that define the TOML parser contract.
+/// Defaults are serialized from `Default` at runtime, so a changed default or
+/// added field is reflected in generated TOML without a second handwritten list.
+#[proc_macro_derive(ConfigDescription, attributes(config_description, serde))]
+pub fn derive_config_description(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(input, "ConfigDescription can only be derived for structs")
+            .to_compile_error()
+            .into();
+    };
+    let Fields::Named(fields) = &data.fields else {
+        return syn::Error::new_spanned(&input, "ConfigDescription requires named fields")
+            .to_compile_error()
+            .into();
+    };
+    let mut section = None;
+    let mut narrative = String::new();
+    let mut array_table = false;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("config_description") {
+            continue;
+        }
+        let result = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("section") {
+                section = Some(meta.value()?.parse::<syn::LitStr>()?.value());
+            } else if meta.path.is_ident("narrative") {
+                narrative = meta.value()?.parse::<syn::LitStr>()?.value();
+            } else if meta.path.is_ident("array_table") {
+                array_table = true;
+            } else {
+                return Err(
+                    meta.error("expected section = \"...\", narrative = \"...\", or array_table")
+                );
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
+            return error.to_compile_error().into();
+        }
+    }
+    let Some(section) = section else {
+        return syn::Error::new_spanned(&input, "missing #[config_description(section = \"...\")]")
+            .to_compile_error()
+            .into();
+    };
+    let mut generated_fields = Vec::new();
+    for field in &fields.named {
+        let ident = field.ident.as_ref().unwrap();
+        let mut field_name = ident.to_string();
+        let mut has_default = false;
+        let mut flattened = false;
+        for attr in &field.attrs {
+            if !attr.path().is_ident("serde") {
+                continue;
+            }
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("default") {
+                    has_default = true;
+                }
+                if meta.path.is_ident("flatten") {
+                    flattened = true;
+                }
+                if meta.path.is_ident("rename") {
+                    field_name = meta.value()?.parse::<syn::LitStr>()?.value();
+                }
+                Ok(())
+            });
+        }
+        // A flattened map accepts downstream-specific keys rather than
+        // declaring one TOML field of its own, so it has no generated sample.
+        if flattened {
+            continue;
+        }
+        let is_option = match &field.ty {
+            syn::Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Option"),
+            _ => false,
+        };
+        let required = !(has_default || is_option);
+        let ty = config_type_name(&field.ty);
+        let description = field
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("doc"))
+            .filter_map(|a| match &a.meta {
+                syn::Meta::NameValue(value) => match &value.value {
+                    syn::Expr::Lit(lit) => match &lit.lit {
+                        syn::Lit::Str(text) => Some(text.value().trim().to_owned()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let line = field.span().start().line;
+        let source = quote_spanned! {field.span()=> concat!(file!(), ":", #line, ":", stringify!(#name), ".", stringify!(#ident)).to_string() };
+        generated_fields.push(quote! {
+            grass_app::ConfigFieldDescription {
+                name: #field_name.to_string(), ty: #ty.to_string(),
+                default: defaults.remove(#field_name), required: #required,
+                choices: Vec::new(), description: #description.to_string(), source: #source,
+            }
+        });
+    }
+    quote! {
+        impl grass_io::DescribedConfig for #name {
+            fn description() -> grass_app::ConfigDescription {
+                let mut defaults: std::collections::BTreeMap<String, String> = toml::to_string(&Self::default())
+                    .expect("default config must serialize to TOML")
+                    .parse::<toml::Table>().expect("serialized default must be a TOML table")
+                    .into_iter().map(|(key, value)| (key, value.to_string())).collect();
+                grass_app::ConfigDescription {
+                    section: #section.to_string(), array_table: #array_table,
+                    narrative: #narrative.to_string(), fields: vec![#(#generated_fields),*],
+                }
+            }
+        }
+    }.into()
+}
+
+fn config_type_name(ty: &syn::Type) -> String {
+    let syn::Type::Path(path) = ty else {
+        return quote!(#ty).to_string();
+    };
+    let Some(segment) = path.path.segments.last() else {
+        return quote!(#ty).to_string();
+    };
+    match segment.ident.to_string().as_str() {
+        "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
+            "integer".to_string()
+        }
+        "f32" | "f64" => "float".to_string(),
+        "bool" => "boolean".to_string(),
+        "String" => "string".to_string(),
+        "Vec" => "array".to_string(),
+        "Option" => "optional".to_string(),
+        _ => segment.ident.to_string(),
+    }
+}
 
 // ─── #[derive(StageEnum)] ─────────────────────────────────────────────────────
 

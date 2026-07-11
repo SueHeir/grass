@@ -13,9 +13,9 @@ approaches before adding a Grass contract:
   exposes Serde derive internals, but labels itself unstable and is not suitable
   for a public Grass configuration contract.
 
-Grass therefore keeps Serde as the parser and adds a small declarative
-`ConfigDescription` adjacent to each typed config. `DescribedConfig` ties that
-description's section key to `Config::load_described`, and regression tests
-compare every serialized typed default field with generated TOML. This supports
-defaults, required status, enum choices, narrative comments, and source
+Grass therefore keeps Serde as the parser and adds a small `ConfigDescription`
+derive that reads its struct fields, Serde attributes, and documentation.
+`DescribedConfig` ties that description's section key to `Config::load_described`,
+and regression tests compare every serialized typed default field with generated
+TOML. This supports defaults, required status, enum choices, narrative comments, and source
 locations without placing a discretization assumption in `grass_app`.
