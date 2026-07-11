@@ -73,7 +73,7 @@ fn default_steps() -> u32 {
 pub struct StageConfig {
     /// Optional human-readable stage name. Used by [`StageNames`]
     /// validation when a `StageEnum` is wired.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Number of timesteps to run in this stage.
     #[serde(default = "default_steps")]

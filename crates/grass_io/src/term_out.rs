@@ -37,7 +37,7 @@ use std::collections::HashMap;
 
 use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{prelude::*, Res, ResMut};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{every_n_steps, Config, DescribedConfig, SimClock, SimClockPlugin};
 
@@ -96,7 +96,7 @@ fn default_columns() -> Vec<String> {
 
 /// `[term_out]` section. All fields optional; defaults give every-100
 /// printing of `step` and `time`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TermOutConfig {
     /// Print every N steps. 0 disables term_out output.

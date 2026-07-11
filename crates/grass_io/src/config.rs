@@ -459,8 +459,67 @@ mod described_config_tests {
         }
     }
 
+    /// The default serialized by the parsed Rust type is the independent
+    /// oracle here. A new typed field, a changed Rust default, or a removed
+    /// metadata field makes this comparison fail instead of quietly relying on
+    /// Serde's missing-field fallback.
+    fn assert_description_matches_typed_default<T: DescribedConfig + serde::Serialize>() {
+        let description = T::description();
+        let typed: toml::Table = toml::from_str(
+            &toml::to_string(&T::default()).expect("typed default serializes to TOML"),
+        )
+        .expect("serialized typed config is a TOML table");
+
+        let generated = Config::from_str(&description.render_toml());
+        let generated = if description.array_table {
+            generated.table[description.section]
+                .as_array()
+                .expect("generated array table")[0]
+                .as_table()
+                .expect("generated sample table")
+        } else {
+            generated.table[description.section]
+                .as_table()
+                .expect("generated table")
+        };
+
+        let described: std::collections::BTreeSet<_> =
+            description.fields.iter().map(|field| field.name).collect();
+        let typed_fields: std::collections::BTreeSet<_> =
+            typed.keys().map(String::as_str).collect();
+        let unset_fields: std::collections::BTreeSet<_> = description
+            .fields
+            .iter()
+            .filter(|field| field.default.is_none())
+            .map(|field| field.name)
+            .collect();
+        assert_eq!(
+            described,
+            typed_fields.union(&unset_fields).copied().collect()
+        );
+
+        for (name, value) in &typed {
+            assert_eq!(generated.get(name), Some(value), "default drift for {name}");
+            assert!(description
+                .fields
+                .iter()
+                .any(|field| field.name == name && field.default.is_some()));
+        }
+        for field in description
+            .fields
+            .iter()
+            .filter(|field| field.default.is_none())
+        {
+            assert!(!generated.contains_key(field.name));
+        }
+    }
+
     #[test]
     fn generated_defaults_match_typed_defaults() {
+        assert_description_matches_typed_default::<ClockConfig>();
+        assert_description_matches_typed_default::<DumpConfig>();
+        assert_description_matches_typed_default::<TermOutConfig>();
+        assert_description_matches_typed_default::<StageConfig>();
         assert_eq!(
             default_from_generated::<ClockConfig>().start_step,
             ClockConfig::default().start_step

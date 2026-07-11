@@ -73,8 +73,11 @@ fn report_columns(s: Res<OscState>, mut term_out: ResMut<TermOut>) {
 fn main() {
     let mut app = App::new();
 
-    // Seed the config programmatically; InputPlugin then becomes a no-op.
-    app.add_resource(Config::from_str(CONFIG));
+    // Keep the normal demo self-contained, but let InputPlugin handle
+    // --generate-config so this proof exercises the emitted reference.
+    if !std::env::args().any(|arg| arg == "--generate-config") {
+        app.add_resource(Config::from_str(CONFIG));
+    }
     app.add_plugins(InputPlugin);
 
     app.add_resource(OscState {

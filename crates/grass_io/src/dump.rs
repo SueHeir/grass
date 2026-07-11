@@ -36,7 +36,7 @@ use std::sync::Mutex;
 
 use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{prelude::*, Res, ResMut};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{every_n_steps, Config, DescribedConfig, Input, SimClock, SimClockPlugin};
 
@@ -99,7 +99,7 @@ fn default_path_template() -> String {
 }
 
 /// `[dump]` section.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DumpConfig {
     /// Write a frame every N steps. 0 disables.

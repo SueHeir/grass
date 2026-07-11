@@ -43,3 +43,7 @@ render in Gitea:
   [`plots/fallible_lifecycle_matrix.png`](fallible_lifecycle/plots/fallible_lifecycle_matrix.png),
   checking plugin-group/nested-plugin and setup failure propagation, update short-circuit,
   cleanup, and legacy compatibility with independent measurements.
+- [`observed_oscillator`](observed_oscillator/README.md) embeds
+  [`plots/generated_config_coverage.png`](observed_oscillator/plots/generated_config_coverage.png),
+  checking generated typed configuration field coverage against the built-in
+  plugin contract.

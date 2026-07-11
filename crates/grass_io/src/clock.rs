@@ -30,7 +30,7 @@
 
 use grass_app::{App, ConfigDescription, ConfigFieldDescription, Plugin};
 use grass_scheduler::{Res, ResMut};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Config, DescribedConfig};
 
@@ -51,7 +51,7 @@ pub struct SimClock {
 
 /// `[clock]` section of the input TOML — optional starting values for
 /// restart scenarios. Both default to zero.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClockConfig {
     /// Starting step count. Default: 0.
