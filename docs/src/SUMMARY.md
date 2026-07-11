@@ -22,4 +22,5 @@
 # Reference
 
 - [Crate Map](./reference/crates.md)
+- [Scientific Library Composition Contract](./reference/library-composition-contract.md)
 - [Derive Macros](./reference/derives.md)
