@@ -25,6 +25,7 @@ grass_io        = { path = "crates/grass_io",        version = "0.1.0" }
 grass_mpi       = { path = "crates/grass_mpi",       version = "0.1.0", default-features = false }
 grass_derive    = { path = "crates/grass_derive",    version = "0.1.0" }
 grass_multi     = { path = "crates/grass_multi",     version = "0.1.0" }
+oscillator_demo = { path = "crates/oscillator_demo", version = "0.1.0" }
 
 [profile.release]
 opt-level = 3
@@ -35,4 +36,10 @@ codegen-units = 1
 grass_scheduler = { workspace = true }
 grass_app = { workspace = true }
 grass_io = { workspace = true }
+grass_multi = { workspace = true }
+oscillator_demo = { workspace = true }
 toml = "0.8"
+
+[[example]]
+name = "oscillator_demo"
+path = "examples/oscillator_demo/main.rs"
