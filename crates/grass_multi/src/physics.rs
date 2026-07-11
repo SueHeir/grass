@@ -80,6 +80,17 @@ pub trait Physics: 'static {
     /// (`Multi` / `MultiRes` / `MultiResMut`) downcast through this.
     fn resource_cell(&self, ty: TypeId) -> Option<&RefCell<Box<dyn Any>>>;
 
+    /// Mutable access to the underlying local [`App`], when this physics is
+    /// backed by one. Remote physics return `None`.
+    ///
+    /// This hook exists so a parent-level coupling plugin can install the
+    /// adapter resources and systems required at a seam without either solver
+    /// having to know about its eventual coupling partner. Configuration must
+    /// happen before the sub-App is prepared.
+    fn local_app_mut(&mut self) -> Option<&mut App> {
+        None
+    }
+
     /// Current physical time of this subsystem (seconds), if it tracks
     /// one. Default: `None` — subsystem doesn't expose a clock.
     ///
@@ -170,5 +181,9 @@ impl Physics for AppPhysics {
 
     fn resource_cell(&self, ty: TypeId) -> Option<&RefCell<Box<dyn Any>>> {
         self.app.resource_cell(ty)
+    }
+
+    fn local_app_mut(&mut self) -> Option<&mut App> {
+        Some(&mut self.app)
     }
 }

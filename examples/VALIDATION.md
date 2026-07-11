@@ -12,6 +12,15 @@ render in Gitea:
   comparing explicit, Picard, relaxed, and adaptive exchange policies with the
   independent SciPy matrix-exponential reference for the coupled normal mode.
 
+- [`oscillator_mpmd`](oscillator_mpmd/README.md) embeds
+  [`plots/local_contract_comparison.png`](oscillator_mpmd/plots/local_contract_comparison.png),
+  comparing all four components of the complete in-process `LocalTransport`
+  state trajectory of the two-binary exchange contract with an independently
+  implemented explicit recurrence.  Its CI MPMD launch records both binary
+  traces and compares the full MPI state vector with that same recurrence;
+  bit fingerprints have a documented heterogeneous-floating-point warning
+  policy.
+
 - [`heat_diffusion_1d`](heat_diffusion_1d/README.md) embeds
   [`plots/heat_diffusion_validation.png`](heat_diffusion_1d/plots/heat_diffusion_validation.png).
 - [`hello_app`](hello_app/README.md) embeds

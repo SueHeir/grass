@@ -1,116 +1,91 @@
-# GRASS
+# GRASS: **General Rust App System Scheduler**
 
 <!-- disclaimer-banner -->
-> **Research-software status:** This ecosystem is AI-authored and under active evaluation. GRASS, SOIL, and DIRT are the core architecture and DEM implementation; repositories prefixed `dev_` are experimental method demonstrations outside the author's domain expertise. Treat claims according to their linked evidence and documented limitations. See [DISCLAIMER.md](DISCLAIMER.md).
+> **Research-software status:** This ecosystem was created with heavy usage of AI. GRASS, SOIL, and DIRT are the core architecture and DEM implementation; repositories prefixed `dev_` are experimental method demonstrations outside the author's domain expertise. Treat claims according to their linked evidence and documented limitations. See [DISCLAIMER.md](DISCLAIMER.md).
 <!-- /disclaimer-banner -->
 
 
-**Write a simulation code once. Run it alone, embed it inside another solver, or
-couple it to other GRASS codes in-process or across MPI.**
+Most simulation codes begin the same way: define a state, call functions in a
+particular order to edit the state, repeat. GRASS provides a formalized way to define a your state (resources) and call functions (systems) via plugins, schedules, apps and sub-apps. (This is very similar to [Bevy's](https://bevyengine.org) ECS; however, its just the S of ECS). Every aspect of a simulation's codebase is added as a plugin, making every aspect of the code swappable and replaceable via additional plugins. 
 
-Most simulation codes begin the same way: keep some state, call functions in a
-particular order, repeat. That is enough to express essentially any simulation.
-It is not, by itself, a reason to use GRASS.
-
-The reason to use GRASS is what happens when one simulation must become part of
-another. Scientific solvers are usually built as closed applications. Each grows
+GRASS stems from my frustration of editing scientific codebases. Scientific solvers are usually built as closed applications. Each grows
 its own state containers, lifecycle, timestep driver, I/O, and communication
-assumptions. Coupling two of them later means reconciling two private worlds — or
-maintaining an adapter between them forever.
+assumptions, etc. Editing existing simulation codebases is typically done through each codebases' unique "plugin" or "fix" system. These codebases have many core functionalities locked into the structure. Editing these core structures is typically not a frictionless path. Coupling two of them later means reconciling two private worlds and/or maintaining an adapter between them forever, both of which can require editing this locked structure. 
 
-GRASS gives solvers a shared composition model from the beginning:
+With GRASS, there is no locked structure; however, it does ask you to get your hands a little dirty with some programming. GRASS is a library, plugins you would write with GRASS are also libraries. If everything is a library what do you run? The anwser is you built your own executable to do exactly what you want! The following is a 'simulation' counting by one every step and checking if it has reached 5 every step. 
 
-- **Resources** hold state.
-- **Systems** are ordinary functions that declare the state they read and write.
-- **Schedules** define when those functions run.
-- **Plugins** package capabilities that can be added, replaced, or removed.
-- **Sub-apps and transports** compose complete solvers in one process or across MPI.
-
-A GRASS solver is therefore not only an executable. It is a component that can
-participate in a larger scheduled simulation.
-
-```text
- standalone particle solver       standalone fluid solver
-             │                              │
-             └────── shared GRASS model ────┘
-                            │
-                            ▼
-                 coupled scheduled simulation
-                    in-process or across MPI
-```
-
-GRASS — the **General Rust App System Scheduler** — knows nothing about particles,
-meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
-that domain crates and complete solvers build on.
-
-## Can GRASS represent my simulation?
-
-If your code advances state by calling functions in an order, yes: those
-functions can be systems, that state can be resources, and that order can be a
-schedule. Explicit timestepping, iterative loops, branches, mesh sweeps, particle
-updates, and a global assemble-and-solve step all fit that mechanical model.
-
-The more useful question is whether it **should** be written in GRASS.
-
-Use GRASS when the solver is likely to:
-
-- couple to another physical method;
-- run both standalone and as part of a larger application;
-- share infrastructure with a family of related solvers;
-- evolve from in-process coupling to separate MPI binaries;
-- replace coupling, integration, I/O, or diagnostic components independently.
-
-A small calculation that will remain permanently standalone may not benefit
-enough to justify a shared framework. GRASS earns its structure when composition
-is part of the research problem.
-
-## Ten seconds
 
 ```rust
 use grass_app::prelude::*;
 use grass_scheduler::prelude::*;
+use grass_derive::prelude::*;
 
+/// Per-step phases. Declaration order = schedule index.
 #[derive(Debug, Clone, Copy, ScheduleSet)]
-enum Step { Update }
-
-struct Position(f64);
-
-fn move_thing(mut pos: ResMut<Position>) {
-    pos.0 += 1.0;                        // a system: it declares it writes Position
+enum Step {
+    Tick,
+    CheckDone,
 }
 
-let mut app = App::new();
-app.add_resource(Position(0.0));
-app.add_update_system(move_thing, Step::Update);
-app.start();                            // organize → setup → run loop → cleanup
+/// The one piece of simulation state.
+struct Counter {
+    steps: u32,
+}
+
+/// Runs every step: advance the counter.
+fn tick(mut counter: ResMut<Counter>) {
+    counter.steps += 1;
+}
+
+/// Done-condition: stop the run loop once we've taken 5 steps.
+fn check_done(counter: Res<Counter>, mut sm: ResMut<SchedulerManager>) {
+    if counter.steps >= 5 {
+        sm.state = SchedulerState::End;
+    }
+}
+
+/// Bundles the resource and systems into one reusable unit.
+struct CounterPlugin;
+
+impl Plugin for CounterPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_resource(Counter { steps: 0 })
+            .add_update_system(tick, Step::Tick)
+            .add_update_system(check_done, Step::CheckDone);
+    }
+}
+
+fn main() {
+    let mut app = App::new();
+    app.add_plugins(CounterPlugin);
+    app.start();
+}
+
 ```
 
-No `main` loop, no manual dispatch: `move_thing` takes `ResMut<Position>`, so the
-scheduler injects that borrow and runs it. Grow this into a real time-stepping
-solver in the [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html)
-tutorial, or skim [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html).
+This is a lot of code to count to 5, but it explains the following very well
+- **Resources** hold state.
+- **Systems** are ordinary functions that declare the state they read and write.
+- **Schedules** define when those functions run.
+- **Plugins** package capabilities that can be added, replaced, or removed.
 
-That example is deliberately ordinary. The important property is not that GRASS
-can call `move_thing`; any main loop can. The important property is that every
-GRASS solver uses the same App, resource, system, and schedule vocabulary. A
-coupling plugin can read one solver's resources, write another's, and place that
-exchange at an explicit point in their combined schedule.
+If thats how much code is required to count to 5, how much would be requried to couple two independent codebases? 
+```rust
+fn main() {
+    let mut app = App::new();
+    app.add_subapp("dem", setup::dem())
+      .add_subapp("cfd", setup::cfd())
+      .add_plugins(DemCfdCouplingPlugin::for_air(RADIUS, 200, DT, GRAVITY))
+      .start();
+}
+```
 
-## Evidence that the composition boundary holds
+Only 5 lines? Well not really, DemCfdCouplingPlugin does all the heavy lifting here. The important thing is that the code of the subapps for the DEM solver and CFD solver were NOT edited, both codes know nothing about eachother. All changes to both codes and added systems for coupling codes to transfer information was done via the Coupling plugin we add.
 
-- **DIRT** is a full granular-DEM code built from GRASS plugins over SOIL.
-- **SOIL** supplies decomposition, migration, ghost exchange, neighbor lists,
-  and restart to multiple particle-method demonstrations through one `AtomData`
-  contract.
-- **FIELD** and `dev_field_efvm` exercise mesh and finite-volume solver structure.
-- **`grass_multi`** runs sub-apps under a parent schedule, in-process or through
-  remote MPI-backed transport.
-- Dedicated coupling repositories place exchanges between DEM, SPH, and CFD
-  components at explicit schedule phases rather than inside either solver.
+GRASS knows nothing about particles,
+meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
+that domain crates and complete solvers build on.
 
-These repositories are not nine products a new reader must learn. They are
-evidence for one claim: independently useful simulation components can share a
-common composition boundary.
 
 ## The deal
 

@@ -37,9 +37,13 @@ grass_scheduler = { workspace = true }
 grass_app = { workspace = true }
 grass_io = { workspace = true }
 grass_multi = { workspace = true }
+grass_mpi = { workspace = true, optional = true }
 oscillator_demo = { workspace = true }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+
+[features]
+mpi = ["grass_multi/mpi", "dep:grass_mpi", "grass_mpi/mpi_backend"]
 
 [[example]]
 name = "oscillator_demo"
@@ -48,3 +52,17 @@ path = "examples/oscillator_demo/main.rs"
 [[example]]
 name = "oscillator_coupling_schemes"
 path = "examples/oscillator_coupling_schemes/main.rs"
+
+[[example]]
+name = "oscillator_mpmd_local"
+path = "examples/oscillator_mpmd/local.rs"
+
+[[example]]
+name = "oscillator_mpmd_a"
+path = "examples/oscillator_mpmd/a.rs"
+required-features = ["mpi"]
+
+[[example]]
+name = "oscillator_mpmd_b"
+path = "examples/oscillator_mpmd/b.rs"
+required-features = ["mpi"]
