@@ -25,3 +25,8 @@ The renderer only emits a value for fields optional to Serde (`Option<T>` or
 Serde accepts an omitted field: required fields remain commented placeholders,
 and the downstream contract test verifies that their generated sample still
 fails to deserialize until the user supplies one.
+
+Members marked `#[serde(skip)]` or `#[serde(skip_deserializing)]` are omitted
+from the reference because they are not input keys. This prevents a generated
+reference from advertising state that a `deny_unknown_fields` configuration
+would reject (or that a permissive configuration would ignore).

@@ -194,6 +194,7 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
         let mut has_default = false;
         let mut serde_default = None;
         let mut flattened = false;
+        let mut skipped_on_deserialize = false;
         for attr in &field.attrs {
             if !attr.path().is_ident("serde") {
                 continue;
@@ -213,6 +214,13 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
                 }
                 if meta.path.is_ident("flatten") {
                     flattened = true;
+                }
+                // These attributes remove a member from Serde's input
+                // contract.  Do not document it as a TOML key: with
+                // `deny_unknown_fields` such a key would be rejected, and
+                // without it the key would silently have no effect.
+                if meta.path.is_ident("skip") || meta.path.is_ident("skip_deserializing") {
+                    skipped_on_deserialize = true;
                 }
                 if meta.path.is_ident("rename") {
                     if meta.input.peek(syn::token::Paren) {
@@ -235,7 +243,7 @@ pub fn derive_config_description(input: TokenStream) -> TokenStream {
         }
         // A flattened map accepts downstream-specific keys rather than
         // declaring one TOML field of its own, so it has no generated sample.
-        if flattened {
+        if flattened || skipped_on_deserialize {
             continue;
         }
         let is_option = match &field.ty {

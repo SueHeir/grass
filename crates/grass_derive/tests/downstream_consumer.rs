@@ -136,5 +136,45 @@ fn main() {
         "required-field consumer must preserve Serde rejection: {}",
         String::from_utf8_lossy(&required_field.stderr)
     );
+
+    // Members Serde deliberately does not deserialize are implementation
+    // state, not TOML fields.  Showing one in the reference would invite a
+    // key that either errors under deny_unknown_fields or is ignored.
+    fs::write(
+        temp.join("src/main.rs"),
+        r##"use grass_derive::ConfigDescription;
+use grass_io::DescribedConfig;
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Deserialize, Serialize, ConfigDescription)]
+#[serde(deny_unknown_fields)]
+#[config_description(section = "probe")]
+struct ProbeConfig {
+    #[serde(default)] visible: u32,
+    #[serde(skip)] cached_value: String,
+    #[serde(skip_deserializing)] runtime_note: String,
+}
+
+fn main() {
+    let description = ProbeConfig::description();
+    assert_eq!(description.fields.len(), 1);
+    assert_eq!(description.fields[0].name, "visible");
+    let rendered = description.render_toml();
+    assert!(!rendered.contains("cached_value"));
+    assert!(!rendered.contains("runtime_note"));
+}
+"##,
+    )
+    .unwrap();
+    let skipped_fields = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(
+        skipped_fields.status.success(),
+        "non-deserialized fields must not be advertised: {}",
+        String::from_utf8_lossy(&skipped_fields.stderr)
+    );
     let _ = fs::remove_dir_all(&temp);
 }
