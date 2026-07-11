@@ -24,12 +24,53 @@ use grass_scheduler::{
     apply_state_transitions, check_stage_advance, CurrentState, NextState, ScheduleSet, StageName,
     StoredPhase,
 };
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData};
 
 use crate::App;
 use core::any::Any;
 use std::any::TypeId;
 use std::collections::HashSet;
+
+/// A typed, stable identifier for a capability that a plugin provides or requires.
+///
+/// Export capability identifiers as constants from the crate that defines the
+/// contract, then consume those constants instead of repeating string literals:
+///
+/// ```rust,ignore
+/// pub const NEIGHBOR_SEARCH: CapabilityId = CapabilityId::new("neighbor_search");
+///
+/// fn requires_capabilities(&self) -> Vec<CapabilityId> {
+///     vec![NEIGHBOR_SEARCH]
+/// }
+/// ```
+///
+/// `Plugin::provides` and `Plugin::requires` remain available during the
+/// migration from the earlier string-tag API. New contracts should use the
+/// typed hooks.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CapabilityId(Cow<'static, str>);
+
+impl CapabilityId {
+    /// Creates a capability identifier suitable for exporting as a constant.
+    pub const fn new(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
+
+    /// Returns the stable textual name used in diagnostics and generated docs.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn legacy(name: &str) -> Self {
+        Self(Cow::Owned(name.to_owned()))
+    }
+}
+
+impl std::fmt::Display for CapabilityId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Convenience macro to build a `Vec<TypeId>` from a list of types.
 ///
@@ -173,6 +214,24 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// fn requires(&self) -> Vec<&str> { vec!["dem_particles", "neighbor_list"] }
     /// ```
     fn requires(&self) -> Vec<&str> {
+        Vec::new()
+    }
+
+    /// Returns typed capabilities this plugin provides.
+    ///
+    /// Prefer this hook for new code and export the identifiers from the crate
+    /// that owns the contract. The legacy string-based [`provides`](Self::provides)
+    /// hook is collected as well for staged compatibility.
+    fn provides_capabilities(&self) -> Vec<CapabilityId> {
+        Vec::new()
+    }
+
+    /// Returns typed capabilities this plugin requires from other plugins.
+    ///
+    /// Prefer this hook for new code and use exported [`CapabilityId`] constants
+    /// at consumer call sites. The legacy string-based [`requires`](Self::requires)
+    /// hook is collected as well for staged compatibility.
+    fn requires_capabilities(&self) -> Vec<CapabilityId> {
         Vec::new()
     }
 }

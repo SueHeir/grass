@@ -15,7 +15,7 @@
 //! | Mechanism | Declared by | Checked when | Order-sensitive? |
 //! |-----------|-------------|--------------|------------------|
 //! | **TypeId dependencies** ([`Plugin::dependencies`]) | `type_ids![A, B]` | **eagerly**, during [`add_plugins`](App::add_plugins) | **Yes** — the dependency must already be registered |
-//! | **Capability contracts** ([`Plugin::provides`] / [`Plugin::requires`]) | `vec!["tag"]` strings | **lazily**, at [`start`](App::start) / [`prepare`](App::prepare) | **No** — provider may be added before *or* after |
+//! | **Capability contracts** ([`Plugin::provides_capabilities`] / [`Plugin::requires_capabilities`]) | exported [`CapabilityId`] constants | **lazily**, at [`start`](App::start) / [`prepare`](App::prepare) | **No** — provider may be added before *or* after |
 //!
 //! Use **TypeId dependencies** when plugin B genuinely cannot `build()`
 //! without plugin A's resources/systems already present (a hard ordering
@@ -89,9 +89,10 @@ pub use sub_app::*;
 /// single `use grass_app::prelude::*;`.
 pub mod prelude {
     pub use crate::{
-        app::App, app::AppError, app::ConfigSnippets, app::GenerateConfigFlag,
-        app::MissingCapability, app::MissingPluginDependency, setup::ScheduleSetupSet,
-        sub_app::SubApp, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin, StageNames,
-        StatesPlugin,
+        app::App, app::AppError, app::CapabilityProvider, app::ConfigSnippets,
+        app::GenerateConfigFlag, app::MissingCapability, app::MissingPluginDependency,
+        app::PluginContract, app::PluginContracts, app::PluginDependency, setup::ScheduleSetupSet,
+        sub_app::SubApp, CapabilityId, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin,
+        StageNames, StatesPlugin,
     };
 }

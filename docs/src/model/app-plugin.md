@@ -43,7 +43,7 @@ Optional hooks let plugins declare ordering and requirements:
 | `name` | human-readable identity |
 | `is_unique` | reject duplicate registration |
 | `dependencies` | `TypeId` ordering against other plugins |
-| `provides` / `requires` | capability tags, checked at `start()` |
+| `provides_capabilities` / `requires_capabilities` | typed, substitutable capabilities, checked at `start()` |
 | `default_config` | a TOML snippet this plugin contributes |
 
 A bare `Fn(&mut App)` closure also implements `Plugin`, so quick wiring needs no
@@ -100,13 +100,36 @@ plugin and the missing dependency.
 | Mechanism | Declared by | Checked when | Order-sensitive? |
 |-----------|-------------|--------------|------------------|
 | **TypeId dependencies** (`Plugin::dependencies`) | `type_ids![A, B]` | **eagerly**, during `add_plugins` | **Yes** — the dependency must already be registered |
-| **Capability contracts** (`Plugin::provides` / `Plugin::requires`) | `vec!["tag"]` strings | **lazily**, at `start` / `prepare` | **No** — provider may be added before *or* after |
+| **Capability contracts** (`Plugin::provides_capabilities` / `Plugin::requires_capabilities`) | exported `CapabilityId` constants | **lazily**, at `start` / `prepare` | **No** — provider may be added before *or* after |
 
 Use **TypeId dependencies** when plugin B genuinely cannot `build()` without
 plugin A's resources/systems already present (a hard ordering constraint). Use
 **capability contracts** for looser "some plugin must supply `contact_forces`"
 requirements, where any provider in any order satisfies the need — the
 order-independence is the point.
+
+Export identifiers from the crate that owns a contract, so consumers do not
+repeat ad-hoc strings:
+
+```rust,ignore
+use grass_app::CapabilityId;
+
+pub const NEIGHBOR_SEARCH: CapabilityId = CapabilityId::new("neighbor_search");
+
+impl Plugin for ConsumerPlugin {
+    fn build(&self, app: &mut App) { /* ... */ }
+    fn requires_capabilities(&self) -> Vec<CapabilityId> {
+        vec![NEIGHBOR_SEARCH]
+    }
+}
+```
+
+The former `provides()` / `requires()` string hooks remain collected for a
+staged migration. `App::plugin_contracts()` returns a data-only snapshot of
+concrete dependencies, capability providers, and capability requirements for
+generated documentation or architecture diagrams. Missing-capability errors
+include the requiring plugin, missing identifier, and the providers known at
+startup.
 
 For fallible application assembly, use both result-returning surfaces at the
 point where each mechanism is checked. `try_add_plugins(...)` reports duplicate
