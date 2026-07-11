@@ -455,6 +455,19 @@ impl Plugin for RunPlugin {
     fn config_description(&self) -> Option<ConfigDescription> {
         Some(StageConfig::description())
     }
+
+    fn schedule_labels(&self) -> Vec<&'static str> {
+        vec![
+            "ScheduleSetupSet::PreSetup",
+            "ScheduleSetupSet::Setup",
+            "RunSchedule::Cycle (namespace 1000)",
+            "update_cycle",
+        ]
+    }
+
+    fn extension_points(&self) -> Vec<&'static str> {
+        vec!["StageOverrides::section", "UPDATE_CYCLE"]
+    }
 }
 
 // ─── Systems ────────────────────────────────────────────────────────────────

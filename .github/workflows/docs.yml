@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "crates/**"
+      - "examples/contract_reference/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -31,6 +35,10 @@ jobs:
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: actions/configure-pages@v5
+      - name: Check generated contract reference
+        run: |
+          cargo run --example contract_reference > /tmp/generated-contracts.md
+          diff --unified docs/src/reference/generated-contracts.md /tmp/generated-contracts.md
       - name: Build book
         run: mdbook build docs
       - uses: actions/upload-pages-artifact@v3

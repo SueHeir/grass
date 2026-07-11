@@ -63,7 +63,7 @@ impl std::fmt::Display for CapabilityId {
 /// discretization, so particle, mesh, and other plugins can use the same
 /// contract.  Keep narrative intent in `narrative` or field `description`;
 /// the renderer only automates facts that have a stable representation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigDescription {
     /// TOML top-level key, without brackets.
     pub section: String,
@@ -76,7 +76,7 @@ pub struct ConfigDescription {
 }
 
 /// Declarative metadata for one configuration field.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigFieldDescription {
     /// Serde/TOML field name.
     pub name: String,
@@ -314,6 +314,27 @@ pub trait Plugin: Downcast + Any + Send + Sync {
 
     /// Typed capabilities this plugin requires.
     fn requires_capabilities(&self) -> Vec<CapabilityId> {
+        Vec::new()
+    }
+
+    /// Stable schedule labels this plugin installs or reserves for callers.
+    ///
+    /// This is declarative documentation metadata, not a scheduler query: a
+    /// plugin may make registration conditional on its configuration.
+    fn schedule_labels(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Public extension contracts intentionally offered by this plugin.
+    ///
+    /// Keep scientific interpretation in hand-written documentation; this
+    /// list exists to generate a mechanically checked API index.
+    fn extension_points(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Stable exchange-port or wire payload contracts offered by this plugin.
+    fn exchange_contracts(&self) -> Vec<&'static str> {
         Vec::new()
     }
 }

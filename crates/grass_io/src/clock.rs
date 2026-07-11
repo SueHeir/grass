@@ -86,6 +86,10 @@ impl Plugin for SimClockPlugin {
     fn config_description(&self) -> Option<ConfigDescription> {
         Some(ClockConfig::description())
     }
+
+    fn extension_points(&self) -> Vec<&'static str> {
+        vec!["advance_step", "every_n_steps"]
+    }
 }
 
 // ─── Systems / helpers ──────────────────────────────────────────────────────
