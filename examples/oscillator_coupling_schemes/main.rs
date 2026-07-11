@@ -294,6 +294,17 @@ fn reference(h: f64, final_time: f64) -> Pair {
     }
     p
 }
+// The selected initial state excites only the antisymmetric normal mode. Its
+// continuous solution is independent of the numerical coupling policy.
+fn exact_reference(final_time: f64) -> Pair {
+    let omega = 1201_f64.sqrt(); // k + 2 k_c, with m=1, k=1, k_c=600.
+    let x = (omega * final_time).cos();
+    let v = -omega * (omega * final_time).sin();
+    Pair {
+        a: OscillatorState { x, v },
+        b: OscillatorState { x: -x, v: -v },
+    }
+}
 fn err(a: Pair, b: Pair) -> f64 {
     (a.a.x - b.a.x)
         .abs()
@@ -305,14 +316,17 @@ fn main() {
     let (_, c) = build();
     let reference_state = reference(c.reference_dt, c.final_time);
     let nominal_monolithic = reference(c.nominal_dt, c.final_time);
+    let exact = exact_reference(c.final_time);
     let reports = [explicit(), implicit(false), implicit(true), adaptive()];
     let refined = reference(c.reference_dt / 2., c.final_time);
     let ref_error = err(reference_state, refined);
+    let exact_ref_error = err(reference_state, exact);
     println!("reference refinement error={ref_error:.3e}");
     assert!(ref_error < 2e-2, "reference step is not converged");
     for r in &reports {
-        println!("{} residual={:.3e} iterations={} rejected={} accepted_dt={:.5} energy_ratio={:.6} fingerprint={:016x?} error_to_refined={:.3e} error_to_nominal_monolithic={:.3e}",r.name,r.max_residual,r.max_iterations,r.rejected,r.min_accepted_dt,r.energy_ratio,fingerprint(r.state),err(r.state,reference_state),err(r.state,nominal_monolithic));
+        println!("{} residual={:.3e} iterations={} rejected={} accepted_dt={:.5} energy_ratio={:.6} fingerprint={:016x?} error_to_exact={:.3e} error_to_nominal_monolithic={:.3e}",r.name,r.max_residual,r.max_iterations,r.rejected,r.min_accepted_dt,r.energy_ratio,fingerprint(r.state),err(r.state,exact),err(r.state,nominal_monolithic));
     }
+    println!("refined_monolithic_error_to_exact={exact_ref_error:.3e}");
     let pic = &reports[1];
     let relax = &reports[2];
     let adapt = &reports[3];
@@ -329,10 +343,15 @@ fn main() {
     // the refined reference independently bounds their ordinary time error.
     assert!(err(pic.state, nominal_monolithic) < 2e-4);
     assert!(err(relax.state, nominal_monolithic) < 2e-4);
-    assert!(err(adapt.state, nominal_monolithic) < 2e-4);
-    assert!(err(pic.state, reference_state) < 0.35);
-    assert!(err(relax.state, reference_state) < 0.35);
-    assert!(err(adapt.state, reference_state) < 0.35);
+    // This continuous, independently derived mode is the accuracy gate. The
+    // 0.4 bound is under 1.2% of its velocity scale sqrt(1201).
+    assert!(
+        exact_ref_error < 0.4,
+        "reference is inaccurate against exact mode"
+    );
+    assert!(err(pic.state, exact) < 0.4);
+    assert!(err(relax.state, exact) < 0.4);
+    assert!(err(adapt.state, exact) < 0.4);
     assert!(
         err(reports[0].state, nominal_monolithic) > 1e-3,
         "explicit CSS must retain a visible interface-lag error"

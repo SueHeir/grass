@@ -9,8 +9,8 @@ render in Gitea:
 
 - [`oscillator_coupling_schemes`](oscillator_coupling_schemes/README.md) embeds
   [`plots/coupling_schemes.png`](oscillator_coupling_schemes/plots/coupling_schemes.png),
-  comparing explicit, Picard, relaxed, and adaptive exchange policies with a
-  refined monolithic reference.
+  comparing explicit, Picard, relaxed, and adaptive exchange policies with the
+  exact antisymmetric normal-mode solution.
 
 - [`heat_diffusion_1d`](heat_diffusion_1d/README.md) embeds
   [`plots/heat_diffusion_validation.png`](heat_diffusion_1d/plots/heat_diffusion_validation.png).
