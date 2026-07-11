@@ -26,7 +26,7 @@ use grass_scheduler::{
 };
 use std::{borrow::Cow, marker::PhantomData};
 
-use crate::App;
+use crate::{App, AppError};
 use core::any::Any;
 use std::any::TypeId;
 use std::collections::HashSet;
@@ -138,6 +138,20 @@ pub trait Plugin: Downcast + Any + Send + Sync {
     /// This is the main entry point for plugin setup. Register resources,
     /// systems, and sub-plugins here.
     fn build(&self, app: &mut App);
+
+    /// Fallible form of [`build`](Self::build).
+    ///
+    /// New plugins can override this hook to report configuration, preflight,
+    /// or construction failures to an outer runner. Existing plugins need no
+    /// changes: the compatibility default calls their infallible `build`.
+    ///
+    /// A failing implementation must leave its own resources in a state that
+    /// its registered cleanup callbacks can safely tear down. [`App`] invokes
+    /// that cleanup and stops registration before returning the error.
+    fn try_build(&self, app: &mut App) -> Result<(), AppError> {
+        self.build(app);
+        Ok(())
+    }
 
     /// Returns the plugin's name, used for duplicate detection and diagnostics.
     ///

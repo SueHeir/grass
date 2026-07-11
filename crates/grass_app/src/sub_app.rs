@@ -85,6 +85,32 @@ impl SubApp {
         }
     }
 
+    /// Adds the scheduler manager needed by a manually driven lifecycle.
+    pub(crate) fn add_scheduler_manager(&mut self) {
+        self.scheduler.add_scheduler_manager();
+    }
+
+    /// Marks a prepared scheduler ready to execute update systems.
+    pub(crate) fn set_running(&mut self) {
+        use grass_scheduler::{SchedulerManager, SchedulerState};
+        if let Some(cell) = self
+            .scheduler
+            .get_mut_resource(TypeId::of::<SchedulerManager>())
+        {
+            let mut br = cell.borrow_mut();
+            if let Some(sm) = br.downcast_mut::<SchedulerManager>() {
+                sm.state = SchedulerState::Run;
+            }
+        }
+    }
+
+    /// Runs the update loop after setup has completed.
+    pub(crate) fn run_until_done(&mut self) {
+        while !self.is_done() {
+            self.scheduler.run();
+        }
+    }
+
     /// Returns `true` if a system has signalled simulation end via
     /// [`SchedulerManager::state`](grass_scheduler::SchedulerManager) == `End`.
     pub fn is_done(&self) -> bool {

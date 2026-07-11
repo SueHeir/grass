@@ -92,7 +92,7 @@ pub mod prelude {
         app::App, app::AppError, app::CapabilityProvider, app::ConfigSnippets,
         app::GenerateConfigFlag, app::MissingCapability, app::MissingPluginDependency,
         app::PluginContract, app::PluginContracts, app::PluginDependency, setup::ScheduleSetupSet,
-        sub_app::SubApp, CapabilityId, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin,
-        StageNames, StatesPlugin,
+        sub_app::SubApp, CapabilityId, FallibleSetupSystem, Plugin, PluginGroup,
+        PluginGroupBuilder, StageAdvancePlugin, StageNames, StatesPlugin,
     };
 }
