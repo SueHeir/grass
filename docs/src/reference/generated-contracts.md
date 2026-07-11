@@ -6,7 +6,7 @@ The sample registers Grass built-ins plus `oscillator_demo`, demonstrating the s
 
 ## `grass_io::clock::SimClockPlugin`
 
-Rust API: [https://docs.rs/grass_io](https://docs.rs/grass_io).
+Rust API source: [`crates/grass_io/src/clock.rs`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/clock.rs).
 
 | Contract | Declared value |
 |---|---|
@@ -23,12 +23,12 @@ Simulation step + time accumulator. Set non-zero values to resume a saved state.
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `start_step` | `integer` | `0` | false | [`crates/grass_io/src/clock.rs:62:ClockConfig.start_step`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/clock.rs#L62) |
-| `start_time` | `float` | `0.0` | false | [`crates/grass_io/src/clock.rs:65:ClockConfig.start_time`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/clock.rs#L65) |
+| `start_step` | `integer` | `0` | false | [`crates/grass_io/src/clock.rs:62:ClockConfig.start_step`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/clock.rs#L62) |
+| `start_time` | `float` | `0.0` | false | [`crates/grass_io/src/clock.rs:65:ClockConfig.start_time`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/clock.rs#L65) |
 
 ## `grass_io::dump::DumpPlugin<grass_io::dump::RawFrameWriter>`
 
-Rust API: [https://docs.rs/grass_io](https://docs.rs/grass_io).
+Rust API source: [`crates/grass_io/src/dump.rs`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/dump.rs).
 
 | Contract | Declared value |
 |---|---|
@@ -45,12 +45,12 @@ Periodic per-frame file output.
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `interval` | `integer` | `0` | false | [`crates/grass_io/src/dump.rs:107:DumpConfig.interval`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/dump.rs#L107) |
-| `path_template` | `string` | `"frame_{step:06}.bin"` | false | [`crates/grass_io/src/dump.rs:110:DumpConfig.path_template`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/dump.rs#L110) |
+| `interval` | `integer` | `0` | false | [`crates/grass_io/src/dump.rs:107:DumpConfig.interval`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/dump.rs#L107) |
+| `path_template` | `string` | `"frame_{step:06}.bin"` | false | [`crates/grass_io/src/dump.rs:110:DumpConfig.path_template`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/dump.rs#L110) |
 
 ## `grass_io::run::RunPlugin`
 
-Rust API: [https://docs.rs/grass_io](https://docs.rs/grass_io).
+Rust API source: [`crates/grass_io/src/run.rs`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs).
 
 | Contract | Declared value |
 |---|---|
@@ -67,15 +67,15 @@ One run stage. Repeat [[run]] for multi-stage workflows; unrecognised keys are p
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `name` | `optional` | `—` | false | [`crates/grass_io/src/run.rs:78:StageConfig.name`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/run.rs#L78) |
-| `steps` | `integer` | `1000` | false | [`crates/grass_io/src/run.rs:82:StageConfig.steps`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/run.rs#L82) |
-| `dt` | `float` | `0.0` | false | [`crates/grass_io/src/run.rs:85:StageConfig.dt`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/run.rs#L85) |
-| `skip` | `boolean` | `false` | false | [`crates/grass_io/src/run.rs:89:StageConfig.skip`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/run.rs#L89) |
-| `save_at_end` | `boolean` | `false` | false | [`crates/grass_io/src/run.rs:92:StageConfig.save_at_end`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/run.rs#L92) |
+| `name` | `optional` | `—` | false | [`crates/grass_io/src/run.rs:78:StageConfig.name`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs#L78) |
+| `steps` | `integer` | `1000` | false | [`crates/grass_io/src/run.rs:82:StageConfig.steps`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs#L82) |
+| `dt` | `float` | `0.0` | false | [`crates/grass_io/src/run.rs:85:StageConfig.dt`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs#L85) |
+| `skip` | `boolean` | `false` | false | [`crates/grass_io/src/run.rs:89:StageConfig.skip`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs#L89) |
+| `save_at_end` | `boolean` | `false` | false | [`crates/grass_io/src/run.rs:92:StageConfig.save_at_end`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/run.rs#L92) |
 
 ## `grass_io::term_out::TermOutPlugin`
 
-Rust API: [https://docs.rs/grass_io](https://docs.rs/grass_io).
+Rust API source: [`crates/grass_io/src/term_out.rs`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/term_out.rs).
 
 | Contract | Declared value |
 |---|---|
@@ -92,13 +92,13 @@ Periodic terminal log line. `step` and `time` columns are filled by SimClock.
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `every` | `integer` | `100` | false | [`crates/grass_io/src/term_out.rs:107:TermOutConfig.every`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/term_out.rs#L107) |
-| `columns` | `array` | `["step", "time"]` | false | [`crates/grass_io/src/term_out.rs:110:TermOutConfig.columns`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/term_out.rs#L110) |
-| `width` | `integer` | `14` | false | [`crates/grass_io/src/term_out.rs:115:TermOutConfig.width`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/grass_io/src/term_out.rs#L115) |
+| `every` | `integer` | `100` | false | [`crates/grass_io/src/term_out.rs:107:TermOutConfig.every`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/term_out.rs#L107) |
+| `columns` | `array` | `["step", "time"]` | false | [`crates/grass_io/src/term_out.rs:110:TermOutConfig.columns`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/term_out.rs#L110) |
+| `width` | `integer` | `14` | false | [`crates/grass_io/src/term_out.rs:115:TermOutConfig.width`](https://github.com/SueHeir/grass/blob/main/crates/grass_io/src/term_out.rs#L115) |
 
 ## `oscillator_demo::OscillatorPlugin`
 
-Rust API: [https://docs.rs/oscillator_demo](https://docs.rs/oscillator_demo).
+Rust API source: [`crates/oscillator_demo/src/lib.rs`](https://github.com/SueHeir/grass).
 
 | Contract | Declared value |
 |---|---|
@@ -115,12 +115,12 @@ Parameters for one harmonic-oscillator library instance. The application may com
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `x0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:64:OscillatorConfig.x0`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L64) |
-| `v0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:66:OscillatorConfig.v0`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L66) |
-| `peer_x0` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:68:OscillatorConfig.peer_x0`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L68) |
-| `stiffness` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:71:OscillatorConfig.stiffness`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L71) |
-| `damping` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:73:OscillatorConfig.damping`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L73) |
-| `coupling_stiffness` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:76:OscillatorConfig.coupling_stiffness`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L76) |
-| `mass` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:79:OscillatorConfig.mass`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L79) |
-| `dt` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:81:OscillatorConfig.dt`](https://192.168.4.35/elizabeth-suehr/grass/src/branch/main/crates/oscillator_demo/src/lib.rs#L81) |
+| `x0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:64:OscillatorConfig.x0`](https://github.com/SueHeir/grass) |
+| `v0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:66:OscillatorConfig.v0`](https://github.com/SueHeir/grass) |
+| `peer_x0` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:68:OscillatorConfig.peer_x0`](https://github.com/SueHeir/grass) |
+| `stiffness` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:71:OscillatorConfig.stiffness`](https://github.com/SueHeir/grass) |
+| `damping` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:73:OscillatorConfig.damping`](https://github.com/SueHeir/grass) |
+| `coupling_stiffness` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:76:OscillatorConfig.coupling_stiffness`](https://github.com/SueHeir/grass) |
+| `mass` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:79:OscillatorConfig.mass`](https://github.com/SueHeir/grass) |
+| `dt` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:81:OscillatorConfig.dt`](https://github.com/SueHeir/grass) |
 

@@ -4,8 +4,8 @@ use grass_app::{App, PluginContract};
 use grass_io::{DumpPlugin, RawFrameWriter, RunPlugin, SimClockPlugin, TermOutPlugin};
 use oscillator_demo::OscillatorPlugin;
 
-const RUSTDOC: &str = "https://docs.rs/grass_app";
-const SOURCE: &str = "https://192.168.4.35/elizabeth-suehr/grass/src/branch/main";
+const SOURCE: &str = "https://github.com/SueHeir/grass/blob/main";
+const REPOSITORY: &str = "https://github.com/SueHeir/grass";
 
 fn list(values: &[String]) -> String {
     if values.is_empty() {
@@ -19,21 +19,39 @@ fn source_link(source: &str) -> String {
     let mut parts = source.splitn(3, ':');
     let path = parts.next().unwrap_or(source);
     let line = parts.next().unwrap_or("");
-    format!("[`{source}`]({SOURCE}/{path}#L{line})")
+    // `oscillator_demo` is maintained in this repository but is not yet part
+    // of its GitHub mirror.  Its repository link remains live rather than
+    // emitting a precise-looking dead URL for generated documentation.
+    let url = if path.starts_with("crates/oscillator_demo/") {
+        REPOSITORY.to_string()
+    } else {
+        format!("{SOURCE}/{path}#L{line}")
+    };
+    format!("[`{source}`]({url})")
 }
 
-fn rustdoc(plugin_name: &str) -> &str {
-    match plugin_name.split("::").next().unwrap_or("grass_app") {
-        "grass_io" => "https://docs.rs/grass_io",
-        "oscillator_demo" => "https://docs.rs/oscillator_demo",
-        _ => RUSTDOC,
+fn plugin_source(plugin_name: &str) -> &str {
+    match plugin_name {
+        "grass_io::clock::SimClockPlugin" => "crates/grass_io/src/clock.rs",
+        "grass_io::dump::DumpPlugin<grass_io::dump::RawFrameWriter>" => {
+            "crates/grass_io/src/dump.rs"
+        }
+        "grass_io::run::RunPlugin" => "crates/grass_io/src/run.rs",
+        "grass_io::term_out::TermOutPlugin" => "crates/grass_io/src/term_out.rs",
+        "oscillator_demo::OscillatorPlugin" => "crates/oscillator_demo/src/lib.rs",
+        _ => "crates/grass_app/src/plugin.rs",
     }
 }
 
 fn render_plugin(out: &mut String, plugin: &PluginContract) {
     out.push_str(&format!("## `{}`\n\n", plugin.plugin_name));
-    let rustdoc = rustdoc(&plugin.plugin_name);
-    out.push_str(&format!("Rust API: [{rustdoc}]({rustdoc}).\n\n"));
+    let source = plugin_source(&plugin.plugin_name);
+    let source_url = if source.starts_with("crates/oscillator_demo/") {
+        REPOSITORY.to_string()
+    } else {
+        format!("{SOURCE}/{source}")
+    };
+    out.push_str(&format!("Rust API source: [`{source}`]({source_url}).\n\n"));
     out.push_str("| Contract | Declared value |\n|---|---|\n");
     let deps: Vec<_> = plugin
         .dependencies
