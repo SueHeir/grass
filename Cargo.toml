@@ -39,7 +39,12 @@ grass_io = { workspace = true }
 grass_multi = { workspace = true }
 oscillator_demo = { workspace = true }
 toml = "0.8"
+serde = { version = "1", features = ["derive"] }
 
 [[example]]
 name = "oscillator_demo"
 path = "examples/oscillator_demo/main.rs"
+
+[[example]]
+name = "oscillator_coupling_schemes"
+path = "examples/oscillator_coupling_schemes/main.rs"
