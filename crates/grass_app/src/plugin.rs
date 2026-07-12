@@ -140,7 +140,7 @@ impl ConfigDescription {
             if let Some(example) = &field.example {
                 out.push_str(&field.name);
                 out.push_str(" = ");
-                out.push_str(&example);
+                out.push_str(example);
                 out.push('\n');
             }
         }

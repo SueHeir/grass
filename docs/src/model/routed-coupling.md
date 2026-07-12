@@ -82,6 +82,25 @@ original order within each source. `CouplingEpoch` fails closed when peers are
 executing different exchanges. `EntityId` is opaque to GRASS and may identify
 an entity or one contribution to an entity.
 
+## Coordinated failure
+
+Every fault mode — an out-of-range route, a stale epoch, a malformed frame, or
+an underlying transport error — is agreed across **both** roles before
+`exchange` returns. After the data collective completes on every rank, GRASS
+runs a logical-OR reduction of each rank's failure flag on the isolated
+coupling communicator. If any rank in either role failed, every rank returns an
+error rather than only the rank that detected the fault:
+
+- the rank that failed locally keeps its own specific diagnostic
+  (`DestinationOutOfRange`, `EpochMismatch`, `MalformedFrame`, …);
+- every rank whose own round was valid returns `PeerAborted`.
+
+This guarantees consistent termination: either all ranks return `Ok` or all
+ranks return an error on the same round. No rank can walk into the next
+collective while a peer has already bailed out, so a fault local to one rank
+cannot deadlock its peers. The agreement rides the same duplicated coupling
+context as the data, so it never matches role-local solver traffic.
+
 The initial implementation deliberately filters the already-validated root
 bridge: every rank receives the peer frames and keeps only records addressed
 to itself. This is the correctness oracle. A later owner-to-owner backend can

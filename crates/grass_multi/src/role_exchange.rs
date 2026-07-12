@@ -1,6 +1,7 @@
 //! Correctness-first exchange of variable-sized interface shards between MPI roles.
 
 use crate::{LocalTransport, Transport, TransportError, TransportOperation};
+use mpi::collective::{CommunicatorCollectives, SystemOperation};
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Destination, Source};
 use std::fmt;
@@ -15,6 +16,26 @@ pub trait RoleExchange: Send + Sync + 'static {
     fn peer_size(&self) -> i32;
     /// Collectively exchange one local interface shard for all peer shards.
     fn exchange(&self, local: &[u8]) -> Result<Vec<Vec<u8>>, RoleExchangeError>;
+
+    /// Agree across **both** coupled roles on whether any rank failed this
+    /// round. Returns `true` if any participating rank in either role reports
+    /// `local_failed`.
+    ///
+    /// This must be collective over every rank of both roles on a context
+    /// isolated from solver traffic. It exists so a fault local to one rank
+    /// (an invalid route, a stale epoch, a malformed frame) tears the whole
+    /// coupled exchange down in lockstep instead of leaving peers that
+    /// succeeded blocked inside the *next* collective. Callers run it after
+    /// the data collective has completed on every rank, so no fault can skip
+    /// it.
+    ///
+    /// The default performs no cross-rank coordination and echoes the local
+    /// flag; correctness-first MPI and local-thread backends override it. A
+    /// custom implementation that cannot coordinate keeps today's behaviour
+    /// rather than gaining the guarantee.
+    fn agree_failure(&self, local_failed: bool) -> bool {
+        local_failed
+    }
 }
 
 pub(crate) struct LocalRoleExchange(LocalTransport);
@@ -36,6 +57,15 @@ impl RoleExchange for LocalRoleExchange {
     fn exchange(&self, local: &[u8]) -> Result<Vec<Vec<u8>>, RoleExchangeError> {
         self.0.send(local);
         Ok(vec![self.0.recv()])
+    }
+
+    fn agree_failure(&self, local_failed: bool) -> bool {
+        // The two local roles run as paired threads; swap failure flags over
+        // the same in-memory channel the shards travelled on so a fault in one
+        // role aborts the other in lockstep.
+        self.0.send(&[u8::from(local_failed)]);
+        let peer = self.0.recv();
+        local_failed || peer.first().copied().unwrap_or(0) != 0
     }
 }
 
@@ -109,6 +139,18 @@ impl RoleExchange for MpiRoleExchange {
             self.role.process_at_rank(destination).send(&peer_frame);
         }
         Ok(peer_shards)
+    }
+
+    fn agree_failure(&self, local_failed: bool) -> bool {
+        // `coupling` is a duplicate of raw `MPI_COMM_WORLD`, so it spans every
+        // rank of both roles. A logical-OR (max over 0/1) all-reduce here lets
+        // one rank's fault abort every peer without ever matching solver-role
+        // traffic.
+        let local = u8::from(local_failed);
+        let mut any = 0_u8;
+        self.coupling
+            .all_reduce_into(&local, &mut any, SystemOperation::max());
+        any != 0
     }
 }
 

@@ -47,12 +47,10 @@ jobs:
       - name: LocalTransport two-binary oscillator contract
         run: cargo test --example oscillator_mpmd_local
 
-      # Verify the MPI integration compiles. grass_multi's `mpi` feature pulls
-      # in grass_mpi's mpi_backend (which links libmpi) and the distributed
-      # sub-app path. We build rather than run under mpirun — that needs a
-      # working OpenMPI launcher and adds flakiness for little gain.
-      - name: cargo build --features mpi (MPI integration)
-        run: cargo build -p grass_multi --features mpi --all-targets
+      - name: Routed MPI exchange (live multi-rank)
+        env:
+          OMPI_MCA_rmaps_base_oversubscribe: "1"
+        run: timeout 180 cargo test -p grass_multi --features mpi --test multirank_role_exchange -- --nocapture
 
       - name: MPMD oscillator transport trajectory
         run: |

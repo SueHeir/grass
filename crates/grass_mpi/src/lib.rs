@@ -72,12 +72,12 @@
 use std::ops::{Deref, DerefMut};
 
 mod runtime;
-#[cfg(feature = "mpi_backend")]
-pub use runtime::{Bootstrap, MpiRuntime, MpiRuntimeError};
 pub use runtime::{
     config_digest, BootstrapError, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
     RoleTopologyError, TopologyConfig, TopologyMode, TopologyPlan,
 };
+#[cfg(feature = "mpi_backend")]
+pub use runtime::{Bootstrap, MpiRuntime, MpiRuntimeError};
 
 /// The `grass_mpi` application prelude.
 ///
@@ -116,14 +116,14 @@ pub use runtime::{
 /// # }
 /// ```
 pub mod prelude {
+    pub use crate::{
+        config_digest, CommResource, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
+        SingleProcessComm, TopologyConfig, TopologyMode, TopologyPlan,
+    };
     #[cfg(feature = "mpi_backend")]
     pub use crate::{
         finalize_mpi, get_mpi_world, init_app_color, Bootstrap, MpiCommBackend, MpiRuntime,
         MpiRuntimeError,
-    };
-    pub use crate::{
-        config_digest, CommResource, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
-        SingleProcessComm, TopologyConfig, TopologyMode, TopologyPlan,
     };
 }
 

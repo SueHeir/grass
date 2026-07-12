@@ -7,13 +7,20 @@
 //! correctness oracle.
 
 use crate::{RoleExchange, RoleExchangeError};
-use mpi::collective::CommunicatorCollectives;
+use mpi::collective::{CommunicatorCollectives, SystemOperation};
 use mpi::topology::SimpleCommunicator;
-use mpi::traits::{Communicator, Destination, Source};
+use mpi::traits::{Communicator, Destination, MatchedReceiveVec, Source};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAGIC: &[u8; 4] = b"GRRT";
 const VERSION: u8 = 1;
+
+/// Tag period for the reused coupling context. The nonblocking barrier bounds
+/// the epoch spread between any two ranks to one, so any period `>= 2` keeps two
+/// concurrently live epochs from aliasing to the same tag; the headroom below
+/// stays well under the MPI tag upper bound.
+const EPOCH_TAG_MODULUS: u64 = 1024;
 
 /// Monotonic identifier for one coupling exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -72,6 +79,7 @@ struct MpiSparseRoutedExchange {
     coupling: SimpleCommunicator,
     peer_root: i32,
     peer_size: i32,
+    transport_round: AtomicU64,
 }
 
 unsafe impl Send for MpiSparseRoutedExchange {}
@@ -95,6 +103,7 @@ impl RoutedRoleExchange {
                 coupling: grass_mpi::get_mpi_world_raw().duplicate(),
                 peer_root,
                 peer_size,
+                transport_round: AtomicU64::new(0),
             }),
         }
     }
@@ -121,7 +130,38 @@ impl RoutedRoleExchange {
     /// Delivery order is deterministic: peer source role-rank order, followed
     /// by each source's original record order. Empty outgoing lists still
     /// participate in the collective.
+    ///
+    /// Failure is agreed across **both** roles: if any rank's round is invalid
+    /// — an out-of-range route, a stale epoch, a malformed frame, or a
+    /// transport fault — every rank returns an error rather than only the rank
+    /// that detected it. A rank whose own round was valid learns of a peer's
+    /// fault as [`RoutedExchangeError::PeerAborted`], so no rank walks into the
+    /// next collective while a peer has already bailed out.
     pub fn exchange(
+        &self,
+        epoch: CouplingEpoch,
+        outgoing: &[RoutedPayload],
+    ) -> Result<Vec<ReceivedPayload>, RoutedExchangeError> {
+        // Every rank must reach the failure-agreement collective, so compute
+        // this rank's outcome without letting any local fault return early past
+        // it. `exchange_local` still runs the data collective on all ranks
+        // before surfacing any error.
+        let local_outcome = self.exchange_local(epoch, outgoing);
+        let any_failed = self.agree_failure(local_outcome.is_err());
+        match local_outcome {
+            // This rank has the actionable, specific diagnostic.
+            Err(error) => Err(error),
+            // This rank was valid but a peer aborted; fail in lockstep with an
+            // actionable error rather than proceeding into the next collective.
+            Ok(_) if any_failed => Err(RoutedExchangeError::PeerAborted),
+            Ok(received) => Ok(received),
+        }
+    }
+
+    /// This rank's local exchange outcome. The data collective always completes
+    /// on every rank before an error is surfaced, so the caller can safely run
+    /// the cross-role failure agreement afterwards.
+    fn exchange_local(
         &self,
         epoch: CouplingEpoch,
         outgoing: &[RoutedPayload],
@@ -150,6 +190,16 @@ impl RoutedRoleExchange {
             return Err(error);
         }
         deliver_frames(peer_frames, epoch, self.role_position())
+    }
+
+    /// Reduce `local_failed` across every rank of both roles, returning `true`
+    /// if any rank failed. Delegated to whichever backend owns the isolated
+    /// coupling context.
+    fn agree_failure(&self, local_failed: bool) -> bool {
+        match &self.backend {
+            RoutedBackend::RootBridge(exchange) => exchange.agree_failure(local_failed),
+            RoutedBackend::Sparse(exchange) => exchange.agree_failure(local_failed),
+        }
     }
 }
 
@@ -186,7 +236,6 @@ impl MpiSparseRoutedExchange {
         epoch: CouplingEpoch,
         outgoing: &[RoutedPayload],
     ) -> Result<Vec<Vec<u8>>, RoutedExchangeError> {
-        let world_size = self.coupling.size() as usize;
         let mut by_destination = vec![Vec::new(); self.peer_size as usize];
         for record in outgoing {
             if let Some(records) = by_destination.get_mut(record.destination as usize) {
@@ -198,56 +247,104 @@ impl MpiSparseRoutedExchange {
             .iter()
             .map(|records| encode_frame(epoch, records))
             .collect();
-        let mut send_lengths = vec![0_u64; world_size];
-        for (destination, records) in by_destination.iter().enumerate() {
-            if !records.is_empty() {
-                send_lengths[self.peer_root as usize + destination] =
-                    frames[destination].len() as u64;
-            }
-        }
-        let mut receive_lengths = vec![0_u64; world_size];
-        self.coupling
-            .all_to_all_into(&send_lengths, &mut receive_lengths);
 
+        // Retain one logical frame per peer source so the public delivery order
+        // and source identifiers exactly match the root-bridge oracle. Sources
+        // that route nothing to us keep their empty placeholder frame and are
+        // never transmitted on the wire.
+        let mut received: Vec<Vec<u8>> = (0..self.peer_size)
+            .map(|_| encode_frame(epoch, &[]))
+            .collect();
+
+        // Nonblocking-consensus (NBX) dynamic sparse data exchange. Rather than
+        // a dense world-size all-to-all announcing every rank's per-destination
+        // frame length, each rank issues one synchronous nonblocking send per
+        // non-empty owner-to-owner route, drains incoming frames with matched
+        // probes, and enters a nonblocking barrier once its own sends are
+        // locally matched. The barrier completes only after every rank has
+        // entered, by which point every synchronous send has been matched and
+        // received. Metadata and wire traffic are therefore proportional to the
+        // number of non-empty routes, not to the world size.
+        //
+        // The coupling context is reused across calls, so every message is
+        // stamped with an exchange-local transport round and probed by that
+        // same tag. This keeps a rank that has already raced ahead from
+        // having its send stolen by a peer still draining the current epoch's
+        // `ANY_SOURCE` probe loop. The scientific epoch remains in the frame,
+        // where a mismatched caller can be received and diagnosed instead of
+        // deadlocking on a different MPI tag. The barrier ordering bounds the
+        // transport-round spread between ranks to one, so the small tag period
+        // cannot alias two concurrently live rounds.
+        let transport_round = self.transport_round.fetch_add(1, Ordering::Relaxed);
+        let tag = (transport_round % EPOCH_TAG_MODULUS) as mpi::Tag;
         let sends = by_destination
             .iter()
             .filter(|records| !records.is_empty())
             .count();
-        // Retain one logical frame per peer source so the public delivery
-        // order and source identifiers exactly match the root-bridge oracle,
-        // while transmitting no empty payload frames on the wire.
-        let mut received: Vec<Result<Vec<u8>, RoutedExchangeError>> = (0..self.peer_size)
-            .map(|_| Ok(encode_frame(epoch, &[])))
-            .collect();
+        let mut malformed = false;
         mpi::request::multiple_scope(sends, |scope, requests| {
             for (destination, records) in by_destination.iter().enumerate() {
                 if !records.is_empty() {
                     requests.add(
                         self.coupling
                             .process_at_rank(self.peer_root + destination as i32)
-                            .immediate_send(scope, &frames[destination]),
+                            .immediate_synchronous_send_with_tag(scope, &frames[destination], tag),
                     );
                 }
             }
-            for source in 0..self.peer_size {
-                let world_source = self.peer_root + source;
-                let expected = receive_lengths[world_source as usize];
-                if expected != 0 {
-                    let (frame, _) = self
-                        .coupling
-                        .process_at_rank(world_source)
-                        .receive_vec::<u8>();
-                    if frame.len() as u64 != expected {
-                        received[source as usize] = Err(RoutedExchangeError::MalformedFrame);
-                    } else {
-                        received[source as usize] = Ok(frame);
+
+            let mut completed = Vec::with_capacity(sends);
+            let mut sends_matched = sends == 0;
+            let mut barrier: Option<mpi::request::Request<'static, ()>> = None;
+            loop {
+                // Receive every frame currently deliverable in this epoch's
+                // tagged coupling context. Each peer source routes at most one
+                // frame to this rank, so placing it by source index is
+                // unambiguous.
+                while let Some(probe) = self
+                    .coupling
+                    .any_process()
+                    .immediate_matched_probe_with_tag(tag)
+                {
+                    let source = probe.1.source_rank() - self.peer_root;
+                    let (frame, _) = probe.matched_receive_vec::<u8>();
+                    match received.get_mut(source as usize) {
+                        Some(slot) => *slot = frame,
+                        None => malformed = true,
                     }
                 }
+                match barrier.take() {
+                    None => {
+                        if !sends_matched && requests.test_all(&mut completed) {
+                            sends_matched = true;
+                        }
+                        if sends_matched {
+                            barrier = Some(self.coupling.immediate_barrier());
+                        }
+                    }
+                    Some(request) => match request.test() {
+                        Ok(_) => break,
+                        Err(pending) => barrier = Some(pending),
+                    },
+                }
             }
-            let mut completed = Vec::with_capacity(sends);
-            requests.wait_all(&mut completed);
         });
-        received.into_iter().collect()
+        if malformed {
+            return Err(RoutedExchangeError::MalformedFrame);
+        }
+        Ok(received)
+    }
+
+    fn agree_failure(&self, local_failed: bool) -> bool {
+        // `coupling` is a duplicate of raw `MPI_COMM_WORLD` and therefore spans
+        // every rank of both roles. A logical-OR (max over 0/1) all-reduce lets
+        // one rank's fault abort every peer, on a context isolated from both
+        // role-local solver communicators.
+        let local = u8::from(local_failed);
+        let mut any = 0_u8;
+        self.coupling
+            .all_reduce_into(&local, &mut any, SystemOperation::max());
+        any != 0
     }
 }
 
@@ -360,6 +457,10 @@ pub enum RoutedExchangeError {
         /// Number of ranks in the destination role.
         peer_size: i32,
     },
+    /// This rank's round was valid, but a peer rank in the coupled exchange
+    /// failed. This rank aborts in lockstep instead of entering the next
+    /// collective alone. Inspect the failing peer's log for the root cause.
+    PeerAborted,
     /// The correctness-first role exchange failed.
     Role(RoleExchangeError),
 }
@@ -386,6 +487,10 @@ impl fmt::Display for RoutedExchangeError {
                 f,
                 "destination role-rank {destination} is outside peer role size {peer_size}"
             ),
+            Self::PeerAborted => f.write_str(
+                "coupled routed exchange aborted: a peer rank failed this round; \
+                 see that rank's diagnostic for the root cause",
+            ),
             Self::Role(error) => write!(f, "role exchange: {error}"),
         }
     }
@@ -401,6 +506,20 @@ mod tests {
         local_rank: i32,
         local_size: i32,
         peer_frames: Vec<Vec<u8>>,
+        /// Simulate a peer rank that failed its round so the both-role
+        /// agreement reports failure even when this rank's round was valid.
+        peer_failed: bool,
+    }
+
+    impl FakeRoleExchange {
+        fn new(local_rank: i32, local_size: i32, peer_frames: Vec<Vec<u8>>) -> Self {
+            Self {
+                local_rank,
+                local_size,
+                peer_frames,
+                peer_failed: false,
+            }
+        }
     }
 
     impl RoleExchange for FakeRoleExchange {
@@ -414,6 +533,10 @@ mod tests {
 
         fn exchange(&self, _local: &[u8]) -> Result<Vec<Vec<u8>>, RoleExchangeError> {
             Ok(self.peer_frames.clone())
+        }
+
+        fn agree_failure(&self, local_failed: bool) -> bool {
+            local_failed || self.peer_failed
         }
     }
 
@@ -436,11 +559,7 @@ mod tests {
                 ],
             ),
         ];
-        let routed = RoutedRoleExchange::new(Box::new(FakeRoleExchange {
-            local_rank: 1,
-            local_size: 3,
-            peer_frames,
-        }));
+        let routed = RoutedRoleExchange::new(Box::new(FakeRoleExchange::new(1, 3, peer_frames)));
         let received = routed.exchange(epoch, &[]).unwrap();
         assert_eq!(
             received,
@@ -475,11 +594,11 @@ mod tests {
     #[test]
     fn local_destination_is_checked_against_peer_role_size() {
         let epoch = CouplingEpoch(3);
-        let routed = RoutedRoleExchange::new(Box::new(FakeRoleExchange {
-            local_rank: 0,
-            local_size: 1,
-            peer_frames: vec![encode_frame(epoch, &[])],
-        }));
+        let routed = RoutedRoleExchange::new(Box::new(FakeRoleExchange::new(
+            0,
+            1,
+            vec![encode_frame(epoch, &[])],
+        )));
         let error = routed
             .exchange(epoch, &[RoutedPayload::new(1, EntityId(9), vec![])])
             .unwrap_err();
@@ -502,6 +621,40 @@ mod tests {
         assert_eq!(
             decode_frame(&frame, CouplingEpoch(1)).unwrap_err(),
             RoutedExchangeError::MalformedFrame
+        );
+    }
+
+    #[test]
+    fn locally_valid_round_aborts_when_a_peer_fails() {
+        // This rank's own round is entirely valid, but the both-role agreement
+        // reports a peer failure. It must abort in lockstep rather than return
+        // its (now meaningless) delivery and walk into the next collective.
+        let epoch = CouplingEpoch(2);
+        let mut fake = FakeRoleExchange::new(0, 1, vec![encode_frame(epoch, &[])]);
+        fake.peer_failed = true;
+        let routed = RoutedRoleExchange::new(Box::new(fake));
+        assert_eq!(
+            routed.exchange(epoch, &[]).unwrap_err(),
+            RoutedExchangeError::PeerAborted
+        );
+    }
+
+    #[test]
+    fn locally_failed_round_reports_its_own_actionable_error() {
+        // When this rank both fails locally and a peer fails, it keeps its own
+        // specific diagnostic instead of the generic peer-abort error.
+        let epoch = CouplingEpoch(3);
+        let mut fake = FakeRoleExchange::new(0, 1, vec![encode_frame(epoch, &[])]);
+        fake.peer_failed = true;
+        let routed = RoutedRoleExchange::new(Box::new(fake));
+        assert_eq!(
+            routed
+                .exchange(epoch, &[RoutedPayload::new(5, EntityId(1), vec![])])
+                .unwrap_err(),
+            RoutedExchangeError::DestinationOutOfRange {
+                destination: 5,
+                peer_size: 1,
+            }
         );
     }
 
