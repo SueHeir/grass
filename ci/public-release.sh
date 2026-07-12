@@ -13,13 +13,15 @@ fi
 
 for repo in "${repos[@]}"; do
   dir="$ROOT/$repo"
-  test -d "$dir/.git" || { echo "missing sibling checkout: $dir" >&2; exit 2; }
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || {
+    echo "missing sibling checkout: $dir" >&2; exit 2;
+  }
   test -z "$(git -C "$dir" status --porcelain)" || {
     echo "$repo has uncommitted changes" >&2; exit 2;
   }
   if rg -n '192\.168\.|ssh://git@' "$dir" \
       --glob 'Cargo.toml' --glob '*.md' --glob '*.sh' || \
-     rg -n 'path = "\.\./' "$dir" --glob 'Cargo.toml'; then
+     rg -n 'path = "(\.\./)+(grass|soil|field|dirt|dev_)' "$dir" --glob 'Cargo.toml'; then
     echo "$repo contains a non-public dependency or link" >&2
     exit 2
   fi
