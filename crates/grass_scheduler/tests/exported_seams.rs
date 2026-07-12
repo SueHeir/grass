@@ -271,6 +271,56 @@ fn zero_iteration_loop_runs_rollback_but_not_body() {
     assert_eq!(log(&s), ["b"]);
 }
 
+fn at_two(n: Res<Count>) -> bool {
+    n.0 == 2
+}
+
+#[test]
+fn inner_rollback_cursor_resets_for_each_outer_retry() {
+    let mut s = Scheduler::default();
+    s.add_resource(Log::default());
+    s.add_resource(Count::default());
+    s.add_update_system(a, Phase::A);
+    s.add_update_system(b, Phase::B);
+    s.add_update_system(count, Phase::C);
+    s.set_schedule(
+        Schedule::builder()
+            .loop_until(at_two, 2, grass_scheduler::OnMax::Panic, |outer| {
+                outer.loop_with_rollback(
+                    || false,
+                    1,
+                    |body| body.then_variant(Phase::A),
+                    |rollback| {
+                        rollback
+                            .then_variant(Phase::B)
+                            .export_seam("inner.rollback")
+                            .then_variant(Phase::C)
+                    },
+                )
+            })
+            .build(),
+    );
+    s.organize_systems();
+
+    assert_eq!(
+        s.resume(),
+        ScheduleProgress::Yielded(grass_scheduler::ScheduleSeam::new("inner.rollback"))
+    );
+    assert_eq!(log(&s), ["a", "b"]);
+    assert_eq!(s.get_resource_ref::<Count>().unwrap().0, 0);
+
+    assert_eq!(
+        s.resume(),
+        ScheduleProgress::Yielded(grass_scheduler::ScheduleSeam::new("inner.rollback"))
+    );
+    assert_eq!(log(&s), ["a", "b", "a", "b"]);
+    assert_eq!(s.get_resource_ref::<Count>().unwrap().0, 1);
+
+    assert_eq!(s.resume(), ScheduleProgress::Complete);
+    assert_eq!(s.get_resource_ref::<Count>().unwrap().0, 2);
+    assert_eq!(s.timing_steps(), 1);
+}
+
 #[test]
 fn no_match_branch_clears_its_frame_and_continues() {
     let mut s = Scheduler::default();
