@@ -117,9 +117,8 @@ fn get<T: Copy + 'static>(parent: &App, subapp: &str) -> T {
     let subs = parent
         .get_resource_ref::<SubApps>()
         .expect("registered sub-apps");
-    let cell = subs
-        .find(subapp)
-        .expect("known sub-app")
+    let physics = subs.find(subapp).expect("known sub-app");
+    let cell = physics
         .resource_cell(TypeId::of::<T>())
         .expect("registered resource")
         .borrow();
@@ -131,11 +130,12 @@ fn put<T: Copy + 'static>(parent: &mut App, subapp: &str, value: T) {
         .get_mut_resource(TypeId::of::<SubApps>())
         .expect("registered sub-apps");
     let mut subs = subs.borrow_mut();
-    let cell = subs
+    let physics = subs
         .downcast_mut::<SubApps>()
         .expect("SubApps resource")
         .find(subapp)
-        .expect("known sub-app")
+        .expect("known sub-app");
+    let cell = physics
         .resource_cell(TypeId::of::<T>())
         .expect("registered resource");
     *cell
