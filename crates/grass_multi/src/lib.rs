@@ -25,7 +25,7 @@
 //!     into the same `SubApps` machinery as local sub-Apps
 //!   - [`Wire`] / [`Transport`] / `MpiInterCommTransport` (behind the
 //!     `mpi` feature) for cross-process coupling
-//!   - [`CoupledPairRunner`] (behind the `mpi` feature) for process-level
+//!   - `CoupledPairRunner` (behind the `mpi` feature) for process-level
 //!     configuration, local-vs-split placement, transport construction, and
 //!     MPI lifecycle around a two-role coupling
 //!   - [`OuterIterStopPlugin`] for fixed-iter termination, or the
