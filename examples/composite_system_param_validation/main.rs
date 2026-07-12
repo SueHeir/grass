@@ -114,7 +114,8 @@ fn invalid_nested_contract() -> bool {
 }
 
 fn main() {
-    let cases: [(&str, fn() -> bool); 2] = [
+    type ValidationCase = (&'static str, fn() -> bool);
+    let cases: [ValidationCase; 2] = [
         ("valid_nested_contract", valid_nested_contract),
         ("invalid_nested_contract", invalid_nested_contract),
     ];

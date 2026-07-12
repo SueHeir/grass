@@ -105,7 +105,8 @@ fn legacy_string_compatibility() -> bool {
 }
 
 fn main() {
-    let cases: [(&str, fn() -> bool); 4] = [
+    type ValidationCase = (&'static str, fn() -> bool);
+    let cases: [ValidationCase; 4] = [
         ("typed_required_order", typed_required_order),
         ("required_missing_target", required_missing_target),
         ("optional_missing_target", optional_missing_target),

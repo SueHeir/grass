@@ -31,7 +31,7 @@ fn run_child() {
     assert_eq!(assignment.world_range().count() as i32, backend.size());
     match assignment.world_rank() {
         0 | 1 => assert_eq!(assignment.name(), "dem"),
-        2 | 3 | 4 => assert_eq!(assignment.name(), "cfd"),
+        2..=4 => assert_eq!(assignment.name(), "cfd"),
         rank => panic!("unexpected raw-world rank {rank}"),
     }
 
