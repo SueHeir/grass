@@ -216,6 +216,7 @@ impl Transport for LocalTransport {
 pub struct MpiInterCommTransport {
     world: mpi::topology::SimpleCommunicator,
     peer_rank: i32,
+    pending: Mutex<Option<Vec<u8>>>,
 }
 
 // SAFETY: rsmpi's SimpleCommunicator is `!Send`/`!Sync` because it wraps
@@ -236,7 +237,11 @@ impl MpiInterCommTransport {
     /// this binary's intra-comm out.
     pub fn new(peer_rank: i32) -> Self {
         let world = grass_mpi::get_mpi_world_raw();
-        Self { world, peer_rank }
+        Self {
+            world,
+            peer_rank,
+            pending: Mutex::new(None),
+        }
     }
 }
 
@@ -247,18 +252,38 @@ impl Transport for MpiInterCommTransport {
     }
 
     fn try_send(&self, payload: &[u8]) -> Result<(), TransportError> {
-        use mpi::topology::Communicator;
-        use mpi::traits::Destination;
-        let process = self.world.process_at_rank(self.peer_rank);
-        process.send(payload);
+        let mut pending = self.pending.lock().unwrap();
+        if pending.is_some() {
+            return Err(TransportError::new(
+                self.transport_name(),
+                TransportOperation::Send,
+                "send called twice before recv completed the previous exchange",
+            ));
+        }
+        *pending = Some(payload.to_vec());
         Ok(())
     }
 
     fn try_recv(&self) -> Result<Vec<u8>, TransportError> {
         use mpi::topology::Communicator;
-        use mpi::traits::Source;
+        let payload = self.pending.lock().unwrap().take().ok_or_else(|| {
+            TransportError::new(
+                self.transport_name(),
+                TransportOperation::Recv,
+                "recv called before send; MPI coupling exchanges are symmetric framed rounds",
+            )
+        })?;
         let process = self.world.process_at_rank(self.peer_rank);
-        let (data, _status) = process.receive_vec::<u8>();
+        let send_len = payload.len() as u64;
+        let (recv_len, _) =
+            mpi::point_to_point::send_receive::<u64, _, _, _>(&send_len, &process, &process);
+        let mut data = vec![0; recv_len as usize];
+        mpi::point_to_point::send_receive_into(
+            payload.as_slice(),
+            &process,
+            data.as_mut_slice(),
+            &process,
+        );
         Ok(data)
     }
 }
