@@ -17,9 +17,10 @@ The ownership rule is deliberate:
 
 ## Current support
 
-As of the exported-seam implementation (`e09bd95`), seams may occur only
-between direct children of the schedule's top-level `Sequence`. A child is
-advanced with `advance_to_seam::<NS>(expected_id)` and finished with
+As of the recursive exported-seam implementation, seams may occur between
+top-level phases or inside a `Sequence`, `Loop`, selected `Branch` arm, or
+rollback fragment. A child is advanced with
+`advance_to_seam::<NS>(expected_id)` and finished with
 `complete_subapp_step::<NS>()`. Both operations fail closed if the child yields
 at a different seam or completes at an unexpected point.
 
@@ -45,11 +46,10 @@ parent.add_update_system(
 when the parent system returns. The following coupling system can therefore
 use `MultiRes` / `MultiResMut` without re-entrant access to `SubApps`.
 
-Seams nested in a `Loop`, `Branch`, or rollback fragment are currently rejected
-when the schedule is installed. They require a recursive resumable cursor that
-preserves loop iteration, selected branch, and rollback state across yields.
-The examples below motivate that extension; they are a roadmap, not current API
-claims.
+The scheduler retains an owned recursive execution cursor across yields. Loop
+conditions are evaluated only after a complete body, branch selection is
+latched until that arm completes, and rollback state resumes exactly where it
+yielded. Only completion of the full top-level schedule advances the timestep.
 
 ## Why nested seams matter
 
@@ -78,15 +78,15 @@ void-fraction changes are a representative CFD-DEM case. Added-mass-sensitive
 immersed-boundary coupling is another: a loose exchange can be unstable even
 when each standalone solver is stable.
 
-Conceptually, the future schedule could read:
+The schedule can express that structure directly:
 
 ```rust,ignore
 Schedule::builder()
     .loop_until(interface_converged, max_iters, OnMax::Panic, |iter| {
         iter.then_variant(CfdPhase::InterfaceSolve)
-            .export_seam("cfd.interface_ready") // roadmap: nested seam
+            .export_seam("cfd.interface_ready")
             .then_variant(DemPhase::Respond)
-            .export_seam("dem.interface_ready") // roadmap: nested seam
+            .export_seam("dem.interface_ready")
             .then_variant(CoupledPhase::Residual)
     })
     .build()
@@ -147,7 +147,7 @@ being mistaken for data from the retry.
 
 ## Protocol invariants for recursive seams
 
-Nested support should preserve these invariants:
+Nested support preserves these invariants:
 
 1. **Stable identity.** Every boundary has an explicit, unique protocol ID;
    callers verify the expected ID and fail closed on mismatch.
