@@ -138,7 +138,7 @@ pub use iterative::{
 };
 pub use manager::*;
 pub use param::*;
-pub use schedule::{BranchBuilder, OnMax, Schedule, ScheduleBuilder, ScheduleNode};
+pub use schedule::{BranchBuilder, OnMax, Schedule, ScheduleBuilder, ScheduleNode, ScheduleSeam};
 pub use snapshot::{restore_resource, snapshot_resource, Snapshot};
 
 // ─── Prelude ──────────────────────────────────────────────────────────────────

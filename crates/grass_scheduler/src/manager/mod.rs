@@ -11,6 +11,82 @@ use std::collections::HashMap;
 
 use crate::param::topo_sort_group;
 
+/// Result of advancing a timestep to an exported schedule seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduleProgress {
+    /// Execution paused immediately after the named seam.
+    Yielded(crate::ScheduleSeam),
+    /// The timestep finished; the next resume starts a fresh timestep.
+    Complete,
+}
+
+/// Failure to advance to a requested exported seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduleSeamError {
+    /// No hierarchical schedule is installed.
+    NoSchedule,
+    /// The seam is absent or has already been passed in this timestep.
+    NotReachable {
+        /// Requested seam marker type name.
+        seam: &'static str,
+        /// Whether this timestep has already yielded at an earlier seam.
+        timestep_in_progress: bool,
+    },
+}
+
+impl std::fmt::Display for ScheduleSeamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSchedule => f.write_str("cannot yield: no hierarchical Schedule is installed"),
+            Self::NotReachable { seam, timestep_in_progress } => write!(
+                f,
+                "exported schedule seam `{seam}` is not reachable{}; it is absent or was already passed",
+                if *timestep_in_progress { " in the current timestep" } else { "" }
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScheduleSeamError {}
+
+fn validate_exported_seams(root: &ScheduleNode) {
+    fn reject_nested(node: &ScheduleNode, context: &str) {
+        match node {
+            ScheduleNode::ExportedSeam(seam) => panic!(
+                "Schedule validation: exported seam `{}` is inside {context}. Export seams only between direct children of the top-level Sequence; split the Loop/Branch/Rollback into parent-visible phases.",
+                seam.id()
+            ),
+            ScheduleNode::Sequence(nodes) => nodes.iter().for_each(|n| reject_nested(n, context)),
+            ScheduleNode::Loop { body, on_max, .. } => {
+                reject_nested(body, "a Loop");
+                if let OnMax::Rollback(rb) = on_max {
+                    reject_nested(rb, "a Rollback");
+                }
+            }
+            ScheduleNode::Branch { arms } => arms.iter().for_each(|(_, n)| reject_nested(n, "a Branch")),
+            ScheduleNode::Phase { .. } => {}
+        }
+    }
+
+    let ScheduleNode::Sequence(nodes) = root else {
+        reject_nested(root, "a non-sequence schedule root");
+        return;
+    };
+    let mut seen = std::collections::HashSet::new();
+    for node in nodes {
+        match node {
+            ScheduleNode::ExportedSeam(seam) => {
+                assert!(
+                    !seam.id().is_empty(),
+                    "Schedule validation: exported seam ID must not be empty"
+                );
+                assert!(seen.insert(seam.id()), "Schedule validation: exported seam `{}` occurs more than once; use a distinct stable ID for every boundary", seam.id());
+            }
+            other => reject_nested(other, "a nested schedule node"),
+        }
+    }
+}
+
 // ─── Simulation states ────────────────────────────────────────────────────────
 
 /// The currently active simulation state.
@@ -459,6 +535,8 @@ pub struct Scheduler {
     /// filtered run pass); when `None`, falls back to today's flat
     /// `(namespace, index)`-sorted run. Set via [`set_schedule`](Self::set_schedule).
     pub(crate) schedule: Option<Schedule>,
+    /// Next top-level schedule node to execute in a partially yielded step.
+    pub(crate) schedule_cursor: usize,
     /// Cached resource index of the [`CoherenceRegistry`], if one is registered.
     /// `None` (the default) makes the per-system coherence hooks a no-op, so
     /// CPU-only runs pay nothing. Resolved in [`organize_systems`](Self::organize_systems).
@@ -484,6 +562,7 @@ impl Default for Scheduler {
             stage_names: Vec::new(),
             warning_fn: None,
             schedule: None,
+            schedule_cursor: 0,
             coherence_index: None,
         }
     }
@@ -491,6 +570,12 @@ impl Default for Scheduler {
 
 // ANCHOR: SchedulerImpl
 impl Scheduler {
+    /// Number of complete update timesteps executed. Partial progress to an
+    /// exported seam does not increment this counter.
+    pub fn timing_steps(&self) -> usize {
+        self.timing_steps
+    }
+
     /// Sorts all registered systems by [`ScheduleSet`] phase, topologically sorts within
     /// each phase, resolves resource indices, and validates the schedule.
     ///
@@ -714,9 +799,62 @@ impl Scheduler {
             .schedule
             .take()
             .expect("Scheduler::run_with_schedule called without an installed Schedule");
-        self.run_node(&mut sched.root);
+        assert!(
+            !schedule::contains_exported_seam(&sched.root),
+            "Scheduler::run() cannot cross exported schedule seams; drive this schedule with `resume()` until ScheduleProgress::Complete"
+        );
+        if let ScheduleNode::Sequence(children) = &mut sched.root {
+            for node in children.iter_mut().skip(self.schedule_cursor) {
+                self.run_node(node);
+            }
+        } else {
+            self.run_node(&mut sched.root);
+        }
+        self.schedule_cursor = 0;
         self.timing_steps += 1;
         self.schedule = Some(sched);
+    }
+
+    /// Advances to the next exported seam, or completes the timestep if no
+    /// seam remains. It never crosses an unreported seam.
+    pub fn resume(&mut self) -> ScheduleProgress {
+        let mut sched = self
+            .schedule
+            .take()
+            .expect("Scheduler::resume called without an installed Schedule");
+        let progress = match &mut sched.root {
+            ScheduleNode::Sequence(children) => {
+                let next = children
+                    .iter()
+                    .enumerate()
+                    .skip(self.schedule_cursor)
+                    .find_map(|(i, node)| match node {
+                        ScheduleNode::ExportedSeam(seam) => Some((i, *seam)),
+                        _ => None,
+                    });
+                if let Some((target, seam)) = next {
+                    for node in children[self.schedule_cursor..target].iter_mut() {
+                        self.run_node(node);
+                    }
+                    self.schedule_cursor = target + 1;
+                    ScheduleProgress::Yielded(seam)
+                } else {
+                    for node in children.iter_mut().skip(self.schedule_cursor) {
+                        self.run_node(node);
+                    }
+                    self.schedule_cursor = 0;
+                    self.timing_steps += 1;
+                    ScheduleProgress::Complete
+                }
+            }
+            root => {
+                self.run_node(root);
+                self.timing_steps += 1;
+                ScheduleProgress::Complete
+            }
+        };
+        self.schedule = Some(sched);
+        progress
     }
 
     /// Recursive walker. `node` is borrowed from a `Schedule` that's been
@@ -767,6 +905,7 @@ impl Scheduler {
                 }
                 // No arm matched — graceful no-op.
             }
+            ScheduleNode::ExportedSeam(_) => {}
         }
     }
 
@@ -829,6 +968,11 @@ impl Scheduler {
     ///   registered yet (conditions are `prepare`d here against the current
     ///   resource index).
     pub fn set_schedule(&mut self, mut schedule: Schedule) {
+        assert_eq!(
+            self.schedule_cursor, 0,
+            "cannot replace a hierarchical Schedule while a timestep is suspended at an exported seam; finish the timestep with `run()` first"
+        );
+        validate_exported_seams(&schedule.root);
         // 1. Assign namespaces in tree-walk order.
         let mut counter: u32 = 0;
         schedule::assign_namespaces(&mut schedule.root, &mut counter);
@@ -896,6 +1040,7 @@ impl Scheduler {
         }
 
         self.schedule = Some(schedule);
+        self.schedule_cursor = 0;
     }
 
     /// Returns `true` if a [`Schedule`] has been installed via

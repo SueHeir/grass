@@ -66,6 +66,12 @@ impl SubApp {
         self.scheduler.run();
     }
 
+    /// Advances this child through an exported schedule seam, yielding
+    /// control to its external orchestrator at that boundary.
+    pub fn resume(&mut self) -> grass_scheduler::ScheduleProgress {
+        self.scheduler.resume()
+    }
+
     /// One-shot setup for an externally-driven loop:
     /// `add_scheduler_manager` → `organize_systems` → `setup`. After this you
     /// can call [`run`](Self::run) repeatedly until [`is_done`](Self::is_done).

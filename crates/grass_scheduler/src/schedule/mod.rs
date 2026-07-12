@@ -56,6 +56,24 @@
 use crate::{Condition, IntoCondition, ScheduleSet};
 use std::any::TypeId;
 
+/// A stable, typed identifier for an exported scheduler yield point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ScheduleSeam {
+    pub(crate) id: &'static str,
+}
+
+impl ScheduleSeam {
+    /// Creates a seam with an explicit ID stable across processes and builds.
+    pub const fn new(id: &'static str) -> Self {
+        Self { id }
+    }
+
+    /// Stable seam ID.
+    pub const fn id(self) -> &'static str {
+        self.id
+    }
+}
+
 /// What to do when a [`ScheduleNode::Loop`] hits its `max_iters` without the
 /// `until` condition flipping to `true`.
 ///
@@ -136,6 +154,10 @@ pub enum ScheduleNode {
         /// matches runs, and the rest are skipped.
         arms: Vec<(Box<dyn Condition + 'static>, ScheduleNode)>,
     },
+    /// An opt-in boundary at which an external orchestrator may regain
+    /// control. Exported seams are currently supported only as direct
+    /// children of the schedule's top-level `Sequence`.
+    ExportedSeam(ScheduleSeam),
 }
 
 impl std::fmt::Debug for ScheduleNode {
@@ -171,6 +193,7 @@ impl std::fmt::Debug for ScheduleNode {
                     .field("bodies", &bodies)
                     .finish()
             }
+            Self::ExportedSeam(seam) => f.debug_tuple("ExportedSeam").field(seam).finish(),
         }
     }
 }
@@ -273,6 +296,14 @@ impl ScheduleBuilder {
             variant: Some(value.to_index()),
             namespace: 0,
         });
+        self
+    }
+
+    /// Append an externally visible yield boundary. IDs are explicit stable
+    /// protocol names (for example `"cfd.output"`) and must be unique.
+    pub fn export_seam(mut self, id: &'static str) -> Self {
+        self.nodes
+            .push(ScheduleNode::ExportedSeam(ScheduleSeam::new(id)));
         self
     }
 
@@ -435,6 +466,21 @@ pub(crate) fn assign_namespaces(node: &mut ScheduleNode, counter: &mut u32) {
                 assign_namespaces(body, counter);
             }
         }
+        ScheduleNode::ExportedSeam(_) => {}
+    }
+}
+
+/// Whether a tree contains any externally exported boundary.
+pub(crate) fn contains_exported_seam(node: &ScheduleNode) -> bool {
+    match node {
+        ScheduleNode::ExportedSeam(_) => true,
+        ScheduleNode::Sequence(nodes) => nodes.iter().any(contains_exported_seam),
+        ScheduleNode::Loop { body, on_max, .. } => {
+            contains_exported_seam(body)
+                || matches!(on_max, OnMax::Rollback(rb) if contains_exported_seam(rb))
+        }
+        ScheduleNode::Branch { arms } => arms.iter().any(|(_, n)| contains_exported_seam(n)),
+        ScheduleNode::Phase { .. } => false,
     }
 }
 
@@ -481,6 +527,7 @@ pub(crate) fn collect_phase_assignments(node: &ScheduleNode, out: &mut Vec<Phase
                 collect_phase_assignments(body, out);
             }
         }
+        ScheduleNode::ExportedSeam(_) => {}
     }
 }
 
@@ -516,6 +563,7 @@ pub(crate) fn prepare_conditions(
                 errors.extend(prepare_conditions(body, index));
             }
         }
+        ScheduleNode::ExportedSeam(_) => {}
     }
     errors
 }
