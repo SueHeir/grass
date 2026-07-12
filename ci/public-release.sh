@@ -35,6 +35,25 @@ for repo in "${repos[@]}"; do
   echo "PASS $repo $(git -C "$dir" rev-parse --short HEAD)"
 done
 
+# A public URL is not sufficient: a committed lockfile can keep a clean clone on
+# an older ecosystem revision indefinitely. Verify every locked public-main
+# dependency against the commit GitHub currently advertises for that repository.
+for repo in "${repos[@]}"; do
+  lock="$ROOT/$repo/Cargo.lock"
+  git -C "$ROOT/$repo" ls-files --error-unmatch Cargo.lock >/dev/null 2>&1 || continue
+  while read -r dependency locked; do
+    public=$(git ls-remote "https://github.com/$OWNER/$dependency.git" refs/heads/main | awk '{print $1}')
+    [[ -n "$public" && "$locked" == "$public" ]] || {
+      echo "$repo/Cargo.lock pins $dependency at ${locked:0:8}, not public main ${public:0:8}" >&2
+      echo "run: (cd $ROOT/$repo && cargo update -p <a-package-from-$dependency>)" >&2
+      exit 2
+    }
+  done < <(
+    sed -nE "s|.*git\+https://github.com/$OWNER/([^.]*)\.git\?branch=main#([0-9a-f]{40}).*|\1 \2|p" "$lock" |
+      sort -u
+  )
+done
+
 if [[ "$MODE" == "--push" ]]; then
   for repo in "${repos[@]}"; do
     dir="$ROOT/$repo"
