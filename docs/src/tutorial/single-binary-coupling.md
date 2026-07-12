@@ -266,3 +266,7 @@ CFD partition owners → only intersecting DEM partition owners
 
 That optimization must reproduce the root bridge's mapped values and
 conservation residuals before replacing it in production-scale runs.
+
+The geometry-free routed API and the ownership boundary between GRASS, FIELD,
+SOIL, and the coupling package are formalized in
+[Routed Coupling Without Geometry in GRASS](../model/routed-coupling.md).

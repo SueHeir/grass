@@ -2,11 +2,12 @@
 
 #![cfg(feature = "mpi")]
 
-use grass_multi::{CoupledPairRunner, RoleLaunch};
 use grass_mpi::{CommBackend, MpiCommBackend};
+use grass_multi::{CoupledPairRunner, CouplingEpoch, EntityId, RoleLaunch, RoutedPayload};
 use std::process::Command;
 
 const CHILD_ENV: &str = "GRASS_MULTI_ROLE_EXCHANGE_CHILD";
+const ROUTED_CHILD_ENV: &str = "GRASS_MULTI_ROUTED_EXCHANGE_CHILD";
 const NRANKS: i32 = 5;
 const CONFIG: &str = r#"
     [topology]
@@ -63,6 +64,57 @@ fn run_role(launch: RoleLaunch) {
     }
 }
 
+fn run_routed_role(launch: RoleLaunch) {
+    let role = launch.role().to_owned();
+    let exchange = launch.into_routed_exchange();
+    let (rank, size) = exchange.role_position();
+    assert_eq!(size, if role == "dem" { 3 } else { 2 });
+
+    for step in 0..3_u64 {
+        let payload = vec![rank as u8; 128 * 1024 + rank as usize * 31];
+        let outgoing = match (role.as_str(), rank) {
+            ("dem", 0) => vec![RoutedPayload::new(0, EntityId(100), payload)],
+            ("dem", 1) => vec![
+                RoutedPayload::new(0, EntityId(110), payload.clone()),
+                RoutedPayload::new(1, EntityId(111), payload),
+            ],
+            ("dem", 2) => vec![RoutedPayload::new(1, EntityId(121), payload)],
+            ("cfd", 0) => vec![
+                RoutedPayload::new(0, EntityId(200), payload.clone()),
+                RoutedPayload::new(1, EntityId(201), payload),
+            ],
+            ("cfd", 1) => vec![
+                RoutedPayload::new(1, EntityId(211), payload.clone()),
+                RoutedPayload::new(2, EntityId(212), payload),
+            ],
+            _ => panic!("unexpected role/rank {role}/{rank}"),
+        };
+        let received = exchange
+            .exchange(CouplingEpoch(step), &outgoing)
+            .expect("exchange routed role records");
+        let keys: Vec<(i32, u64)> = received
+            .iter()
+            .map(|record| (record.source, record.entity_id.0))
+            .collect();
+        let expected = match (role.as_str(), rank) {
+            ("dem", 0) => vec![(0, 200)],
+            ("dem", 1) => vec![(0, 201), (1, 211)],
+            ("dem", 2) => vec![(1, 212)],
+            ("cfd", 0) => vec![(0, 100), (1, 110)],
+            ("cfd", 1) => vec![(1, 111), (2, 121)],
+            _ => unreachable!(),
+        };
+        assert_eq!(keys, expected);
+        for record in received {
+            assert_eq!(record.payload[0], record.source as u8);
+            assert_eq!(
+                record.payload.len(),
+                128 * 1024 + record.source as usize * 31
+            );
+        }
+    }
+}
+
 #[test]
 fn unequal_roles_exchange_all_large_shards_in_rank_order() {
     if std::env::var_os(CHILD_ENV).is_some() {
@@ -93,4 +145,33 @@ fn unequal_roles_exchange_all_large_shards_in_rank_order() {
         status.success(),
         "multi-rank role exchange failed: {status}"
     );
+}
+
+#[test]
+fn unequal_roles_route_large_records_to_selected_owners() {
+    if std::env::var_os(ROUTED_CHILD_ENV).is_some() {
+        CoupledPairRunner::from_source(CONFIG)
+            .and_then(|runner| runner.run(run_routed_role, run_routed_role))
+            .expect("run unequal routed exchange");
+        return;
+    }
+    if Command::new("mpirun").arg("--version").output().is_err() {
+        eprintln!("SKIP routed role exchange: `mpirun` not found");
+        return;
+    }
+    let executable = std::env::current_exe().expect("locate test binary");
+    let status = Command::new("mpirun")
+        .args(["--oversubscribe", "-np", &NRANKS.to_string()])
+        .arg(executable)
+        .args([
+            "--exact",
+            "unequal_roles_route_large_records_to_selected_owners",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ROUTED_CHILD_ENV, "1")
+        .env("OMPI_MCA_btl", "self,vader")
+        .status()
+        .expect("spawn routed role test under mpirun");
+    assert!(status.success(), "routed role exchange failed: {status}");
 }

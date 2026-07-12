@@ -148,6 +148,8 @@ mod remote;
 #[cfg(feature = "mpi")]
 mod role_exchange;
 #[cfg(feature = "mpi")]
+mod routed_exchange;
+#[cfg(feature = "mpi")]
 mod runner;
 mod snapshot;
 mod transport;
@@ -172,6 +174,11 @@ pub use remote::{
 };
 #[cfg(feature = "mpi")]
 pub use role_exchange::{MpiRoleExchange, RoleExchange, RoleExchangeError, SinglePeerTransport};
+#[cfg(feature = "mpi")]
+pub use routed_exchange::{
+    CouplingEpoch, EntityId, ReceivedPayload, RoutedExchangeError, RoutedPayload,
+    RoutedRoleExchange,
+};
 #[cfg(feature = "mpi")]
 pub use runner::{CoupledPairRunner, PairRun, RoleLaunch, RunnerError};
 pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};

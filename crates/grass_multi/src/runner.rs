@@ -1,7 +1,7 @@
 //! Declarative process runner for a locally composed or MPI-split solver pair.
 
 use crate::role_exchange::LocalRoleExchange;
-use crate::{MpiRoleExchange, RoleExchange, SinglePeerTransport, Transport};
+use crate::{MpiRoleExchange, RoleExchange, RoutedRoleExchange, SinglePeerTransport, Transport};
 use grass_mpi::{config_digest, Bootstrap, MpiRuntime, RoleTopology, TopologyConfig};
 use serde::Deserialize;
 use std::fmt;
@@ -41,6 +41,13 @@ impl RoleLaunch {
     /// peer-role shards in deterministic peer role-rank order.
     pub fn into_role_exchange(self) -> Box<dyn RoleExchange> {
         self.exchange
+    }
+
+    /// Consume the launch and recover an opaque routed exchange. Coupling
+    /// code supplies peer role-rank destinations; GRASS performs deterministic
+    /// delivery without interpreting coordinates or scientific entities.
+    pub fn into_routed_exchange(self) -> RoutedRoleExchange {
+        RoutedRoleExchange::new(self.exchange)
     }
 
     /// Split the launch into its input document and transport.
