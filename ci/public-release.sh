@@ -20,7 +20,7 @@ for repo in "${repos[@]}"; do
     echo "$repo has uncommitted changes" >&2; exit 2;
   }
   if rg -n '192\.168\.|ssh://git@' "$dir" \
-      --glob 'Cargo.toml' --glob '*.md' --glob '*.sh' || \
+      --glob 'Cargo.toml' --glob '*.md' --glob '*.sh' --glob '!ci/public-release.sh' || \
      rg -n 'path = "(\.\./)+(grass|soil|field|dirt|dev_)' "$dir" --glob 'Cargo.toml'; then
     echo "$repo contains a non-public dependency or link" >&2
     exit 2
