@@ -20,3 +20,5 @@ grass_derive = { workspace = true }
 grass_scheduler = { workspace = true }
 grass_mpi = { workspace = true, optional = true }
 mpi = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

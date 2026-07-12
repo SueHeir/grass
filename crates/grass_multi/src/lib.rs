@@ -6,7 +6,8 @@
 //! store; the parent `App`'s schedule decides when each sub-App ticks and
 //! when cross-namespace couplers run.
 //!
-//! There is no orchestrator type, no Strategy enum, no Coupler trait — just:
+//! Coupling remains an explicit parent schedule rather than a hidden strategy
+//! engine. The crate provides:
 //!
 //!   - [`SubApps`] resource + [`MultiAppExt::add_subapp`] /
 //!     [`MultiAppExt::add_remote_subapp`] for registration
@@ -24,6 +25,9 @@
 //!     into the same `SubApps` machinery as local sub-Apps
 //!   - [`Wire`] / [`Transport`] / `MpiInterCommTransport` (behind the
 //!     `mpi` feature) for cross-process coupling
+//!   - [`CoupledPairRunner`] (behind the `mpi` feature) for process-level
+//!     configuration, local-vs-split placement, transport construction, and
+//!     MPI lifecycle around a two-role coupling
 //!   - [`OuterIterStopPlugin`] for fixed-iter termination, or the
 //!     [`OuterIteration`] + [`converge_outer_iter`] combinator for a
 //!     Picard/Aitken-accelerated outer loop that stops on a convergence test
@@ -142,6 +146,8 @@ mod physics;
 mod port;
 mod relax;
 mod remote;
+#[cfg(feature = "mpi")]
+mod runner;
 mod snapshot;
 mod transport;
 mod typed_multi;
@@ -163,6 +169,8 @@ pub use remote::{
     RemoteMirrorPhysics, RemotePumpDirection, RemotePumpError, RemotePumpPhase,
     RemoteTransportError, RemoteUnpackError,
 };
+#[cfg(feature = "mpi")]
+pub use runner::{CoupledPairRunner, PairRun, RoleLaunch, RunnerError};
 pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};
 #[cfg(feature = "mpi")]
 pub use transport::MpiInterCommTransport;

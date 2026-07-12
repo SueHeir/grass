@@ -128,6 +128,20 @@ pub trait Transport: Send + Sync + 'static {
     }
 }
 
+impl Transport for Box<dyn Transport> {
+    fn transport_name(&self) -> &str {
+        (**self).transport_name()
+    }
+
+    fn try_send(&self, payload: &[u8]) -> Result<(), TransportError> {
+        (**self).try_send(payload)
+    }
+
+    fn try_recv(&self) -> Result<Vec<u8>, TransportError> {
+        (**self).try_recv()
+    }
+}
+
 // ─── LocalTransport: in-memory bidirectional channel ─────────────────────────
 
 /// Two ends of an in-memory transport, for testing without a real network.

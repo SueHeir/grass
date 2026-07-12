@@ -13,12 +13,11 @@
 
 use grass_app::prelude::*;
 use grass_io::Config;
-use grass_multi::{tick_subapp, LocalTransport, Multi, MultiAppExt, SubApps, Transport, Wire};
+use grass_multi::{tick_subapp, Multi, MultiAppExt, SubApps, Transport, Wire};
 use grass_scheduler::prelude::*;
 use oscillator_demo::{OscillatorPlugin, OscillatorState, PeerPosition};
 use serde::Deserialize;
 use std::any::TypeId;
-use std::thread;
 
 pub const A: &str = "a";
 pub const B: &str = "b";
@@ -65,14 +64,6 @@ pub struct SideResult {
 pub struct PairResult {
     pub a: SideResult,
     pub b: SideResult,
-}
-
-/// One completed coupling iteration, retained so a transport implementation can
-/// be compared over its whole trajectory rather than only its final state.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PairTrace {
-    pub result: PairResult,
-    pub steps: Vec<PairResult>,
 }
 
 impl PairResult {
@@ -223,39 +214,6 @@ pub fn run_side_with_trace<Tr: Transport + 'static>(
     )
 }
 
-pub fn run_side<Tr: Transport + 'static>(name: &str, transport: Tr, config_str: &str) -> SideResult {
-    run_side_with_trace(name, transport, config_str).0
-}
-
-/// In-process reference using the exact same `RemotePosition` wire contract and
-/// parent schedule as the split path, with `LocalTransport` replacing MPI. This
-/// is the `TopologyMode::Local` composition.
-pub fn run_local_pair(config_str: &str) -> PairResult {
-    run_local_pair_trace(config_str).result
-}
-
-/// Replay both roles with `LocalTransport`, preserving every completed coupling
-/// step for comparison with the split (MPI) trajectory.
-pub fn run_local_pair_trace(config_str: &str) -> PairTrace {
-    let (a_transport, b_transport) = LocalTransport::pair();
-    let a_config = config_str.to_string();
-    let b_config = config_str.to_string();
-    let a = thread::spawn(move || run_side_with_trace(A, a_transport, &a_config));
-    let b = thread::spawn(move || run_side_with_trace(B, b_transport, &b_config));
-    let (a, a_steps) = a.join().expect("local A thread");
-    let (b, b_steps) = b.join().expect("local B thread");
-    assert_eq!(a_steps.len(), b_steps.len(), "two-sided trace length");
-    let steps = a_steps
-        .into_iter()
-        .zip(b_steps)
-        .map(|(a, b)| PairResult { a, b })
-        .collect();
-    PairTrace {
-        result: PairResult { a, b },
-        steps,
-    }
-}
-
 pub fn print_pair(label: &str, result: PairResult) {
     println!(
         "{label} a={:.17e},{:.17e} b={:.17e},{:.17e} mirrors={:.17e},{:.17e} fingerprint={:016x?}",
@@ -269,15 +227,16 @@ pub fn print_pair(label: &str, result: PairResult) {
     );
 }
 
-pub fn print_local_trace(steps: &[PairResult]) {
-    for (step, result) in steps.iter().enumerate() {
+pub fn print_local_trace(a_steps: &[SideResult], b_steps: &[SideResult]) {
+    assert_eq!(a_steps.len(), b_steps.len(), "two-sided trace length");
+    for (step, (a, b)) in a_steps.iter().zip(b_steps).enumerate() {
         println!(
             "LOCAL_TRACE step={} a={:.17e},{:.17e} b={:.17e},{:.17e}",
             step + 1,
-            result.a.state.x,
-            result.a.state.v,
-            result.b.state.x,
-            result.b.state.v,
+            a.state.x,
+            a.state.v,
+            b.state.x,
+            b.state.v,
         );
     }
 }

@@ -9,10 +9,21 @@ ways, and **only the declarative `[topology]` TOML decides which**:
 | `split`           | `mpirun -np 2 … split.toml`    | one role per rank; `MPI_COMM_WORLD` split       |
 | `auto` *(default)*| either of the above            | world size 1 → local, world size 2 → split      |
 
-The Rust in `contract.rs` and the physics tables are byte-identical across both
-runs. Nothing in the composition branches on how the process was launched — the
-launch-vs-compose decision is made once, before any `App` is built, by
-`grass_mpi::MpiRuntime::bootstrap` reading the `[topology]` table.
+The role function and physics tables are byte-identical across both runs.
+`grass_multi::CoupledPairRunner` owns configuration loading, topology
+resolution, local threading, MPI role selection, peer-rank lookup, transport
+construction, and MPI finalization. The example only supplies the role code and
+checks its results.
+
+The entry point is intentionally small:
+
+```rust,ignore
+let run = CoupledPairRunner::from_cli_or(DEFAULT_CONFIG)?
+    .run(run_role_a, run_role_b)?;
+```
+
+This runner is process-level rather than an `App` plugin because GRASS must
+select which solver App belongs on the process before constructing that App.
 
 ## Run it
 
@@ -35,11 +46,9 @@ final states are also bit-identical (`fingerprint_match=True`).
 ## How the split addresses its peer
 
 The `[topology]` roles are laid out contiguously in declaration order, so role
-`a` owns raw-world rank 0 and role `b` owns rank 1. Each rank resolves its own
-role from `MpiRuntime::bootstrap`, then asks the topology for the *peer* role's
-world-rank range (`RoleTopology::role_world_range`) and couples to it with
-`MpiInterCommTransport`. No out-of-band rank map is needed: the same declarative
-topology that split the world also names the coupling peer.
+`a` owns raw-world rank 0 and role `b` owns rank 1. The runner resolves both the
+local role and peer rank and supplies the selected transport to the role code.
+No application-level bootstrap or out-of-band rank map is needed.
 
 Before the split, every rank cross-checks that it parsed an identical
 configuration (`all_uniform_u64` over a `config_digest`); a disagreement is
