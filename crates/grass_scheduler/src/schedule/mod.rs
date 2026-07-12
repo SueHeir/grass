@@ -155,8 +155,8 @@ pub enum ScheduleNode {
         arms: Vec<(Box<dyn Condition + 'static>, ScheduleNode)>,
     },
     /// An opt-in boundary at which an external orchestrator may regain
-    /// control. Exported seams are currently supported only as direct
-    /// children of the schedule's top-level `Sequence`.
+    /// control. Seams may appear at any depth, including loop bodies,
+    /// selected branch arms, and rollback fragments.
     ExportedSeam(ScheduleSeam),
 }
 

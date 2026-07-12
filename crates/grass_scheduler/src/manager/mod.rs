@@ -50,30 +50,7 @@ impl std::fmt::Display for ScheduleSeamError {
 impl std::error::Error for ScheduleSeamError {}
 
 fn validate_exported_seams(root: &ScheduleNode) {
-    fn reject_nested(node: &ScheduleNode, context: &str) {
-        match node {
-            ScheduleNode::ExportedSeam(seam) => panic!(
-                "Schedule validation: exported seam `{}` is inside {context}. Export seams only between direct children of the top-level Sequence; split the Loop/Branch/Rollback into parent-visible phases.",
-                seam.id()
-            ),
-            ScheduleNode::Sequence(nodes) => nodes.iter().for_each(|n| reject_nested(n, context)),
-            ScheduleNode::Loop { body, on_max, .. } => {
-                reject_nested(body, "a Loop");
-                if let OnMax::Rollback(rb) = on_max {
-                    reject_nested(rb, "a Rollback");
-                }
-            }
-            ScheduleNode::Branch { arms } => arms.iter().for_each(|(_, n)| reject_nested(n, "a Branch")),
-            ScheduleNode::Phase { .. } => {}
-        }
-    }
-
-    let ScheduleNode::Sequence(nodes) = root else {
-        reject_nested(root, "a non-sequence schedule root");
-        return;
-    };
-    let mut seen = std::collections::HashSet::new();
-    for node in nodes {
+    fn visit(node: &ScheduleNode, seen: &mut std::collections::HashSet<&'static str>) {
         match node {
             ScheduleNode::ExportedSeam(seam) => {
                 assert!(
@@ -82,9 +59,46 @@ fn validate_exported_seams(root: &ScheduleNode) {
                 );
                 assert!(seen.insert(seam.id()), "Schedule validation: exported seam `{}` occurs more than once; use a distinct stable ID for every boundary", seam.id());
             }
-            other => reject_nested(other, "a nested schedule node"),
+            ScheduleNode::Sequence(nodes) => nodes.iter().for_each(|n| visit(n, seen)),
+            ScheduleNode::Loop { body, on_max, .. } => {
+                visit(body, seen);
+                if let OnMax::Rollback(rb) = on_max {
+                    visit(rb, seen);
+                }
+            }
+            ScheduleNode::Branch { arms } => arms.iter().for_each(|(_, n)| visit(n, seen)),
+            ScheduleNode::Phase { .. } => {}
         }
     }
+    let mut seen = std::collections::HashSet::new();
+    visit(root, &mut seen);
+}
+
+#[derive(Debug, Default)]
+enum ExecutionState {
+    #[default]
+    NotStarted,
+    Sequence {
+        next: usize,
+        child: Box<ExecutionState>,
+    },
+    Loop {
+        iterations: usize,
+        rollback: bool,
+        child: Box<ExecutionState>,
+    },
+    Branch {
+        selected: Option<usize>,
+        evaluated: bool,
+        child: Box<ExecutionState>,
+    },
+    SeamYielded,
+    Complete,
+}
+
+enum NodeProgress {
+    Yielded(crate::ScheduleSeam),
+    Complete,
 }
 
 // ─── Simulation states ────────────────────────────────────────────────────────
@@ -535,8 +549,8 @@ pub struct Scheduler {
     /// filtered run pass); when `None`, falls back to today's flat
     /// `(namespace, index)`-sorted run. Set via [`set_schedule`](Self::set_schedule).
     pub(crate) schedule: Option<Schedule>,
-    /// Next top-level schedule node to execute in a partially yielded step.
-    pub(crate) schedule_cursor: usize,
+    /// Owned recursive interpreter state for a partially yielded timestep.
+    schedule_execution: ExecutionState,
     /// Cached resource index of the [`CoherenceRegistry`], if one is registered.
     /// `None` (the default) makes the per-system coherence hooks a no-op, so
     /// CPU-only runs pay nothing. Resolved in [`organize_systems`](Self::organize_systems).
@@ -562,7 +576,7 @@ impl Default for Scheduler {
             stage_names: Vec::new(),
             warning_fn: None,
             schedule: None,
-            schedule_cursor: 0,
+            schedule_execution: ExecutionState::NotStarted,
             coherence_index: None,
         }
     }
@@ -803,14 +817,11 @@ impl Scheduler {
             !schedule::contains_exported_seam(&sched.root),
             "Scheduler::run() cannot cross exported schedule seams; drive this schedule with `resume()` until ScheduleProgress::Complete"
         );
-        if let ScheduleNode::Sequence(children) = &mut sched.root {
-            for node in children.iter_mut().skip(self.schedule_cursor) {
-                self.run_node(node);
-            }
-        } else {
-            self.run_node(&mut sched.root);
-        }
-        self.schedule_cursor = 0;
+        assert!(matches!(
+            self.schedule_execution,
+            ExecutionState::NotStarted
+        ));
+        self.run_node(&mut sched.root);
         self.timing_steps += 1;
         self.schedule = Some(sched);
     }
@@ -822,39 +833,178 @@ impl Scheduler {
             .schedule
             .take()
             .expect("Scheduler::resume called without an installed Schedule");
-        let progress = match &mut sched.root {
-            ScheduleNode::Sequence(children) => {
-                let next = children
-                    .iter()
-                    .enumerate()
-                    .skip(self.schedule_cursor)
-                    .find_map(|(i, node)| match node {
-                        ScheduleNode::ExportedSeam(seam) => Some((i, *seam)),
-                        _ => None,
-                    });
-                if let Some((target, seam)) = next {
-                    for node in children[self.schedule_cursor..target].iter_mut() {
-                        self.run_node(node);
-                    }
-                    self.schedule_cursor = target + 1;
-                    ScheduleProgress::Yielded(seam)
-                } else {
-                    for node in children.iter_mut().skip(self.schedule_cursor) {
-                        self.run_node(node);
-                    }
-                    self.schedule_cursor = 0;
-                    self.timing_steps += 1;
-                    ScheduleProgress::Complete
-                }
-            }
-            root => {
-                self.run_node(root);
+        let mut state = std::mem::take(&mut self.schedule_execution);
+        let progress = match self.advance_node(&mut sched.root, &mut state) {
+            NodeProgress::Yielded(seam) => ScheduleProgress::Yielded(seam),
+            NodeProgress::Complete => {
+                state = ExecutionState::NotStarted;
                 self.timing_steps += 1;
                 ScheduleProgress::Complete
             }
         };
+        self.schedule_execution = state;
         self.schedule = Some(sched);
         progress
+    }
+
+    fn advance_node(
+        &mut self,
+        node: &mut ScheduleNode,
+        state: &mut ExecutionState,
+    ) -> NodeProgress {
+        match node {
+            ScheduleNode::Phase { namespace, .. } => {
+                if !matches!(state, ExecutionState::Complete) {
+                    self.run_namespace_filtered(*namespace);
+                    *state = ExecutionState::Complete;
+                }
+                NodeProgress::Complete
+            }
+            ScheduleNode::ExportedSeam(seam) => match state {
+                ExecutionState::NotStarted => {
+                    *state = ExecutionState::SeamYielded;
+                    NodeProgress::Yielded(*seam)
+                }
+                ExecutionState::SeamYielded | ExecutionState::Complete => {
+                    *state = ExecutionState::Complete;
+                    NodeProgress::Complete
+                }
+                _ => unreachable!("invalid exported seam execution state"),
+            },
+            ScheduleNode::Sequence(children) => {
+                if matches!(state, ExecutionState::NotStarted) {
+                    *state = ExecutionState::Sequence {
+                        next: 0,
+                        child: Box::default(),
+                    };
+                }
+                let ExecutionState::Sequence { next, child } = state else {
+                    unreachable!("invalid Sequence execution state")
+                };
+                while *next < children.len() {
+                    match self.advance_node(&mut children[*next], child) {
+                        NodeProgress::Yielded(s) => return NodeProgress::Yielded(s),
+                        NodeProgress::Complete => {
+                            *next += 1;
+                            **child = ExecutionState::NotStarted;
+                        }
+                    }
+                }
+                *state = ExecutionState::Complete;
+                NodeProgress::Complete
+            }
+            ScheduleNode::Branch { arms } => {
+                if matches!(state, ExecutionState::NotStarted) {
+                    *state = ExecutionState::Branch {
+                        selected: None,
+                        evaluated: false,
+                        child: Box::default(),
+                    };
+                }
+                let ExecutionState::Branch {
+                    selected,
+                    evaluated,
+                    child,
+                } = state
+                else {
+                    unreachable!("invalid Branch execution state")
+                };
+                if !*evaluated {
+                    *selected = arms
+                        .iter_mut()
+                        .position(|(cond, _)| cond.evaluate(&self.resources));
+                    *evaluated = true;
+                }
+                let Some(index) = *selected else {
+                    *state = ExecutionState::Complete;
+                    return NodeProgress::Complete;
+                };
+                match self.advance_node(&mut arms[index].1, child) {
+                    NodeProgress::Yielded(s) => NodeProgress::Yielded(s),
+                    NodeProgress::Complete => {
+                        *state = ExecutionState::Complete;
+                        NodeProgress::Complete
+                    }
+                }
+            }
+            ScheduleNode::Loop {
+                body,
+                until,
+                max_iters,
+                on_max,
+            } => {
+                if matches!(state, ExecutionState::NotStarted) {
+                    *state = ExecutionState::Loop {
+                        iterations: 0,
+                        rollback: false,
+                        child: Box::default(),
+                    };
+                }
+                loop {
+                    let ExecutionState::Loop {
+                        iterations,
+                        rollback,
+                        child,
+                    } = state
+                    else {
+                        unreachable!("invalid Loop execution state")
+                    };
+                    if *iterations == 0 && *max_iters == 0 && !*rollback {
+                        match on_max {
+                            OnMax::AcceptUnconverged => {
+                                *state = ExecutionState::Complete;
+                                return NodeProgress::Complete;
+                            }
+                            OnMax::Panic => panic!(
+                                "Schedule Loop did not converge in 0 iterations (until = `{}`)",
+                                until.name()
+                            ),
+                            OnMax::Rollback(_) => {
+                                *rollback = true;
+                            }
+                        }
+                    }
+                    let target = if *rollback {
+                        match on_max {
+                            OnMax::Rollback(rb) => &mut **rb,
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        &mut **body
+                    };
+                    match self.advance_node(target, child) {
+                        NodeProgress::Yielded(s) => return NodeProgress::Yielded(s),
+                        NodeProgress::Complete if *rollback => {
+                            *state = ExecutionState::Complete;
+                            return NodeProgress::Complete;
+                        }
+                        NodeProgress::Complete => {}
+                    }
+                    *iterations += 1;
+                    **child = ExecutionState::NotStarted;
+                    if until.evaluate(&self.resources) {
+                        *state = ExecutionState::Complete;
+                        return NodeProgress::Complete;
+                    }
+                    if *iterations >= *max_iters {
+                        match on_max {
+                            OnMax::AcceptUnconverged => {
+                                *state = ExecutionState::Complete;
+                                return NodeProgress::Complete;
+                            }
+                            OnMax::Panic => panic!(
+                                "Schedule Loop did not converge in {} iterations (until = `{}`)",
+                                max_iters,
+                                until.name()
+                            ),
+                            OnMax::Rollback(_) => {
+                                *rollback = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Recursive walker. `node` is borrowed from a `Schedule` that's been
@@ -969,7 +1119,7 @@ impl Scheduler {
     ///   resource index).
     pub fn set_schedule(&mut self, mut schedule: Schedule) {
         assert_eq!(
-            self.schedule_cursor, 0,
+            matches!(self.schedule_execution, ExecutionState::NotStarted), true,
             "cannot replace a hierarchical Schedule while a timestep is suspended at an exported seam; finish the timestep with `run()` first"
         );
         validate_exported_seams(&schedule.root);
@@ -1040,7 +1190,7 @@ impl Scheduler {
         }
 
         self.schedule = Some(schedule);
-        self.schedule_cursor = 0;
+        self.schedule_execution = ExecutionState::NotStarted;
     }
 
     /// Returns `true` if a [`Schedule`] has been installed via
