@@ -55,6 +55,13 @@ use std::rc::{Rc, Weak};
 
 pub(crate) type Participant = Rc<RefCell<Box<dyn Physics>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParticipantState {
+    Registered,
+    Prepared,
+    Cleaned,
+}
+
 /// Shared, non-owning participant registry injected into the parent and every
 /// local child App. It lets a system running inside one child resolve a peer
 /// without borrowing the parent's monolithic [`SubApps`] resource.
@@ -106,11 +113,10 @@ pub struct SubApps {
     physics: Vec<Participant>,
     names: Vec<String>,
     name_to_idx: HashMap<String, usize>,
-    /// Per-physics flag — `true` once `prepare()` has been called for that
-    /// sub-App. We track it here (not on `Physics`) so the tick loop is
-    /// idempotent regardless of whether a `Physics` impl makes its own
-    /// `prepare` idempotent.
-    prepared: Vec<bool>,
+    /// Per-participant lifecycle state. Tracking this in the orchestrator
+    /// makes both preparation and cleanup idempotent regardless of whether a
+    /// particular `Physics` implementation protects its own hooks.
+    states: Vec<ParticipantState>,
     contexts_installed: bool,
 }
 
@@ -129,7 +135,7 @@ impl SubApps {
             physics: Vec::new(),
             names: Vec::new(),
             name_to_idx: HashMap::new(),
-            prepared: Vec::new(),
+            states: Vec::new(),
             contexts_installed: false,
         }
     }
@@ -144,7 +150,7 @@ impl SubApps {
         self.name_to_idx.insert(name.clone(), idx);
         self.names.push(name);
         self.physics.push(Rc::new(RefCell::new(p)));
-        self.prepared.push(false);
+        self.states.push(ParticipantState::Registered);
         self.contexts_installed = false;
     }
 
@@ -165,7 +171,7 @@ impl SubApps {
     ) -> Option<R> {
         let idx = self.idx_of(ns)?;
         assert!(
-            !self.prepared[idx],
+            self.states[idx] == ParticipantState::Registered,
             "SubApps::configure_local_app: `{ns}` was already prepared"
         );
         self.physics[idx].borrow_mut().local_app_mut().map(configure)
@@ -217,9 +223,15 @@ impl SubApps {
         let idx = self
             .idx_of(ns)
             .unwrap_or_else(|| panic!("SubApps::prepare: unknown namespace `{ns}`"));
-        if !self.prepared[idx] {
-            self.physics[idx].borrow_mut().prepare();
-            self.prepared[idx] = true;
+        match self.states[idx] {
+            ParticipantState::Registered => {
+                self.physics[idx].borrow_mut().prepare();
+                self.states[idx] = ParticipantState::Prepared;
+            }
+            ParticipantState::Prepared => {}
+            ParticipantState::Cleaned => {
+                panic!("SubApps::prepare: `{ns}` was already cleaned up")
+            }
         }
     }
 
@@ -237,11 +249,17 @@ impl SubApps {
         self.physics.iter().any(|p| p.borrow().is_done())
     }
 
-    /// Run every sub-App's `cleanup()` exactly once. Call before drop when
-    /// the parent App owns the orchestration loop.
+    /// Clean every successfully prepared sub-App exactly once.
+    ///
+    /// Registered participants that never reached [`prepare`](Self::prepare)
+    /// are skipped. Repeated calls are no-ops for participants whose cleanup
+    /// already completed.
     pub fn cleanup_all(&mut self) {
-        for p in &self.physics {
-            p.borrow_mut().cleanup();
+        for (participant, state) in self.physics.iter().zip(&mut self.states) {
+            if *state == ParticipantState::Prepared {
+                participant.borrow_mut().cleanup();
+                *state = ParticipantState::Cleaned;
+            }
         }
     }
 }
