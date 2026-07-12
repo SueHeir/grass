@@ -25,13 +25,27 @@ With GRASS, there is no locked structure; however, it does ask you to get your h
 ```rust
 use grass_app::prelude::*;
 use grass_scheduler::prelude::*;
-use grass_derive::prelude::*;
 
 /// Per-step phases. Declaration order = schedule index.
-#[derive(Debug, Clone, Copy, ScheduleSet)]
+#[derive(Debug, Clone, Copy)]
 enum Step {
     Tick,
     CheckDone,
+}
+
+impl ScheduleSet for Step {
+    fn to_index(&self) -> u32 {
+        match self {
+            Step::Tick => 0,
+            Step::CheckDone => 1,
+        }
+    }
+    fn name(&self) -> &'static str {
+        match self {
+            Step::Tick => "Tick",
+            Step::CheckDone => "CheckDone",
+        }
+    }
 }
 
 /// The one piece of simulation state.
@@ -65,8 +79,22 @@ impl Plugin for CounterPlugin {
 fn main() {
     let mut app = App::new();
     app.add_plugins(CounterPlugin);
+    // `start()` is the self-driving path: organize → setup → run-until-End → cleanup.
     app.start();
+
+    let counter = app.get_resource_ref::<Counter>().expect("Counter resource");
+    println!("hello_app: ran {} steps", counter.steps);
+    assert_eq!(
+        counter.steps, 5,
+        "expected the done-condition to stop at 5 steps"
+    );
 }
+```
+
+This is the runnable [`hello_app`](examples/hello_app/main.rs). Run it with:
+
+```console
+cargo run --example hello_app
 ```
 
 This is a lot of code to count to 5, but it explains the following very well:
@@ -85,9 +113,19 @@ fn main() {
     let mut app = App::new();
     app.add_subapp("dem", setup::dem())
       .add_subapp("cfd", setup::cfd())
-      .add_plugins(DemCfdCouplingPlugin::new(RADIUS, 200))
+      .add_plugins(DemCfdCouplingPlugin::for_air(RADIUS, 200, DT, GRAVITY))
       .start();
 }
+```
+
+This is the actual runnable
+[`hello_dem_cfd/main.rs`](https://github.com/SueHeir/dev_couple_dem_cfd/blob/main/examples/hello_dem_cfd/main.rs)
+composition. Its independent DEM and CFD builders are in
+[`hello_dem_cfd/setup.rs`](https://github.com/SueHeir/dev_couple_dem_cfd/blob/main/examples/hello_dem_cfd/setup.rs).
+Run it from that repository with:
+
+```console
+cargo run --example hello_dem_cfd
 ```
 
 Only five lines? Well, not really: `setup::dem()` and `setup::cfd()` still build
@@ -139,10 +177,15 @@ That division of ownership is the important part:
 
 ### We have CFD code and DEM code. What does the coupling plugin look like?
 
-The two solver builders return ordinary Apps. The DEM App holds resources such
-as `Atom` and `FluidForces`; the CFD App holds resources such as `ParticleSet`,
-`CfdState`, and `InterphaseForces`. Those types come from SOIL, FIELD/CFD, and
-the DEM-CFD coupling package—not from GRASS.
+The two solver builders return ordinary Apps. Before coupling, the DEM App holds
+its `Atom` state and DEM systems; the CFD App holds its mesh, `CfdState`, and CFD
+systems. The runnable [`setup.rs`](https://github.com/SueHeir/dev_couple_dem_cfd/blob/main/examples/hello_dem_cfd/setup.rs)
+contains no coupling resources, exchange systems, or references from one solver
+to the other.
+
+The coupling plugin installs the coupling package's seam resources and adapter
+systems into those Apps before either child is prepared. GRASS holds the
+instances, but SOIL, FIELD/CFD, and the coupling package define their types.
 
 The coupling package supplies systems that translate between the two resource
 stores. For example, the export system reads the DEM particles and writes the
@@ -151,13 +194,21 @@ CFD-facing particle set:
 ```rust
 fn export_kinematics(world: Multi, spec: Res<ParticleSpec>) {
     let atoms = world.expect_read::<Atom>("dem");
-    let mut particles = world.expect_write::<ParticleSet>("cfd");
-
-    particles.particles.clear();
-    for i in 0..atoms.nlocal as usize {
-        particles.particles.push(ParticleKinematics {
-            center: atoms.pos[i].map(f64::from),
-            velocity: atoms.vel[i].map(f64::from),
+    let n = atoms.nlocal as usize;
+    let mut set = world.expect_write::<ParticleSet>("cfd");
+    set.particles.clear();
+    for i in 0..n {
+        set.particles.push(ParticleKinematics {
+            center: [
+                atoms.pos[i][0] as f64,
+                atoms.pos[i][1] as f64,
+                atoms.pos[i][2] as f64,
+            ],
+            velocity: [
+                atoms.vel[i][0] as f64,
+                atoms.vel[i][1] as f64,
+                atoms.vel[i][2] as f64,
+            ],
             radius: spec.radius,
         });
     }
@@ -168,11 +219,11 @@ The reverse system reads the forces produced by CFD and writes the resource the
 DEM force phase consumes:
 
 ```rust
-fn import_force(world: Multi) {
-    let cfd_forces = world.expect_read::<InterphaseForces>("cfd");
-    let mut dem_forces = world.expect_write::<FluidForces>("dem");
-
-    dem_forces.f.clone_from(&cfd_forces.force);
+fn import_force_typed(
+    forces: MultiRes<InterphaseForces, CfdNs>,
+    mut fluid_forces: MultiResMut<FluidForces, DemNs>,
+) {
+    fluid_forces.f.clone_from(&forces.force);
 }
 ```
 
@@ -180,27 +231,52 @@ The plugin packages those systems with the order of one coupled step:
 
 ```rust
 struct DemCfdCouplingPlugin {
-    particle_radius: f64,
-    steps: u32,
+    pub particle_radius: f64,
+    pub steps: u32,
+    pub gas_density: f64,
+    pub gas_viscosity: f64,
+    pub gravity: Vec3,
+    pub dt: f64,
 }
 
 impl Plugin for DemCfdCouplingPlugin {
-    fn build(&self, parent: &mut App) {
-        parent
-            .add_resource(ParticleSpec {
-                radius: self.particle_radius,
-            })
-            .add_update_system(export_kinematics, CouplePhase::Export)
-            .add_update_system(tick_subapp("cfd", 1), CouplePhase::TickCfd)
-            .add_update_system(import_force, CouplePhase::Import)
-            .add_update_system(tick_subapp("dem", 1), CouplePhase::TickSoil)
-            .add_plugins(OuterIterStopPlugin {
-                n_iters: self.steps,
-                phase: CouplePhase::Check,
-            });
+    fn build(&self, app: &mut App) {
+        let ctx = SeamCtx {
+            mu: self.gas_viscosity,
+            rho: self.gas_density,
+            eps: 1.0,
+            g: self.gravity,
+            dt: self.dt,
+            mode: SeamMode::default(),
+        };
+        app.configure_subapp("dem", |dem| {
+            dem.add_resource(FluidForces::default());
+            dem.add_update_system(add_fluid_force, ParticleSimScheduleSet::Force);
+        });
+        app.configure_subapp("cfd", |cfd| {
+            cfd.add_resource(ctx);
+            cfd.add_resource(ParticleSet::default());
+            cfd.add_resource(InterphaseForces::default());
+            cfd.add_update_system(point_particle_exchange, MeshScheduleSet::Output);
+        });
+        app.add_resource(ParticleSpec {
+            radius: self.particle_radius,
+        });
+        app.add_update_system(export_kinematics, CouplePhase::Export);
+        app.add_update_system(tick_n_times::<CfdNs>(1), CouplePhase::TickCfd);
+        app.add_update_system(import_force_typed, CouplePhase::Import);
+        app.add_update_system(tick_n_times::<DemNs>(1), CouplePhase::TickSoil);
+        app.add_plugins(OuterIterStopPlugin {
+            n_iters: self.steps,
+            phase: CouplePhase::Check,
+        });
     }
 }
 ```
+
+These are literal excerpts from the runnable coupling package's
+[`dem_cfd/src/seam.rs`](https://github.com/SueHeir/dev_couple_dem_cfd/blob/main/crates/dem_cfd/src/seam.rs),
+with only comments and cleanup omitted from the plugin excerpt.
 
 One parent iteration is therefore:
 
@@ -212,9 +288,10 @@ read DEM particles and write the CFD-facing particle set
     → check the combined stopping policy
 ```
 
-The DEM's ordinary force system reads `FluidForces` when its own schedule reaches
-the force phase. The CFD's ordinary output system writes `InterphaseForces`.
-Neither solver needs to call the other or know how the parent arranged them.
+The coupling plugin's DEM adapter reads `FluidForces` in the DEM force phase; its
+CFD adapter writes `InterphaseForces` in the CFD output phase. The standalone
+solver builders remain unaware of one another, and the executable chooses
+whether to add this coupling at all.
 
 This is the simple parent-owned pattern. More advanced couplings can export
 named seams inside child loops, branches, or rollback regions, or route records
