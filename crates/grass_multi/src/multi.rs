@@ -51,6 +51,45 @@ use std::any::{Any, TypeId};
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use std::rc::{Rc, Weak};
+
+pub(crate) type Participant = Rc<RefCell<Box<dyn Physics>>>;
+
+/// Shared, non-owning participant registry injected into the parent and every
+/// local child App. It lets a system running inside one child resolve a peer
+/// without borrowing the parent's monolithic [`SubApps`] resource.
+#[derive(Clone)]
+pub struct MultiContext {
+    participants: HashMap<String, Weak<RefCell<Box<dyn Physics>>>>,
+    current: Option<String>,
+}
+
+impl MultiContext {
+    pub(crate) fn resolve(&self, ns: &str) -> Option<Participant> {
+        if self.current.as_deref() == Some(ns) {
+            panic!(
+                "MultiRes self-access in child `{ns}` is not allowed; use ordinary Res/ResMut for the child’s own resources"
+            );
+        }
+        self.participants.get(ns)?.upgrade()
+    }
+
+    /// Registered participant names in deterministic registration order is
+    /// not promised here; use this for diagnostics, not numerical ordering.
+    pub fn participants(&self) -> impl Iterator<Item = &str> {
+        self.participants.keys().map(String::as_str)
+    }
+}
+
+/// Shared borrow of one participant implementation.
+pub struct PhysicsRef<'a>(Ref<'a, Box<dyn Physics>>);
+
+impl Deref for PhysicsRef<'_> {
+    type Target = dyn Physics;
+    fn deref(&self) -> &Self::Target {
+        &**self.0
+    }
+}
 
 // ─── SubApps ────────────────────────────────────────────────────────────────
 
@@ -64,13 +103,15 @@ use std::ops::{Deref, DerefMut};
 /// Designed to outlive any single `Multi` borrow — the `Vec<Box<dyn Physics>>`
 /// is stable for the lifetime of the parent App.
 pub struct SubApps {
-    physics: Vec<Box<dyn Physics>>,
+    physics: Vec<Participant>,
+    names: Vec<String>,
     name_to_idx: HashMap<String, usize>,
     /// Per-physics flag — `true` once `prepare()` has been called for that
     /// sub-App. We track it here (not on `Physics`) so the tick loop is
     /// idempotent regardless of whether a `Physics` impl makes its own
     /// `prepare` idempotent.
     prepared: Vec<bool>,
+    contexts_installed: bool,
 }
 
 impl Default for SubApps {
@@ -86,8 +127,10 @@ impl SubApps {
     pub fn new() -> Self {
         Self {
             physics: Vec::new(),
+            names: Vec::new(),
             name_to_idx: HashMap::new(),
             prepared: Vec::new(),
+            contexts_installed: false,
         }
     }
 
@@ -98,14 +141,17 @@ impl SubApps {
             panic!("SubApps: namespace `{name}` already registered");
         }
         let idx = self.physics.len();
-        self.name_to_idx.insert(name, idx);
-        self.physics.push(p);
+        self.name_to_idx.insert(name.clone(), idx);
+        self.names.push(name);
+        self.physics.push(Rc::new(RefCell::new(p)));
         self.prepared.push(false);
+        self.contexts_installed = false;
     }
 
     /// Look up a physics by name. Returns `None` if no such namespace.
-    pub fn find(&self, ns: &str) -> Option<&dyn Physics> {
-        self.name_to_idx.get(ns).map(|&i| &*self.physics[i])
+    pub fn find(&self, ns: &str) -> Option<PhysicsRef<'_>> {
+        let idx = self.idx_of(ns)?;
+        Some(PhysicsRef(self.physics[idx].borrow()))
     }
 
     /// Configure a local sub-App before its first tick.
@@ -122,7 +168,7 @@ impl SubApps {
             !self.prepared[idx],
             "SubApps::configure_local_app: `{ns}` was already prepared"
         );
-        self.physics[idx].local_app_mut().map(configure)
+        self.physics[idx].borrow_mut().local_app_mut().map(configure)
     }
 
     fn idx_of(&self, ns: &str) -> Option<usize> {
@@ -131,7 +177,34 @@ impl SubApps {
 
     /// Names of all registered sub-Apps. Useful for diagnostics.
     pub fn participants(&self) -> impl Iterator<Item = &str> {
-        self.physics.iter().map(|p| p.name())
+        self.names.iter().map(String::as_str)
+    }
+
+    pub(crate) fn context(&self) -> MultiContext {
+        MultiContext {
+            participants: self
+                .names
+                .iter()
+                .cloned()
+                .zip(self.physics.iter().map(Rc::downgrade))
+                .collect(),
+            current: None,
+        }
+    }
+
+    fn install_contexts(&mut self) {
+        if self.contexts_installed {
+            return;
+        }
+        let context = self.context();
+        for (name, participant) in self.names.iter().zip(&self.physics) {
+            if let Some(app) = participant.borrow_mut().local_app_mut() {
+                let mut child_context = context.clone();
+                child_context.current = Some(name.clone());
+                app.add_resource(child_context);
+            }
+        }
+        self.contexts_installed = true;
     }
 
     /// Run a named sub-App's one-time preparation without advancing it.
@@ -140,11 +213,12 @@ impl SubApps {
     /// complete before the outer iteration begins. [`Self::tick`] continues
     /// to prepare lazily for the usual case.
     pub fn prepare(&mut self, ns: &str) {
+        self.install_contexts();
         let idx = self
             .idx_of(ns)
             .unwrap_or_else(|| panic!("SubApps::prepare: unknown namespace `{ns}`"));
         if !self.prepared[idx] {
-            self.physics[idx].prepare();
+            self.physics[idx].borrow_mut().prepare();
             self.prepared[idx] = true;
         }
     }
@@ -154,20 +228,20 @@ impl SubApps {
     pub fn tick(&mut self, ns: &str) {
         self.prepare(ns);
         let idx = self.idx_of(ns).expect("known sub-App after preparation");
-        self.physics[idx].step();
+        self.physics[idx].borrow_mut().step();
     }
 
     /// Returns `true` if any registered sub-App has signalled `is_done()`.
     /// Usable as a parent-App stop condition.
     pub fn any_done(&self) -> bool {
-        self.physics.iter().any(|p| p.is_done())
+        self.physics.iter().any(|p| p.borrow().is_done())
     }
 
     /// Run every sub-App's `cleanup()` exactly once. Call before drop when
     /// the parent App owns the orchestration loop.
     pub fn cleanup_all(&mut self) {
-        for p in self.physics.iter_mut() {
-            p.cleanup();
+        for p in &self.physics {
+            p.borrow_mut().cleanup();
         }
     }
 }
@@ -182,32 +256,46 @@ impl SubApps {
 /// `RefCell`, so multiple simultaneous reads on different namespaces (and
 /// reads-on-A + writes-on-B in the same statement) all work.
 pub struct Multi<'w> {
-    inner: Res<'w, SubApps>,
+    inner: Res<'w, MultiContext>,
 }
 
 impl<'w> Multi<'w> {
     /// Borrow a resource of type `T` from the named sub-App. Returns `None`
     /// if the namespace is unknown OR the sub-App has no resource of type `T`.
     pub fn read<T: 'static>(&self, ns: &str) -> Option<MultiRef<'_, T>> {
-        let physics = self.inner.find(ns)?;
+        let participant = self.inner.resolve(ns)?;
+        let participant_cell = Rc::as_ptr(&participant);
+        // SAFETY: the returned handle stores `participant`, keeping this cell
+        // alive until both the physics and resource borrows have dropped.
+        let physics: Ref<'_, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
         let cell = physics.resource_cell(TypeId::of::<T>())?;
-        Some(MultiRef {
-            inner: Ref::map(cell.borrow(), |b| {
+        let cell = cell as *const RefCell<Box<dyn Any>>;
+        let inner = Ref::map(unsafe { (&*cell).borrow() }, |b| {
                 b.downcast_ref::<T>()
                     .expect("Multi::read: resource type mismatch — registered under a different concrete type")
-            }),
+            });
+        Some(MultiRef {
+            inner,
+            _physics: physics,
+            _participant: participant,
         })
     }
 
     /// Mutably borrow a resource of type `T` from the named sub-App.
     pub fn write<T: 'static>(&self, ns: &str) -> Option<MultiMut<'_, T>> {
-        let physics = self.inner.find(ns)?;
+        let participant = self.inner.resolve(ns)?;
+        let participant_cell = Rc::as_ptr(&participant);
+        let physics: Ref<'_, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
         let cell = physics.resource_cell(TypeId::of::<T>())?;
-        Some(MultiMut {
-            inner: RefMut::map(cell.borrow_mut(), |b| {
+        let cell = cell as *const RefCell<Box<dyn Any>>;
+        let inner = RefMut::map(unsafe { (&*cell).borrow_mut() }, |b| {
                 b.downcast_mut::<T>()
                     .expect("Multi::write: resource type mismatch")
-            }),
+            });
+        Some(MultiMut {
+            inner,
+            _physics: physics,
+            _participant: participant,
         })
     }
 
@@ -250,11 +338,11 @@ impl<'w> SystemParam for Multi<'w> {
         index: usize,
         locals: *mut HashMap<TypeId, Box<dyn Any>>,
     ) -> Self::Item<'r> {
-        let inner = <Res<'r, SubApps> as SystemParam>::retrieve(resources, index, locals);
+        let inner = <Res<'r, MultiContext> as SystemParam>::retrieve(resources, index, locals);
         Multi { inner }
     }
     fn resource_type_id() -> Option<(TypeId, &'static str)> {
-        Some((TypeId::of::<SubApps>(), "grass_multi::SubApps"))
+        Some((TypeId::of::<MultiContext>(), "grass_multi::MultiContext"))
     }
 }
 
@@ -264,6 +352,8 @@ impl<'w> SystemParam for Multi<'w> {
 /// by [`Multi::read`]. Derefs to `&T`.
 pub struct MultiRef<'w, T: 'static> {
     inner: Ref<'w, T>,
+    _physics: Ref<'w, Box<dyn Physics>>,
+    _participant: Participant,
 }
 
 impl<T: 'static> Deref for MultiRef<'_, T> {
@@ -278,6 +368,8 @@ impl<T: 'static> Deref for MultiRef<'_, T> {
 /// [`Multi::write`]. Derefs to `&mut T`.
 pub struct MultiMut<'w, T: 'static> {
     inner: RefMut<'w, T>,
+    _physics: Ref<'w, Box<dyn Physics>>,
+    _participant: Participant,
 }
 
 impl<T: 'static> Deref for MultiMut<'_, T> {
@@ -522,6 +614,17 @@ fn register_physics(app: &mut App, physics: Box<dyn Physics>) {
         subs.register(physics);
         app.add_resource(subs);
     }
+    let context = {
+        let cell = app
+            .get_mut_resource(TypeId::of::<SubApps>())
+            .expect("SubApps was just registered");
+        let resource = cell.borrow();
+        resource
+            .downcast_ref::<SubApps>()
+            .expect("SubApps resource type mismatch")
+            .context()
+    };
+    app.add_resource(context);
 }
 
 // ─── RemoteSubAppBuilder ────────────────────────────────────────────────────

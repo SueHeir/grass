@@ -127,14 +127,14 @@ fn run_binary<Tr: Transport + 'static>(
     }
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let local_cell = subs
-        .find("local")
-        .unwrap()
+    let local = subs.find("local").unwrap();
+    let local_cell = local
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();
     let local_val = local_cell.downcast_ref::<Counter>().unwrap().0;
     drop(local_cell);
+    drop(local);
     drop(subs);
 
     let last = parent.get_resource_ref::<LastSeenPeer>().unwrap().0;
@@ -235,14 +235,14 @@ fn run_binary_v2<Tr: Transport + 'static>(
     }
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let local_cell = subs
-        .find("local")
-        .unwrap()
+    let local = subs.find("local").unwrap();
+    let local_cell = local
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();
     let local_val = local_cell.downcast_ref::<Counter>().unwrap().0;
     drop(local_cell);
+    drop(local);
     drop(subs);
 
     let last = parent.get_resource_ref::<LastSeenPeer>().unwrap().0;
@@ -336,9 +336,8 @@ fn run_handshake<Tr: Transport + 'static>(transport: Tr, my_crit: f64) -> f64 {
     parent.run(); // first run triggers RemoteMirrorPhysics::prepare → setup pumps
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let cell = subs
-        .find("peer")
-        .unwrap()
+    let peer = subs.find("peer").unwrap();
+    let cell = peer
         .resource_cell(std::any::TypeId::of::<CritDt>())
         .unwrap()
         .borrow();

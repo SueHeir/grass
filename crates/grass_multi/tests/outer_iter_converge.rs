@@ -130,9 +130,8 @@ fn run_coupled(relax: Relaxation, max_iters: u32) -> (f64, u32, bool, f64) {
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
     let x_out = {
-        let cell = subs
-            .find("solid")
-            .unwrap()
+        let solid = subs.find("solid").unwrap();
+        let cell = solid
             .resource_cell(std::any::TypeId::of::<Solid>())
             .unwrap()
             .borrow();

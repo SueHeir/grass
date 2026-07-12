@@ -159,9 +159,10 @@ fn multi_systemparam_mirrors_counter_across_subapps() {
         .get_resource_ref::<SubApps>()
         .expect("SubApps resource should exist on the parent");
 
-    let prod_counter = subs
+    let producer = subs
         .find("producer")
-        .expect("producer namespace registered")
+        .expect("producer namespace registered");
+    let prod_counter = producer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .expect("producer has Counter")
         .borrow();
@@ -170,9 +171,10 @@ fn multi_systemparam_mirrors_counter_across_subapps() {
         .expect("Counter type")
         .0;
 
-    let cons_counter = subs
+    let consumer = subs
         .find("consumer")
-        .expect("consumer namespace registered")
+        .expect("consumer namespace registered");
+    let cons_counter = consumer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .expect("consumer has Counter")
         .borrow();
@@ -217,9 +219,8 @@ fn multi_read_and_write_simultaneously_on_different_namespaces() {
     parent.start();
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let cons = subs
-        .find("consumer")
-        .unwrap()
+    let consumer = subs.find("consumer").unwrap();
+    let cons = consumer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();

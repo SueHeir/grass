@@ -95,13 +95,12 @@
 //!   `&` and a `&mut` to it, live at the same time (`RefCell` double-borrow).
 //!   `expect_read`/`expect_write` also panic if the namespace or resource type
 //!   isn't registered.
-//! - **The big hazard:** a single system must **not** take a `Multi` /
-//!   `MultiRes*` parameter **and** `ResMut<SubApps>` together. `Multi` borrows
-//!   `Res<SubApps>` (shared) while `tick_subapp`'s `ResMut<SubApps>` borrows it
-//!   exclusively; holding both in one system double-borrows the `SubApps` cell
-//!   and panics at run time. Keep ticking (which mutates `SubApps`) and
-//!   coupling (which reads `SubApps` to reach *into* sub-Apps) in **separate
-//!   systems / phases**.
+//! - **Keep ticking and coupling in separate phases.** `MultiRes*` no longer
+//!   borrows the monolithic `SubApps` resource, but ticking a participant while
+//!   the same system holds one of its resource guards is still a recursive
+//!   lifecycle error. A child must use ordinary `Res`/`ResMut` for its own
+//!   resources and `MultiRes*` only for peers; self-access fails with an
+//!   actionable diagnostic.
 //!
 //! ## Driving it: `start()` vs a manual loop
 //!
@@ -160,7 +159,7 @@ mod wire;
 pub use grass_derive::Namespace;
 
 pub use multi::{
-    tick_n_times, tick_subapp, Multi, MultiAppExt, MultiMut, MultiRef, Namespace,
+    tick_n_times, tick_subapp, Multi, MultiAppExt, MultiContext, MultiMut, MultiRef, Namespace,
     RemoteSubAppBuilder, SubApps,
 };
 pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlugin};

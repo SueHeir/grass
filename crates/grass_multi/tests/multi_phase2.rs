@@ -146,9 +146,8 @@ fn typed_add_subapp_and_tick_n_times_round_trip() {
     parent.start();
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let cons_cell = subs
-        .find("consumer")
-        .unwrap()
+    let consumer = subs.find("consumer").unwrap();
+    let cons_cell = consumer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();
@@ -176,9 +175,8 @@ fn tick_n_times_advances_n_per_outer_iter() {
     parent.start();
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let cons_cell = subs
-        .find("consumer")
-        .unwrap()
+    let consumer = subs.find("consumer").unwrap();
+    let cons_cell = consumer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();
@@ -239,9 +237,8 @@ fn snapshot_subapp_resource_round_trips_a_subapp_resource() {
     // Producer's Counter must be back to its pre-tick value (0). Without
     // the snapshot/restore it would be 1.
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let prod_cell = subs
-        .find("producer")
-        .unwrap()
+    let producer = subs.find("producer").unwrap();
+    let prod_cell = producer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();
@@ -296,9 +293,8 @@ fn restore_subapp_resource_is_noop_when_nothing_saved() {
     parent.start();
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
-    let prod_cell = subs
-        .find("producer")
-        .unwrap()
+    let producer = subs.find("producer").unwrap();
+    let prod_cell = producer
         .resource_cell(std::any::TypeId::of::<Counter>())
         .unwrap()
         .borrow();

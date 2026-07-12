@@ -141,18 +141,16 @@ fn mesh_field_drives_particle_through_a_port() {
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
 
     let field_total = {
-        let cell = subs
-            .find("field")
-            .unwrap()
+        let field = subs.find("field").unwrap();
+        let cell = field
             .resource_cell(std::any::TypeId::of::<HeatField>())
             .unwrap()
             .borrow();
         cell.downcast_ref::<HeatField>().unwrap().total()
     };
     let (vel, pos, force) = {
-        let cell = subs
-            .find("particle")
-            .unwrap()
+        let particle = subs.find("particle").unwrap();
+        let cell = particle
             .resource_cell(std::any::TypeId::of::<Particle>())
             .unwrap()
             .borrow();
@@ -248,9 +246,8 @@ fn two_ports_compose_independently() {
 
     let subs = parent.get_resource_ref::<SubApps>().unwrap();
     let (vel, force) = {
-        let cell = subs
-            .find("particle")
-            .unwrap()
+        let particle = subs.find("particle").unwrap();
+        let cell = particle
             .resource_cell(std::any::TypeId::of::<Particle>())
             .unwrap()
             .borrow();
