@@ -74,3 +74,8 @@ required-features = ["mpi"]
 name = "oscillator_mpmd_b"
 path = "examples/oscillator_mpmd/b.rs"
 required-features = ["mpi"]
+
+[[example]]
+name = "oscillator_spmd"
+path = "examples/oscillator_spmd/main.rs"
+required-features = ["mpi"]
