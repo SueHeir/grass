@@ -9,7 +9,7 @@ const SOURCE: &str = "https://github.com/SueHeir/grass/blob/main";
 // GitHub mirror yet.  Use Gitea's canonical source-page URL for its precise
 // source links rather than substituting an unrelated repository-root link.
 const OSCILLATOR_SOURCE: &str =
-    "http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference";
+    "https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference";
 
 fn list(values: &[String]) -> String {
     if values.is_empty() {

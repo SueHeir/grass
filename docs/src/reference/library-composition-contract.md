@@ -17,17 +17,17 @@ or a stable external wire protocol.
 - A library **MUST** own its simulation state as typed App resources; a system
   **MUST** declare each resource it reads as `Res<T>` and each it mutates as
   `ResMut<T>`. `Local<T>` is private state of one system, not shared solver
-  state. The [scheduler access test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/src/lib.rs#L286-L320)
+  state. The [scheduler access test](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/src/lib.rs#L286-L320)
   exercises the declared access inventory.
 - A library **MUST NOT** rely on undeclared shared state to communicate between
   systems. It **MUST** establish `.before()`, `.after()`, or phase order when a
   reader must observe a particular writer; conflicting same-phase access is not
-  rejected by schedule validation. The [typed-label example](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/typed_system_labels/main.rs#L62-L109)
+  rejected by schedule validation. The [typed-label example](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/typed_system_labels/main.rs#L62-L109)
   checks required and optional ordering.
 - A package for this tier **MUST NOT** embed a discretization assumption in
   Grass-facing abstractions. Particle, mesh, and equation-specific state belongs
   in a lower or physics tier, not `grass_*`. The runnable
-  [heat-diffusion example](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/heat_diffusion_1d/main.rs#L65-L160) is the
+  [heat-diffusion example](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/heat_diffusion_1d/main.rs#L65-L160) is the
   current non-particle scheduler evidence.
 
 ### 2. Systems, labels, and time
@@ -38,10 +38,10 @@ or a stable external wire protocol.
   contract. A system needing a label **SHOULD** use an exported typed
   `SystemLabel`/`SystemKey`, and **MUST** use `.requires(...)` when absence is
   an error; `.after(...)` is only an optional order preference. The [label
-  matrix](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/typed_system_labels/main.rs#L62-L109) covers both cases.
+  matrix](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/typed_system_labels/main.rs#L62-L109) covers both cases.
 - A composed app **MUST** give independently authored phase enums distinct
   namespaces, or install an explicit `Schedule`; otherwise their index-zero
-  phases may interleave. The [flat-order and installed-schedule tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/tests/schedule.rs#L234-L272)
+  phases may interleave. The [flat-order and installed-schedule tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/tests/schedule.rs#L234-L272)
   demonstrate the namespace-zero tie-break and explicit schedule order.
 - A library with stage-specific behavior **MUST** make stage names and order
   agree between `StageEnum` and declarative `[[run]]` configuration. It
@@ -50,8 +50,8 @@ or a stable external wire protocol.
 - An external driver that uses `prepare()`/`run()` rather than `start()`
   **MUST** call `run_cleanup()`; a parent that owns sub-Apps **MUST** call
   `SubApps::cleanup_all()`. This is observable lifecycle behavior, not an
-  automatic transitive cleanup. The [lifecycle implementation](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L454-L484)
-  and [sub-App termination test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase0.rs#L48-L64)
+  automatic transitive cleanup. The [lifecycle implementation](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L454-L484)
+  and [sub-App termination test](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase0.rs#L48-L64)
   document both paths.
 
 ### 3. Plugins and capabilities
@@ -59,20 +59,20 @@ or a stable external wire protocol.
 - A library feature **SHOULD** be a `Plugin` or `PluginGroup` that registers
   only the resources and systems it owns. A plugin that cannot build without a
   concrete plugin already installed **MUST** declare its `TypeId` dependency.
-  The [dependency tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L1081-L1134)
+  The [dependency tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L1081-L1134)
   cover a satisfied and a missing concrete dependency.
 - A substitutable service **MUST** be expressed as an exported `CapabilityId`;
   consumers **MUST** declare required capabilities and providers **MUST**
   declare provided capabilities. Callers that need recoverable diagnostics
   **MUST** use `try_prepare`, `try_start`, or
   `validate_capability_contracts_result`, rather than a panicking convenience
-  path. The [capability tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L1216-L1259)
+  path. The [capability tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L1216-L1259)
   cover missing, alternative, and duplicate providers.
 - Plugin default configuration **MUST** be declarative TOML returned by
   `default_config`; it **MUST NOT** be a script that mutates registration or
-  schedule structure. The [`Plugin::default_config` contract](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/plugin.rs#L157-L163)
-  and its [collection during plugin registration](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L308-L326)
-  are exercised by the runnable [observed-oscillator example](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/observed_oscillator/main.rs#L1-L17).
+  schedule structure. The [`Plugin::default_config` contract](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/plugin.rs#L157-L163)
+  and its [collection during plugin registration](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_app/src/app.rs#L308-L326)
+  are exercised by the runnable [observed-oscillator example](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/examples/observed_oscillator/main.rs#L1-L17).
 
 ### 4. Coupling ownership and exchange choices
 
@@ -80,7 +80,7 @@ or a stable external wire protocol.
   be owned by the coupling package or parent application that owns their seam;
   neither participant should import the other's internal state merely to
   couple. The coupling owner **MUST** own the parent schedule and termination
-  policy. The [parent/sub-App integration test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase0.rs#L91-L195)
+  policy. The [parent/sub-App integration test](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase0.rs#L91-L195)
   demonstrates a parent owning the tick, exchange, and stop policy.
 - A pair-specific coupling package **MAY** use `MultiRes`/`MultiResMut` to name
   and convert both participants' private resources directly. This is the
@@ -92,7 +92,7 @@ or a stable external wire protocol.
   appropriate when multiple producers or consumers genuinely share `T`, or the
   exchanged value needs independent processing. The producer-to-port-to-consumer
   sequence **MUST** be ordered around producer and consumer ticks. The
-  [port integration test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/coupling_port.rs#L1-L178)
+  [port integration test](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/coupling_port.rs#L1-L178)
   drives a field-style producer and particle-style consumer against a closed
   form, and also checks independent ports compose.
 - Ticking and `Multi*` access **MUST NOT** share one system:
@@ -106,17 +106,17 @@ or a stable external wire protocol.
   cadence (`send_at_setup`, `recv_at_setup`, `send_each_iter`, or
   `recv_each_iter`) on both peers in matching order. Before a peer tick,
   the local side **MUST** export its current value into the mirror; otherwise
-  the peer can observe stale bounced-back state. The [remote wiring tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase3.rs#L428-L670)
+  the peer can observe stale bounced-back state. The [remote wiring tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase3.rs#L428-L670)
   cover both the stale and correctly exported cases.
 - A remote payload type **MUST** implement `Wire`; `pack` and `try_unpack`
   **MUST** agree on exactly one complete transport message. Implementations
   **MUST** reject malformed input through `WireUnpackError` rather than relying
   on a panic. Primitive and malformed-payload coverage lives in
-  [wire tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/src/wire.rs#L278-L358).
+  [wire tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/src/wire.rs#L278-L358).
 - A `Transport` implementation **MUST** make `try_send` and `try_recv` return
   `TransportError` with its name, operation, and useful failure detail.
   Remote callers **SHOULD** preserve the resulting mirror, phase, direction,
-  slot, and decoding context. The [transport/error integration tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase3.rs#L711-L870)
+  slot, and decoding context. The [transport/error integration tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_multi/tests/multi_phase3.rs#L711-L870)
   check peer drops, send/receive failures, truncation, and invalid UTF-8.
 
 ### 6. Coherence and determinism
@@ -125,12 +125,12 @@ or a stable external wire protocol.
   `CoherenceRegistry` mirror and declare every system access accurately. The
   device producer **MUST** handle host-dirty upload before it advances and mark
   the mirror device-dirty after it advances. Host consumers then trigger the
-  scheduler's lazy download. The [coherence tests](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/src/coherence.rs#L296-L358)
+  scheduler's lazy download. The [coherence tests](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/src/coherence.rs#L296-L358)
   cover the state transitions and forced reads.
 - Grass execution is currently single-threaded and deterministic: phase/
   namespace order, explicit dependencies, then registration order decide the
   sequence. Libraries **MUST NOT** infer a parallel-execution or race-freedom
-  guarantee from this. The [flat-order test](http://192.168.0.170:8082/SueHeir/grass/src/commit/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/tests/schedule.rs#L234-L251)
+  guarantee from this. The [flat-order test](https://github.com/SueHeir/grass/blob/a383502c23c1c07e7f92b67f3afab455e9dbb692/crates/grass_scheduler/tests/schedule.rs#L234-L251)
   exercises the observable registration-order trace.
 
 ## Author checklist

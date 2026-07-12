@@ -36,9 +36,9 @@ from GRASS, SOIL, or one solver into the other.
 
 The arrows point toward infrastructure. This is more than a naming convention:
 SOIL's `soil_core` declares dependencies on Grass crates
-([manifest](http://192.168.0.170:8082/SueHeir/soil/src/commit/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/Cargo.toml#L21-L30)),
+([manifest](https://github.com/SueHeir/soil/blob/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/Cargo.toml#L21-L30)),
 whereas DIRT's physics crates use SOIL's `Atom` and `AtomDataRegistry`
-([granular manifest](http://192.168.0.170:8082/SueHeir/dirt/src/commit/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_granular/Cargo.toml#L12-L19)).
+([granular manifest](https://github.com/SueHeir/dirt/blob/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_granular/Cargo.toml#L12-L19)).
 Neither is a Grass dependency. The direction is what lets a library author
 replace or add physics without making the framework a particle or DEM package.
 
@@ -51,13 +51,13 @@ systems/plugins; the scheduler receives the declared `Res<T>`/`ResMut<T>`
 accesses. The [composition contract](../reference/library-composition-contract.md)
 states the normative boundary and links its executable checks. In particular,
 the current scheduler is exercised by a non-particle
-[heat-diffusion example](http://192.168.0.170:8082/SueHeir/grass/src/commit/2b432067596dcebe5138a59f4b3483014087eae2/examples/heat_diffusion_1d/main.rs#L65-L160),
+[heat-diffusion example](https://github.com/SueHeir/grass/blob/2b432067596dcebe5138a59f4b3483014087eae2/examples/heat_diffusion_1d/main.rs#L65-L160),
 so particles are not part of Grass's public model.
 
 This gives a new library a small extension seam: define its own resources,
 schedule sets, systems, and plugins. A plugin may also provide a TOML snippet
 showing its configuration section and defaults through
-[`Plugin::default_config`](http://192.168.0.170:8082/SueHeir/grass/src/commit/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_app/src/plugin.rs#L96-L102).
+[`Plugin::default_config`](https://github.com/SueHeir/grass/blob/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_app/src/plugin.rs#L96-L102).
 
 ### 2. SOIL owns particle plumbing, not a force law
 
@@ -65,9 +65,9 @@ SOIL's public seam is `AtomData`: a physics library registers typed per-atom
 columns, annotating how each moves (`forward` to ghosts, `reverse` back to an
 owner, `zero` each step). The actual trait includes migration, ghost, reverse,
 zero, and permutation hooks
-([source](http://192.168.0.170:8082/SueHeir/soil/src/commit/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/src/atom.rs#L130-L169));
+([source](https://github.com/SueHeir/soil/blob/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/src/atom.rs#L130-L169));
 SOIL's communication layer then moves registered extensions during exchange
-([implementation](http://192.168.0.170:8082/SueHeir/soil/src/commit/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/src/comm.rs#L1230-L1245)).
+([implementation](https://github.com/SueHeir/soil/blob/aaa39caac2ff5066d998c30165ae0422c496899e/crates/soil_core/src/comm.rs#L1230-L1245)).
 
 The owner of a new particle method therefore adds its own `AtomData` columns and
 physics plugins. It does **not** add DEM-only fields to SOIL's base `Atom`. A
@@ -80,17 +80,17 @@ not scientific validation of every future particle method.
 
 DIRT fills that seam with DEM-specific state and laws: contact, rotational
 quantities, material tables, bonds, walls, and clumps. For example,
-[`DemAtom`](http://192.168.0.170:8082/SueHeir/dirt/src/commit/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_atom/src/lib.rs#L1187-L1235)
+[`DemAtom`](https://github.com/SueHeir/dirt/blob/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_atom/src/lib.rs#L1187-L1235)
 is DIRT code, not a new SOIL base field, and the granular plugin registers it
 with the substrate's registry
-([plugin implementation](http://192.168.0.170:8082/SueHeir/dirt/src/commit/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_atom/src/lib.rs#L1247-L1310)).
+([plugin implementation](https://github.com/SueHeir/dirt/blob/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/crates/dirt_atom/src/lib.rs#L1247-L1310)).
 
 The physics evidence belongs at this layer too. DIRT's committed validation
 index records a Hertz rebound case against analytical Hertz behaviour and a
 LAMMPS comparison
-([case and figures](http://192.168.0.170:8082/SueHeir/dirt/src/commit/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/examples/VALIDATION.md#L186-L205)),
+([case and figures](https://github.com/SueHeir/dirt/blob/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/examples/VALIDATION.md#L186-L205)),
 and records the seeded Haff-cooling ensemble as passing all 39 checks
-([results](http://192.168.0.170:8082/SueHeir/dirt/src/commit/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/examples/VALIDATION.md#L770-L818)).
+([results](https://github.com/SueHeir/dirt/blob/34c15b18ab0d69f1b3eefb2a22f7efec37a02beb/examples/VALIDATION.md#L770-L818)).
 Those are specific DEM validations, with their stated references and gates—not
 a blanket validation of the framework or substrate.
 
@@ -118,7 +118,7 @@ the producer's private resource
 field to a particle-style integrator. The only shared value is `Flux`; each
 solver retains its own private resource type, while the parent owns the ordered
 `TickProducer → Couple → TickConsumer → Check` schedule
-([test](http://192.168.0.170:8082/SueHeir/grass/src/commit/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_multi/tests/coupling_port.rs#L1-L178)).
+([test](https://github.com/SueHeir/grass/blob/2b432067596dcebe5138a59f4b3483014087eae2/crates/grass_multi/tests/coupling_port.rs#L1-L178)).
 That test checks the producer's conserved total, the consumer's received force,
 and its closed-form position/velocity. It is the current validated proof of the
 composition mechanism; it is not a DEM↔CFD validation.

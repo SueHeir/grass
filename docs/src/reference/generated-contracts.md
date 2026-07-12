@@ -98,7 +98,7 @@ Periodic terminal log line. `step` and `time` columns are filled by SimClock.
 
 ## `oscillator_demo::OscillatorPlugin`
 
-Rust API source: [`crates/oscillator_demo/src/lib.rs`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs).
+Rust API source: [`crates/oscillator_demo/src/lib.rs`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs).
 
 | Contract | Declared value |
 |---|---|
@@ -115,11 +115,11 @@ Parameters for one harmonic-oscillator library instance. The application may com
 
 | Field | Type | Default | Required | Source |
 |---|---|---|---|---|
-| `x0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:64:OscillatorConfig.x0`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L64) |
-| `v0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:66:OscillatorConfig.v0`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L66) |
-| `peer_x0` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:68:OscillatorConfig.peer_x0`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L68) |
-| `stiffness` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:71:OscillatorConfig.stiffness`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L71) |
-| `damping` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:73:OscillatorConfig.damping`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L73) |
-| `coupling_stiffness` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:76:OscillatorConfig.coupling_stiffness`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L76) |
-| `mass` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:79:OscillatorConfig.mass`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L79) |
-| `dt` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:81:OscillatorConfig.dt`](http://192.168.0.170:8082/SueHeir/grass/src/branch/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L81) |
+| `x0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:64:OscillatorConfig.x0`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L64) |
+| `v0` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:66:OscillatorConfig.v0`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L66) |
+| `peer_x0` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:68:OscillatorConfig.peer_x0`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L68) |
+| `stiffness` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:71:OscillatorConfig.stiffness`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L71) |
+| `damping` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:73:OscillatorConfig.damping`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L73) |
+| `coupling_stiffness` | `float` | `0.0` | false | [`crates/oscillator_demo/src/lib.rs:76:OscillatorConfig.coupling_stiffness`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L76) |
+| `mass` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:79:OscillatorConfig.mass`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L79) |
+| `dt` | `float` | `—` | true | [`crates/oscillator_demo/src/lib.rs:81:OscillatorConfig.dt`](https://github.com/SueHeir/grass/blob/auto/grass-generated-contract-reference/crates/oscillator_demo/src/lib.rs#L81) |
