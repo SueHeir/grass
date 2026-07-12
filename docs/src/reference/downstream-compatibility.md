@@ -39,3 +39,16 @@ stack.
 
 The runnable source links in the main README and coupling tutorials are part of
 this contract. Update them with the implementation, not after it.
+
+## Coordinated public release
+
+With all nine repositories checked out as siblings, run:
+
+```bash
+grass/ci/public-release.sh --check
+grass/ci/public-release.sh --push
+```
+
+The check refuses dirty trees, private URLs, sibling-only dependency paths, or
+a GitHub branch containing history absent locally. `--push` uses normal
+fast-forward pushes in dependency order and never force-pushes.
