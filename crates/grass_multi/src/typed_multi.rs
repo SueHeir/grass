@@ -95,6 +95,7 @@ impl<'res, T: 'static, NS: Namespace> SystemParam for MultiRes<'res, T, NS> {
         let participant_cell = Rc::as_ptr(&participant);
         // SAFETY: `participant` is retained in the returned handle.
         let physics: Ref<'r, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
+        physics.validate_resource_read(TypeId::of::<T>(), std::any::type_name::<T>());
         let inner_cell = physics.resource_cell(TypeId::of::<T>()).unwrap_or_else(|| {
             panic!(
                 "MultiRes: sub-App `{}` has no resource of type `{}`",
@@ -176,6 +177,7 @@ impl<'res, T: 'static, NS: Namespace> SystemParam for MultiResMut<'res, T, NS> {
         drop(context_guard);
         let participant_cell = Rc::as_ptr(&participant);
         let physics: Ref<'r, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
+        physics.mark_resource_written(TypeId::of::<T>());
         let inner_cell = physics.resource_cell(TypeId::of::<T>()).unwrap_or_else(|| {
             panic!(
                 "MultiResMut: sub-App `{}` has no resource of type `{}`",

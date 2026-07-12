@@ -174,7 +174,10 @@ impl SubApps {
             self.states[idx] == ParticipantState::Registered,
             "SubApps::configure_local_app: `{ns}` was already prepared"
         );
-        self.physics[idx].borrow_mut().local_app_mut().map(configure)
+        self.physics[idx]
+            .borrow_mut()
+            .local_app_mut()
+            .map(configure)
     }
 
     fn idx_of(&self, ns: &str) -> Option<usize> {
@@ -286,12 +289,14 @@ impl<'w> Multi<'w> {
         // SAFETY: the returned handle stores `participant`, keeping this cell
         // alive until both the physics and resource borrows have dropped.
         let physics: Ref<'_, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
+        physics.validate_resource_read(TypeId::of::<T>(), std::any::type_name::<T>());
         let cell = physics.resource_cell(TypeId::of::<T>())?;
         let cell = cell as *const RefCell<Box<dyn Any>>;
         let inner = Ref::map(unsafe { (&*cell).borrow() }, |b| {
-                b.downcast_ref::<T>()
-                    .expect("Multi::read: resource type mismatch — registered under a different concrete type")
-            });
+            b.downcast_ref::<T>().expect(
+                "Multi::read: resource type mismatch — registered under a different concrete type",
+            )
+        });
         Some(MultiRef {
             inner,
             _physics: physics,
@@ -304,12 +309,13 @@ impl<'w> Multi<'w> {
         let participant = self.inner.resolve(ns)?;
         let participant_cell = Rc::as_ptr(&participant);
         let physics: Ref<'_, Box<dyn Physics>> = unsafe { (&*participant_cell).borrow() };
+        physics.mark_resource_written(TypeId::of::<T>());
         let cell = physics.resource_cell(TypeId::of::<T>())?;
         let cell = cell as *const RefCell<Box<dyn Any>>;
         let inner = RefMut::map(unsafe { (&*cell).borrow_mut() }, |b| {
-                b.downcast_mut::<T>()
-                    .expect("Multi::write: resource type mismatch")
-            });
+            b.downcast_mut::<T>()
+                .expect("Multi::write: resource type mismatch")
+        });
         Some(MultiMut {
             inner,
             _physics: physics,

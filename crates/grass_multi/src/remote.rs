@@ -49,6 +49,7 @@ use crate::wire::{Wire, WireUnpackError};
 use grass_app::App;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 
 /// Type-erased "pack T from this App's resource into bytes" closure.
@@ -59,6 +60,24 @@ type UnpackFn = Box<
         + Send
         + Sync,
 >;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MirrorCoherence {
+    receives: bool,
+    fresh: bool,
+    dirty: bool,
+}
+
+/// Observable local coherence state for one resource on a remote mirror.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteResourceCoherence {
+    /// Whether this resource is populated by a receive pump.
+    pub receives: bool,
+    /// Whether the most recent required receive completed successfully.
+    pub fresh: bool,
+    /// Whether local code has mutably borrowed it since the last send.
+    pub dirty: bool,
+}
 
 /// Whether a failed remote decode happened during setup or an iteration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,9 +376,14 @@ pub struct RemoteMirrorPhysics {
     inner: App,
     transport: Box<dyn Transport>,
     senders_at_setup: Vec<PackFn>,
+    sender_types_at_setup: Vec<TypeId>,
     receivers_at_setup: Vec<UnpackFn>,
+    receiver_types_at_setup: Vec<TypeId>,
     senders_each_iter: Vec<PackFn>,
+    sender_types_each_iter: Vec<TypeId>,
     receivers_each_iter: Vec<UnpackFn>,
+    receiver_types_each_iter: Vec<TypeId>,
+    coherence: RefCell<HashMap<TypeId, MirrorCoherence>>,
 }
 
 impl RemoteMirrorPhysics {
@@ -373,9 +397,14 @@ impl RemoteMirrorPhysics {
             inner: App::new(),
             transport,
             senders_at_setup: Vec::new(),
+            sender_types_at_setup: Vec::new(),
             receivers_at_setup: Vec::new(),
+            receiver_types_at_setup: Vec::new(),
             senders_each_iter: Vec::new(),
+            sender_types_each_iter: Vec::new(),
             receivers_each_iter: Vec::new(),
+            receiver_types_each_iter: Vec::new(),
+            coherence: RefCell::new(HashMap::new()),
         }
     }
 
@@ -385,24 +414,38 @@ impl RemoteMirrorPhysics {
     /// resource.
     pub fn add_send_at_setup<T: Default + Wire + 'static>(&mut self) {
         self.ensure_resource::<T>();
+        self.coherence
+            .get_mut()
+            .entry(TypeId::of::<T>())
+            .or_default();
         self.senders_at_setup.push(Box::new(pack_resource::<T>));
+        self.sender_types_at_setup.push(TypeId::of::<T>());
     }
     /// Register `T` as a setup-time recv.
     pub fn add_recv_at_setup<T: Default + Wire + 'static>(&mut self) {
         self.ensure_resource::<T>();
+        self.register_receiver::<T>();
         self.receivers_at_setup
             .push(Box::new(unpack_into_resource::<T>));
+        self.receiver_types_at_setup.push(TypeId::of::<T>());
     }
     /// Register `T` as a per-iter send.
     pub fn add_send_each_iter<T: Default + Wire + 'static>(&mut self) {
         self.ensure_resource::<T>();
+        self.coherence
+            .get_mut()
+            .entry(TypeId::of::<T>())
+            .or_default();
         self.senders_each_iter.push(Box::new(pack_resource::<T>));
+        self.sender_types_each_iter.push(TypeId::of::<T>());
     }
     /// Register `T` as a per-iter recv.
     pub fn add_recv_each_iter<T: Default + Wire + 'static>(&mut self) {
         self.ensure_resource::<T>();
+        self.register_receiver::<T>();
         self.receivers_each_iter
             .push(Box::new(unpack_into_resource::<T>));
+        self.receiver_types_each_iter.push(TypeId::of::<T>());
     }
 
     /// Register `T` as a resource on the mirror without any wire pump.
@@ -411,6 +454,29 @@ impl RemoteMirrorPhysics {
     /// (write-only scratch on the mirror side; reads happen on the peer).
     pub fn add_local_resource<T: Default + 'static>(&mut self) {
         self.ensure_resource::<T>();
+    }
+
+    fn register_receiver<T: 'static>(&mut self) {
+        let state = self
+            .coherence
+            .get_mut()
+            .entry(TypeId::of::<T>())
+            .or_default();
+        state.receives = true;
+        state.fresh = false;
+    }
+
+    /// Return the mirror-local coherence metadata for `T`, if `T` participates
+    /// in a wire pump. This inspection is local and never touches transport.
+    pub fn resource_coherence<T: 'static>(&self) -> Option<RemoteResourceCoherence> {
+        self.coherence
+            .borrow()
+            .get(&TypeId::of::<T>())
+            .map(|s| RemoteResourceCoherence {
+                receives: s.receives,
+                fresh: s.fresh,
+                dirty: s.dirty,
+            })
     }
 
     /// Drop a `T::default()` into the inner App if no `T` is registered yet.
@@ -440,6 +506,12 @@ impl RemoteMirrorPhysics {
                 ))
             })?;
         }
+        for ty in &self.sender_types_at_setup {
+            self.coherence.get_mut().get_mut(ty).unwrap().dirty = false;
+        }
+        for ty in &self.receiver_types_at_setup {
+            self.coherence.get_mut().get_mut(ty).unwrap().fresh = false;
+        }
         for (recv_index, unpack) in self.receivers_at_setup.iter().enumerate() {
             let body = self.transport.try_recv().map_err(|source| {
                 RemotePumpError::Transport(RemoteTransportError::recv(
@@ -458,6 +530,9 @@ impl RemoteMirrorPhysics {
             )
             .map_err(RemotePumpError::Unpack)?;
         }
+        for ty in &self.receiver_types_at_setup {
+            self.coherence.get_mut().get_mut(ty).unwrap().fresh = true;
+        }
         Ok(())
     }
 
@@ -465,6 +540,12 @@ impl RemoteMirrorPhysics {
     /// wire diagnostics instead of panicking on malformed received payloads or
     /// disconnected peers.
     pub fn try_step(&mut self) -> Result<StepResult, RemotePumpError> {
+        // Once a new pump begins, the prior iteration's received values are
+        // stale. Invalidate before any fallible send so every early return
+        // fails closed on subsequent reads.
+        for ty in &self.receiver_types_each_iter {
+            self.coherence.get_mut().get_mut(ty).unwrap().fresh = false;
+        }
         for (slot_index, pack) in self.senders_each_iter.iter().enumerate() {
             let payload = pack(&self.inner);
             self.transport.try_send(&payload).map_err(|source| {
@@ -476,6 +557,9 @@ impl RemoteMirrorPhysics {
                     source,
                 ))
             })?;
+        }
+        for ty in &self.sender_types_each_iter {
+            self.coherence.get_mut().get_mut(ty).unwrap().dirty = false;
         }
         for (recv_index, unpack) in self.receivers_each_iter.iter().enumerate() {
             let body = self.transport.try_recv().map_err(|source| {
@@ -494,6 +578,9 @@ impl RemoteMirrorPhysics {
                 recv_index,
             )
             .map_err(RemotePumpError::Unpack)?;
+        }
+        for ty in &self.receiver_types_each_iter {
+            self.coherence.get_mut().get_mut(ty).unwrap().fresh = true;
         }
         Ok(StepResult::default())
     }
@@ -526,6 +613,23 @@ impl Physics for RemoteMirrorPhysics {
 
     fn resource_cell(&self, ty: TypeId) -> Option<&RefCell<Box<dyn Any>>> {
         self.inner.resource_cell(ty)
+    }
+
+    fn validate_resource_read(&self, ty: TypeId, type_name: &'static str) {
+        if let Some(state) = self.coherence.borrow().get(&ty) {
+            if state.receives && !state.fresh {
+                panic!(
+                    "RemoteMirrorPhysics `{}`: stale read of `{type_name}`; its receive pump has not completed successfully",
+                    self.name
+                );
+            }
+        }
+    }
+
+    fn mark_resource_written(&self, ty: TypeId) {
+        if let Some(state) = self.coherence.borrow_mut().get_mut(&ty) {
+            state.dirty = true;
+        }
     }
 }
 

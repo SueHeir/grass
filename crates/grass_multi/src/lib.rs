@@ -168,7 +168,7 @@ pub use port::{consume_field, expose_field, Port};
 pub use relax::{converge_outer_iter, OuterIteration, Relaxation};
 pub use remote::{
     RemoteMirrorPhysics, RemotePumpDirection, RemotePumpError, RemotePumpPhase,
-    RemoteTransportError, RemoteUnpackError,
+    RemoteResourceCoherence, RemoteTransportError, RemoteUnpackError,
 };
 #[cfg(feature = "mpi")]
 pub use role_exchange::{MpiRoleExchange, RoleExchange, RoleExchangeError, SinglePeerTransport};

@@ -80,6 +80,15 @@ pub trait Physics: 'static {
     /// (`Multi` / `MultiRes` / `MultiResMut`) downcast through this.
     fn resource_cell(&self, ty: TypeId) -> Option<&RefCell<Box<dyn Any>>>;
 
+    /// Validate that a cross-namespace read may observe this resource.
+    /// Local physics are always readable; remote mirrors override this to
+    /// reject reads whose receive slot has not completed a pump.
+    fn validate_resource_read(&self, _ty: TypeId, _type_name: &'static str) {}
+
+    /// Record a cross-namespace mutable borrow. Remote mirrors use this to
+    /// track values changed locally since their last successful send.
+    fn mark_resource_written(&self, _ty: TypeId) {}
+
     /// Mutable access to the underlying local [`App`], when this physics is
     /// backed by one. Remote physics return `None`.
     ///

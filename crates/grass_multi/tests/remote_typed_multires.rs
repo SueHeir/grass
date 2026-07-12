@@ -22,7 +22,7 @@
 
 use grass_app::prelude::*;
 use grass_multi::{namespace, tick_subapp, LocalTransport, MultiAppExt, MultiRes, MultiResMut};
-use grass_multi::{SubApps, Transport, Wire};
+use grass_multi::{Transport, Wire};
 use grass_scheduler::prelude::*;
 use std::thread;
 
@@ -150,14 +150,17 @@ fn typed_multires_reads_remote_peer_through_explicit_pump() {
     // peer exported on iter k, so after N iters each typed reader converges to
     // the peer's local-at-iter-N. Identical to the untyped `Multi` result in
     // multi_phase3 — the typed handles add types, not behavior.
-    assert_eq!(a_seen, N as u64 * 10, "A sees B's final counter via MultiRes");
+    assert_eq!(
+        a_seen,
+        N as u64 * 10,
+        "A sees B's final counter via MultiRes"
+    );
     assert_eq!(b_seen, N as u64, "B sees A's final counter via MultiRes");
 }
 
 #[test]
-fn typed_multires_retrieval_performs_no_synchronization() {
-    // A mirror that owns a Counter cell but is never pumped: `with_resource`
-    // registers the slot with no wire pump, and "peer" is never ticked. The
+fn typed_multires_stale_read_fails_closed_without_synchronization() {
+    // A mirror with a receive slot that is never pumped. "peer" is never ticked. The
     // local side advances every iter; if `MultiRes::retrieve` synchronized it
     // would have to observe that. It cannot — it borrows only the mirror's
     // local cell, which nothing wrote — so the typed reader stays at default.
@@ -166,34 +169,28 @@ fn typed_multires_retrieval_performs_no_synchronization() {
     parent.add_subapp("local", build_local(7));
     parent
         .add_remote_subapp("peer", mirror_t)
-        .with_resource::<Counter>()
+        .recv_each_iter::<Counter>()
         .finish();
     parent.add_resource(LastSeenPeer::default());
     parent.add_update_system(tick_subapp("local", 1), Schedule::TickLocal);
     parent.add_update_system(import_peer, Schedule::Import);
 
     parent.prepare();
-    for _ in 0..4 {
+    let panic = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         parent.run();
-    }
-
-    let local = {
-        let subs = parent.get_resource_ref::<SubApps>().unwrap();
-        let v = subs
-            .find("local")
-            .unwrap()
-            .resource_cell(std::any::TypeId::of::<Counter>())
-            .unwrap()
-            .borrow()
-            .downcast_ref::<Counter>()
-            .unwrap()
-            .0;
-        v
+    })) {
+        Ok(_) => panic!("an unpumped receive mirror must reject stale reads"),
+        Err(panic) => panic,
     };
-    assert_eq!(local, 28, "local side advanced independently (4 × 7)");
-    let seen = parent.get_resource_ref::<LastSeenPeer>().unwrap();
-    assert_eq!(
-        seen.0, 0,
-        "MultiRes read the un-pumped mirror as default — retrieval did not sync"
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        message.contains("stale read of"),
+        "unexpected panic: {message}"
     );
+    // The unused transport peer never sends. Reaching this assertion proves
+    // retrieval failed from local metadata instead of attempting a recv.
 }
