@@ -2,11 +2,14 @@
 //!
 //! A coupling package decides each record's destination role-rank. GRASS only
 //! frames, transports, validates, and deterministically delivers those opaque
-//! records. The current implementation uses [`RoleExchange`] as a
-//! correctness-first oracle; a future sparse MPI backend can implement the
-//! same contract without changing scientific mapping code.
+//! records. Split MPI runs send non-empty frames directly between owner ranks;
+//! the [`RoleExchange`] root bridge remains the local-mode implementation and
+//! correctness oracle.
 
 use crate::{RoleExchange, RoleExchangeError};
+use mpi::collective::CommunicatorCollectives;
+use mpi::topology::SimpleCommunicator;
+use mpi::traits::{Communicator, Destination, Source};
 use std::fmt;
 
 const MAGIC: &[u8; 4] = b"GRRT";
@@ -53,26 +56,63 @@ pub struct ReceivedPayload {
     pub payload: Vec<u8>,
 }
 
-/// Routed exchange implemented initially by filtering the correctness-first
-/// all-shard root bridge.
+/// Routed exchange with interchangeable root-bridge and direct sparse MPI
+/// backends.
 pub struct RoutedRoleExchange {
-    exchange: Box<dyn RoleExchange>,
+    backend: RoutedBackend,
 }
+
+enum RoutedBackend {
+    RootBridge(Box<dyn RoleExchange>),
+    Sparse(MpiSparseRoutedExchange),
+}
+
+struct MpiSparseRoutedExchange {
+    role: SimpleCommunicator,
+    coupling: SimpleCommunicator,
+    peer_root: i32,
+    peer_size: i32,
+}
+
+unsafe impl Send for MpiSparseRoutedExchange {}
+unsafe impl Sync for MpiSparseRoutedExchange {}
 
 impl RoutedRoleExchange {
     /// Wrap an existing collective role exchange.
     pub fn new(exchange: Box<dyn RoleExchange>) -> Self {
-        Self { exchange }
+        Self {
+            backend: RoutedBackend::RootBridge(exchange),
+        }
+    }
+
+    /// Build a direct sparse MPI exchange from validated peer-role metadata.
+    pub(crate) fn new_sparse(peer_root: i32, peer_size: i32) -> Self {
+        Self {
+            backend: RoutedBackend::Sparse(MpiSparseRoutedExchange {
+                role: grass_mpi::get_mpi_world(),
+                // Keep coupling messages in a context isolated from both the
+                // role-local solver communicator and other GRASS transports.
+                coupling: grass_mpi::get_mpi_world_raw().duplicate(),
+                peer_root,
+                peer_size,
+            }),
+        }
     }
 
     /// Rank and size within the local solver role.
     pub fn role_position(&self) -> (i32, i32) {
-        self.exchange.role_position()
+        match &self.backend {
+            RoutedBackend::RootBridge(exchange) => exchange.role_position(),
+            RoutedBackend::Sparse(exchange) => (exchange.role.rank(), exchange.role.size()),
+        }
     }
 
     /// Size of the peer solver role.
     pub fn peer_size(&self) -> i32 {
-        self.exchange.peer_size()
+        match &self.backend {
+            RoutedBackend::RootBridge(exchange) => exchange.peer_size(),
+            RoutedBackend::Sparse(exchange) => exchange.peer_size,
+        }
     }
 
     /// Collectively exchange routed records and return only records addressed
@@ -99,32 +139,115 @@ impl RoutedRoleExchange {
             )
         });
 
-        let local_frame = encode_frame(epoch, outgoing);
-        let peer_frames = self.exchange.exchange(&local_frame)?;
+        let peer_frames = match &self.backend {
+            RoutedBackend::RootBridge(exchange) => {
+                let local_frame = encode_frame(epoch, outgoing);
+                exchange.exchange(&local_frame)?
+            }
+            RoutedBackend::Sparse(exchange) => exchange.exchange(epoch, outgoing)?,
+        };
         if let Some(error) = local_error {
             return Err(error);
         }
-        let (local_rank, local_size) = self.role_position();
-        let mut received = Vec::new();
-        for (source, frame) in peer_frames.iter().enumerate() {
-            let records = decode_frame(frame, epoch)?;
-            for record in records {
-                if record.destination < 0 || record.destination >= local_size {
-                    return Err(RoutedExchangeError::DestinationOutOfRange {
-                        destination: record.destination,
-                        peer_size: local_size,
-                    });
-                }
-                if record.destination == local_rank {
-                    received.push(ReceivedPayload {
-                        source: source as i32,
-                        entity_id: record.entity_id,
-                        payload: record.payload,
-                    });
-                }
+        deliver_frames(peer_frames, epoch, self.role_position())
+    }
+}
+
+fn deliver_frames(
+    peer_frames: Vec<Vec<u8>>,
+    epoch: CouplingEpoch,
+    (local_rank, local_size): (i32, i32),
+) -> Result<Vec<ReceivedPayload>, RoutedExchangeError> {
+    let mut received = Vec::new();
+    for (source, frame) in peer_frames.iter().enumerate() {
+        let records = decode_frame(frame, epoch)?;
+        for record in records {
+            if record.destination < 0 || record.destination >= local_size {
+                return Err(RoutedExchangeError::DestinationOutOfRange {
+                    destination: record.destination,
+                    peer_size: local_size,
+                });
+            }
+            if record.destination == local_rank {
+                received.push(ReceivedPayload {
+                    source: source as i32,
+                    entity_id: record.entity_id,
+                    payload: record.payload,
+                });
             }
         }
-        Ok(received)
+    }
+    Ok(received)
+}
+
+impl MpiSparseRoutedExchange {
+    fn exchange(
+        &self,
+        epoch: CouplingEpoch,
+        outgoing: &[RoutedPayload],
+    ) -> Result<Vec<Vec<u8>>, RoutedExchangeError> {
+        let world_size = self.coupling.size() as usize;
+        let mut by_destination = vec![Vec::new(); self.peer_size as usize];
+        for record in outgoing {
+            if let Some(records) = by_destination.get_mut(record.destination as usize) {
+                records.push(record.clone());
+            }
+        }
+
+        let frames: Vec<Vec<u8>> = by_destination
+            .iter()
+            .map(|records| encode_frame(epoch, records))
+            .collect();
+        let mut send_lengths = vec![0_u64; world_size];
+        for (destination, records) in by_destination.iter().enumerate() {
+            if !records.is_empty() {
+                send_lengths[self.peer_root as usize + destination] =
+                    frames[destination].len() as u64;
+            }
+        }
+        let mut receive_lengths = vec![0_u64; world_size];
+        self.coupling
+            .all_to_all_into(&send_lengths, &mut receive_lengths);
+
+        let sends = by_destination
+            .iter()
+            .filter(|records| !records.is_empty())
+            .count();
+        // Retain one logical frame per peer source so the public delivery
+        // order and source identifiers exactly match the root-bridge oracle,
+        // while transmitting no empty payload frames on the wire.
+        let mut received: Vec<Result<Vec<u8>, RoutedExchangeError>> = (0..self.peer_size)
+            .map(|_| Ok(encode_frame(epoch, &[])))
+            .collect();
+        mpi::request::multiple_scope(sends, |scope, requests| {
+            for (destination, records) in by_destination.iter().enumerate() {
+                if !records.is_empty() {
+                    requests.add(
+                        self.coupling
+                            .process_at_rank(self.peer_root + destination as i32)
+                            .immediate_send(scope, &frames[destination]),
+                    );
+                }
+            }
+            for source in 0..self.peer_size {
+                let world_source = self.peer_root + source;
+                let expected = receive_lengths[world_source as usize];
+                if expected != 0 {
+                    let (frame, _) = self
+                        .coupling
+                        .process_at_rank(world_source)
+                        .receive_vec::<u8>();
+                    if frame.len() as u64 != expected {
+                        received[source as usize] = Err(RoutedExchangeError::MalformedFrame);
+                    } else {
+                        received[source as usize] = Ok(frame);
+                    }
+                }
+            }
+            let mut completed = Vec::with_capacity(sends);
+            requests.wait_all(&mut completed);
+        });
+        received.into_iter().collect()
     }
 }
 
@@ -379,6 +502,26 @@ mod tests {
         assert_eq!(
             decode_frame(&frame, CouplingEpoch(1)).unwrap_err(),
             RoutedExchangeError::MalformedFrame
+        );
+    }
+
+    #[test]
+    fn sparse_peer_frames_match_root_bridge_delivery_with_source_holes() {
+        let epoch = CouplingEpoch(8);
+        let root_frames = vec![
+            encode_frame(epoch, &[]),
+            encode_frame(epoch, &[RoutedPayload::new(0, EntityId(41), vec![4, 1])]),
+            encode_frame(epoch, &[]),
+            encode_frame(epoch, &[RoutedPayload::new(0, EntityId(43), vec![4, 3])]),
+        ];
+        // This is the logical peer-frame vector reconstructed by the sparse
+        // backend after transmitting only sources 1 and 3.
+        let mut sparse_frames = (0..4).map(|_| encode_frame(epoch, &[])).collect::<Vec<_>>();
+        sparse_frames[1] = root_frames[1].clone();
+        sparse_frames[3] = root_frames[3].clone();
+        assert_eq!(
+            deliver_frames(sparse_frames, epoch, (0, 1)).unwrap(),
+            deliver_frames(root_frames, epoch, (0, 1)).unwrap()
         );
     }
 }

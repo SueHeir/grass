@@ -12,6 +12,7 @@ pub struct RoleLaunch {
     peer: String,
     config_source: String,
     exchange: Box<dyn RoleExchange>,
+    sparse_peer: Option<(i32, i32)>,
 }
 
 impl RoleLaunch {
@@ -47,7 +48,13 @@ impl RoleLaunch {
     /// code supplies peer role-rank destinations; GRASS performs deterministic
     /// delivery without interpreting coordinates or scientific entities.
     pub fn into_routed_exchange(self) -> RoutedRoleExchange {
-        RoutedRoleExchange::new(self.exchange)
+        match self.sparse_peer {
+            Some((peer_root, peer_size)) => {
+                drop(self.exchange);
+                RoutedRoleExchange::new_sparse(peer_root, peer_size)
+            }
+            None => RoutedRoleExchange::new(self.exchange),
+        }
     }
 
     /// Split the launch into its input document and transport.
@@ -159,8 +166,8 @@ impl CoupledPairRunner {
         Second: FnOnce(RoleLaunch) -> T + Send + 'static,
     {
         let (first_exchange, second_exchange) = LocalRoleExchange::pair();
-        let first_launch = self.launch(&self.first, &self.second, first_exchange);
-        let second_launch = self.launch(&self.second, &self.first, second_exchange);
+        let first_launch = self.launch(&self.first, &self.second, first_exchange, None);
+        let second_launch = self.launch(&self.second, &self.first, second_exchange, None);
         let first_thread = std::thread::spawn(move || first(first_launch));
         let second_thread = std::thread::spawn(move || second(second_launch));
         let first_result = first_thread.join();
@@ -200,11 +207,15 @@ impl CoupledPairRunner {
             .topology()
             .role_world_range(peer)
             .expect("validated peer role");
-        let exchange: Box<dyn RoleExchange> = Box::new(MpiRoleExchange::new(
-            peer_range.start,
-            peer_range.end - peer_range.start,
-        ));
-        let launch = self.launch(&role, peer, exchange);
+        let launch = self.launch(
+            &role,
+            peer,
+            Box::new(MpiRoleExchange::new(
+                peer_range.start,
+                peer_range.end - peer_range.start,
+            )),
+            Some((peer_range.start, peer_range.end - peer_range.start)),
+        );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(launch)));
         runtime.finalize();
         match result {
@@ -213,12 +224,19 @@ impl CoupledPairRunner {
         }
     }
 
-    fn launch(&self, role: &str, peer: &str, exchange: Box<dyn RoleExchange>) -> RoleLaunch {
+    fn launch(
+        &self,
+        role: &str,
+        peer: &str,
+        exchange: Box<dyn RoleExchange>,
+        sparse_peer: Option<(i32, i32)>,
+    ) -> RoleLaunch {
         RoleLaunch {
             role: role.to_owned(),
             peer: peer.to_owned(),
             config_source: self.source.clone(),
             exchange,
+            sparse_peer,
         }
     }
 }

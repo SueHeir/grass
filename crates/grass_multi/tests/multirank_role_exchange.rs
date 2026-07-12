@@ -113,6 +113,10 @@ fn run_routed_role(launch: RoleLaunch) {
             );
         }
     }
+    assert!(exchange
+        .exchange(CouplingEpoch(99), &[])
+        .expect("participate in empty sparse exchange")
+        .is_empty());
 }
 
 #[test]
