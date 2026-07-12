@@ -16,6 +16,7 @@ The complete sources are kept with the runnable examples:
 - [one oscillator library and the local composition](../../../examples/oscillator_demo/);
 - [explicit, Picard, relaxed, and adaptive schedules](../../../examples/oscillator_coupling_schemes/);
 - [LocalTransport replay and the two MPI binaries](../../../examples/oscillator_mpmd/).
+- [one binary with TOML-selected local or MPI placement](../../../examples/oscillator_spmd/).
 
 All commands below are run from the Grass repository root.
 
@@ -324,3 +325,5 @@ oscillators:
 
 For the API-level rules behind this walkthrough, see [Coupling Two Solvers](./coupling-two-solvers.md)
 and the [Scientific Library Composition Contract](../reference/library-composition-contract.md).
+To make GRASS own the process bootstrap as well, continue with
+[One Binary: Local or MPI from TOML](./single-binary-coupling.md).
