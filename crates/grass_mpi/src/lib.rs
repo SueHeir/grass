@@ -73,8 +73,11 @@ use std::ops::{Deref, DerefMut};
 
 mod runtime;
 #[cfg(feature = "mpi_backend")]
-pub use runtime::{MpiRuntime, MpiRuntimeError};
-pub use runtime::{RoleAssignment, RoleSpec, RoleTopology, RoleTopologyError};
+pub use runtime::{Bootstrap, MpiRuntime, MpiRuntimeError};
+pub use runtime::{
+    config_digest, BootstrapError, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
+    RoleTopologyError, TopologyConfig, TopologyMode, TopologyPlan,
+};
 
 /// The `grass_mpi` application prelude.
 ///
@@ -115,9 +118,13 @@ pub use runtime::{RoleAssignment, RoleSpec, RoleTopology, RoleTopologyError};
 pub mod prelude {
     #[cfg(feature = "mpi_backend")]
     pub use crate::{
-        finalize_mpi, get_mpi_world, init_app_color, MpiCommBackend, MpiRuntime, MpiRuntimeError,
+        finalize_mpi, get_mpi_world, init_app_color, Bootstrap, MpiCommBackend, MpiRuntime,
+        MpiRuntimeError,
     };
-    pub use crate::{CommResource, RoleAssignment, RoleSpec, RoleTopology, SingleProcessComm};
+    pub use crate::{
+        config_digest, CommResource, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
+        SingleProcessComm, TopologyConfig, TopologyMode, TopologyPlan,
+    };
 }
 
 #[cfg(feature = "mpi_backend")]
@@ -561,6 +568,20 @@ pub fn world_size() -> i32 {
     use mpi::topology::Communicator;
     let mut guard = MPI_UNIVERSE.lock().unwrap();
     world_from_universe_or_external_init(&mut guard).size()
+}
+
+/// Return `true` iff every rank of raw `MPI_COMM_WORLD` passed the same
+/// `value`. Implemented as a min/max all-reduce over raw WORLD, so it is a
+/// collective: every rank must call it. Used by the bootstrap to verify that
+/// a single-binary launch parsed an identical configuration on every rank.
+#[cfg(feature = "mpi_backend")]
+pub fn all_uniform_u64(value: u64) -> bool {
+    let world = get_mpi_world_raw();
+    let mut min = value;
+    let mut max = value;
+    world.all_reduce_into(&value, &mut min, SystemOperation::min());
+    world.all_reduce_into(&value, &mut max, SystemOperation::max());
+    min == max
 }
 
 #[cfg(not(feature = "mpi_backend"))]
