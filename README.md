@@ -7,7 +7,12 @@
 ## Why GRASS exists
 
 Most simulation codes begin the same way: define a state, call functions in a
-particular order to edit the state, repeat. GRASS provides a formalized way to define your state (resources) and call functions (systems) via plugins, schedules, apps and sub-apps. (This is very similar to [Bevy's](https://bevyengine.org) ECS; however, it's just the S of ECS). Every aspect of a simulation's codebase is added as a plugin, making every aspect of the code swappable and replaceable via additional plugins.
+particular order to edit the state, repeat. You define that scientific state as
+ordinary Rust types; GRASS holds instances of those types as resources and calls
+systems that read or write them through Apps, schedules, plugins, and sub-Apps.
+(This is very similar to [Bevy's](https://bevyengine.org) ECS; however, it's just
+the S of ECS.) Reusable capabilities can be packaged as plugins, making solver
+pieces replaceable without making GRASS the owner of their scientific data.
 
 GRASS stems from my frustration with editing scientific codebases. Scientific solvers are usually built as closed applications. Each grows
 its own state containers, lifecycle, timestep driver, I/O, and communication
@@ -80,12 +85,17 @@ fn main() {
     let mut app = App::new();
     app.add_subapp("dem", setup::dem())
       .add_subapp("cfd", setup::cfd())
-      .add_plugins(DemCfdCouplingPlugin::for_air(RADIUS, 200, DT, GRAVITY))
+      .add_plugins(DemCfdCouplingPlugin::new(RADIUS, 200))
       .start();
 }
 ```
 
-Only 5 lines? Well not really, `DemCfdCouplingPlugin` does all the heavy lifting here. The important thing is that the code of the subapps for the DEM solver and CFD solver were NOT edited, both codes know nothing about each other. All changes to both codes and added systems for coupling codes to transfer information were done via the Coupling plugin we add.
+Only five lines? Well, not really: `setup::dem()` and `setup::cfd()` still build
+complete solvers, and `DemCfdCouplingPlugin` contains the coupling logic. The
+important part is where that logic lives. The DEM and CFD remain independently
+useful Apps; neither solver crate imports the other. Their coupling belongs to a
+third package that understands both sides and is added only by the executable
+that wants this particular composition.
 
 GRASS knows nothing about particles,
 meshes, or physics. It provides the App, scheduler, I/O, MPI, and coupling layer
@@ -93,127 +103,123 @@ that domain crates and complete solvers build on.
 
 ## What makes that composition possible
 
-GRASS does not make two arbitrary closed programs compatible. The boundary has
-to be designed into the libraries: each solver owns its internal state and
-behavior, while the application that combines them owns the schedule, exchange,
-and stopping policy.
+GRASS does not make two arbitrary closed programs compatible. Each solver still
+has to expose a useful library boundary: typed state, scheduled behavior, and
+stable places where coupling work may occur.
+
+The solver and coupling crates define the resource types. GRASS does **not**
+define `Atom`, `CfdState`, particle forces, mesh fields, or any other scientific
+data. An `App` holds instances of those types in its resource store, and the
+scheduler lends them to systems when those systems run.
 
 ```text
- solver A                    coupling application                    solver B
-┌──────────────┐           ┌────────────────────────┐             ┌──────────────┐
-│ private state│           │ parent schedule        │             │ private state│
-│ systems      │── expose ─▶ exchange contract ────▶│ consume     │ systems      │
-│ plugins      │           │ cadence + stop policy  │             │ plugins      │
-└──────────────┘           └────────────────────────┘             └──────────────┘
-       │                               │                                 │
-       └──────────── GRASS App · resources · systems · plugins ──────────┘
+ DEM crate                         coupling crate                         CFD crate
+ defines:                          defines:                              defines:
+ Atom, contacts, phases            conversion + orchestration            CfdState, mesh fields,
+ and DEM plugins                   systems and coupling plugin           fluxes and CFD plugins
+      │                                      │                                  │
+      ▼                                      ▼                                  ▼
+┌───────────────┐                    ┌─────────────────┐                 ┌───────────────┐
+│  "dem" App    │◀── read/write ───│   parent App     │── read/write ─▶│  "cfd" App    │
+│ holds DEM     │                    │ orders solver    │                 │ holds CFD     │
+│ resources     │                    │ ticks + exchange │                 │ resources     │
+└───────────────┘                    └─────────────────┘                 └───────────────┘
+      └──────── resource instances are held and scheduled by GRASS ────────────┘
 ```
 
 That division of ownership is the important part:
 
-- A **solver library** owns its resources, systems, phases, and plugins.
-- A **coupling package** owns the data conversion and exchange systems.
-- The **parent application** selects the plugins, orders the solver ticks and
-  exchanges, and decides when the combined run is finished.
+- A **solver library** defines its scientific resource types, systems, phases,
+  and plugins.
+- A **GRASS App** holds the resource instances and runs the solver's schedule.
+- A **coupling package** defines the cross-solver conversion, exchange systems,
+  and coupling plugin.
+- The **executable** chooses the two solver Apps and the coupling plugin it wants
+  to compose.
 
-### What one coupled step looks like in code
+### We have CFD code and DEM code. What does the coupling plugin look like?
 
-Suppose CFD computes a force that a DEM library must apply during a public
-`ExternalForces` phase. The names in this example are illustrative: a real
-solver must export the equivalent phase and resource types as part of its
-coupling seam. The coupling package first defines the small adapter resource
-that will live inside the DEM sub-App:
+The two solver builders return ordinary Apps. The DEM App holds resources such
+as `Atom` and `FluidForces`; the CFD App holds resources such as `ParticleSet`,
+`CfdState`, and `InterphaseForces`. Those types come from SOIL, FIELD/CFD, and
+the DEM-CFD coupling package—not from GRASS.
+
+The coupling package supplies systems that translate between the two resource
+stores. For example, the export system reads the DEM particles and writes the
+CFD-facing particle set:
 
 ```rust
-use grass_scheduler::{Res, ResMut};
+fn export_kinematics(world: Multi, spec: Res<ParticleSpec>) {
+    let atoms = world.expect_read::<Atom>("dem");
+    let mut particles = world.expect_write::<ParticleSet>("cfd");
 
-#[derive(Default)]
-struct CfdForce(Vec<[f64; 3]>);
-
-fn apply_cfd_force(
-    force: Res<CfdForce>,
-    mut particles: ResMut<DemParticles>,
-) {
-    particles.add_external_forces(&force.0);
+    particles.particles.clear();
+    for i in 0..atoms.nlocal as usize {
+        particles.particles.push(ParticleKinematics {
+            center: atoms.pos[i].map(f64::from),
+            velocity: atoms.vel[i].map(f64::from),
+            radius: spec.radius,
+        });
+    }
 }
 ```
 
-After both solvers have been registered, the coupling plugin can install that
-resource and system into the existing DEM App without editing the DEM library:
+The reverse system reads the forces produced by CFD and writes the resource the
+DEM force phase consumes:
 
 ```rust
-parent.configure_subapp("dem", |dem| {
-    dem.add_resource(CfdForce::default());
-    dem.add_update_system(apply_cfd_force, DemPhase::ExternalForces);
-});
-```
+fn import_force(world: Multi) {
+    let cfd_forces = world.expect_read::<InterphaseForces>("cfd");
+    let mut dem_forces = world.expect_write::<FluidForces>("dem");
 
-`configure_subapp` receives `&mut App`, so the inserted system is an ordinary
-DEM child system. It uses ordinary `Res` / `ResMut` and runs at the exact place
-defined by `DemPhase::ExternalForces`. Configuration must happen before the
-child is prepared or ticked, and currently applies only to local sub-Apps.
-
-The cross-solver conversion is a different system. It belongs to the parent
-schedule and uses typed namespace markers to borrow resources from the child
-Apps:
-
-```rust
-use grass_multi::{namespace, MultiRes, MultiResMut};
-
-namespace!(Cfd = "cfd");
-namespace!(Dem = "dem");
-
-fn transfer_cfd_force(
-    cfd: MultiRes<CfdState, Cfd>,
-    mut force: MultiResMut<CfdForce, Dem>,
-) {
-    force.0 = calculate_particle_forces(&cfd);
+    dem_forces.f.clone_from(&cfd_forces.force);
 }
 ```
 
-`MultiRes<CfdState, Cfd>` is a shared borrow from the CFD child resource store.
-`MultiResMut<CfdForce, Dem>` is an exclusive borrow from the DEM child resource
-store. They are automatically injected into this parent system just like
-ordinary `Res` and `ResMut` are injected into a child system.
-
-Finally, ticking a child is also an ordinary parent system. The parent places
-the complete solver ticks and the exchange in the required physical order:
+The plugin packages those systems with the order of one coupled step:
 
 ```rust
-use grass_multi::tick_n_times;
-
-#[derive(Clone, Copy, Debug, ScheduleSet)]
-enum CoupledStep {
-    TickCfd,
-    TransferForce,
-    TickDem,
-    Check,
+struct DemCfdCouplingPlugin {
+    particle_radius: f64,
+    steps: u32,
 }
 
-parent
-    .add_update_system(tick_n_times::<Cfd>(1), CoupledStep::TickCfd)
-    .add_update_system(transfer_cfd_force, CoupledStep::TransferForce)
-    .add_update_system(tick_n_times::<Dem>(1), CoupledStep::TickDem)
-    .add_update_system(check_coupled_run, CoupledStep::Check);
+impl Plugin for DemCfdCouplingPlugin {
+    fn build(&self, parent: &mut App) {
+        parent
+            .add_resource(ParticleSpec {
+                radius: self.particle_radius,
+            })
+            .add_update_system(export_kinematics, CouplePhase::Export)
+            .add_update_system(tick_subapp("cfd", 1), CouplePhase::TickCfd)
+            .add_update_system(import_force, CouplePhase::Import)
+            .add_update_system(tick_subapp("dem", 1), CouplePhase::TickSoil)
+            .add_plugins(OuterIterStopPlugin {
+                n_iters: self.steps,
+                phase: CouplePhase::Check,
+            });
+    }
+}
 ```
 
 One parent iteration is therefore:
 
 ```text
-tick CFD's complete schedule
-    → read CfdState and write DEM's CfdForce
+read DEM particles and write the CFD-facing particle set
+    → tick CFD's complete schedule
+    → read CFD forces and write the DEM-facing force resource
     → tick DEM's complete schedule
-        → ... → DemPhase::ExternalForces → ...
     → check the combined stopping policy
 ```
 
-The parent can put its own systems before, after, or between calls to
-`tick_n_times` / `tick_subapp`. A child tick normally runs that child's entire
-schedule. To place coupling work *inside* a child tick, the child must expose a
-phase such as `ExternalForces`, and the coupling plugin installs an adapter there
-with `configure_subapp` as shown above. Ticking and `MultiRes` access must remain
-in separate parent systems because they borrow the parent's `SubApps` resource
-in incompatible ways.
+The DEM's ordinary force system reads `FluidForces` when its own schedule reaches
+the force phase. The CFD's ordinary output system writes `InterphaseForces`.
+Neither solver needs to call the other or know how the parent arranged them.
+
+This is the simple parent-owned pattern. More advanced couplings can export
+named seams inside child loops, branches, or rollback regions, or route records
+between unequal MPI role sizes. Those mechanisms change where and how exchange
+happens; they do not change who defines the scientific data.
 
 The full, test-linked rules are in the
 [Scientific Library Composition Contract](docs/src/reference/library-composition-contract.md).
@@ -261,16 +267,17 @@ also generate configuration examples and field references from plugin metadata.
 
 ### Sub-apps keep complete solvers independent
 
-`grass_multi` places several `App`s under a parent. For one-off local coupling,
-`MultiRes<T, NS>` and `MultiResMut<T, NS>` provide namespaced access to a
-sub-app's resources. A dedicated coupling package can read both solvers' state,
-perform the physical conversion, and write the result without either solver
-depending on the other.
+`grass_multi` places several `App`s under a parent. `MultiRes<T, NS>` and
+`MultiResMut<T, NS>` provide namespaced access to resources held by those Apps.
+A dedicated coupling package can read both solvers' state, perform the physical
+conversion, and write the result without either solver depending on the other.
 
-The same parent/sub-app model supports separate MPI binaries through
-`add_remote_subapp`, `Wire`, `Transport`, and `MpiInterCommTransport`. Remote
-coupling is explicit: both peers must agree on message order, direction, cadence,
-and wire representation.
+The same executable can run both solvers locally or use a TOML topology to split
+MPI ranks into solver roles. Solver collectives stay inside role-local
+communicators; cross-role coupling uses a separate coupling communicator.
+`RoutedRoleExchange` carries opaque, stable-ID records between unequal role sizes
+without teaching GRASS what a particle or mesh cell is. The older explicit
+`Wire` / `Transport` path remains available for separately launched peers.
 
 ## What is demonstrated today
 
@@ -288,6 +295,7 @@ the composition model:
 | [`oscillator_demo`](examples/oscillator_demo/README.md) | Independent solver libraries, sub-app composition, and generated configuration |
 | [`oscillator_coupling_schemes`](examples/oscillator_coupling_schemes/README.md) | Explicit, Picard, relaxed, and adaptive exchanges compared with an independent reference |
 | [`oscillator_mpmd`](examples/oscillator_mpmd/README.md) | The coupling contract exercised across separate MPI binaries |
+| [`oscillator_spmd`](examples/oscillator_spmd/README.md) | One executable selecting local composition or MPI solver roles from topology |
 | [`typed_system_labels`](examples/typed_system_labels/README.md) | Typed ordering, required dependencies, and failure diagnostics |
 | [`fallible_lifecycle`](examples/fallible_lifecycle/README.md) | Setup failure propagation, update short-circuiting, and cleanup |
 
@@ -355,6 +363,11 @@ including [`dev_soil_sph`](https://github.com/SueHeir/dev_soil_sph),
 the boundaries are usable; they are not presented as domain-validated peers of
 DIRT.
 
+Coupling packages sit across those branches rather than inside either substrate.
+For example, `dev_couple_dem_cfd` depends on SOIL/DEM and FIELD/CFD types and owns
+their translation; GRASS only holds, schedules, and transports the resulting
+resource data.
+
 ## Run something
 
 Clone the repository and run the smallest examples:
@@ -390,9 +403,9 @@ grass_mpi       = { git = "https://github.com/SueHeir/grass" }
 | [`grass_app`](crates/grass_app/README.md) | `App`, lifecycle, `Plugin`, `PluginGroup`, dependency/capability validation, generated configuration |
 | [`grass_scheduler`](crates/grass_scheduler/README.md) | Typed resources and systems, schedule tree, phases, labels, conditions, states, stages, coherence hooks |
 | [`grass_derive`](crates/grass_derive/README.md) | Derives for schedules, stages, namespaces, and configuration metadata |
-| [`grass_multi`](crates/grass_multi/README.md) | Sub-apps, namespaced resource access, exchange helpers, wire types, and local/remote transports |
+| [`grass_multi`](crates/grass_multi/README.md) | Sub-apps, namespaced resource access, coupling orchestration, routed role exchange, and local/remote transports |
 | [`grass_io`](crates/grass_io/README.md) | TOML configuration, simulation clock, run control, terminal output, and dumps |
-| [`grass_mpi`](crates/grass_mpi/README.md) | MPI backend abstraction used by remote coupling |
+| [`grass_mpi`](crates/grass_mpi/README.md) | MPI backend, topology bootstrap, role-local solver communicators, and coupling-runtime support |
 
 ## Choose your route
 
