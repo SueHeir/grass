@@ -159,11 +159,11 @@ mod wire;
 pub use grass_derive::Namespace;
 
 pub use multi::{
-    tick_n_times, tick_subapp, Multi, MultiAppExt, MultiContext, MultiMut, MultiRef, Namespace,
-    RemoteSubAppBuilder, SubApps,
+    advance_to_seam, complete_subapp_step, tick_n_times, tick_subapp, Multi, MultiAppExt,
+    MultiContext, MultiMut, MultiRef, Namespace, RemoteSubAppBuilder, SubApps,
 };
 pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlugin};
-pub use physics::{AppPhysics, Physics, StepResult};
+pub use physics::{AppPhysics, Physics, PhysicsProgress, StepResult};
 pub use port::{consume_field, expose_field, Port};
 pub use relax::{converge_outer_iter, OuterIteration, Relaxation};
 pub use remote::{

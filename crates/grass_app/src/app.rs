@@ -453,6 +453,13 @@ impl App {
         self
     }
 
+    /// Advances a hierarchical update schedule to its next exported seam or
+    /// completes the timestep. Use this instead of [`run`](Self::run) for an
+    /// App whose schedule exports orchestration boundaries.
+    pub fn resume(&mut self) -> grass_scheduler::ScheduleProgress {
+        self.sub_apps.main.resume()
+    }
+
     /// Registers a system to run during the setup phase at the given schedule phase.
     pub fn add_setup_system<M>(
         &mut self,

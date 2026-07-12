@@ -599,6 +599,10 @@ impl Physics for RemoteMirrorPhysics {
         self.try_step().unwrap_or_else(|err| panic!("{err}"))
     }
 
+    // `Physics::resume` intentionally uses the default atomic step. A future
+    // distributed seam protocol must exchange stable seam IDs explicitly;
+    // local scheduler cursor state is never inferred through a mirror.
+
     fn is_done(&self) -> bool {
         // The peer signals its own done-ness via its own scheduler; the
         // mirror never reports done. Use a separate transport message or a

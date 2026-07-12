@@ -17,6 +17,15 @@ use grass_app::App;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 
+/// Progress made while advancing one physics participant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicsProgress {
+    /// A local participant yielded at an exported schedule seam.
+    Yielded(grass_scheduler::ScheduleSeam),
+    /// One complete participant timestep finished.
+    Complete,
+}
+
 /// Outcome of one [`Physics::step`] call.
 #[derive(Debug, Clone, Copy)]
 pub struct StepResult {
@@ -66,6 +75,13 @@ pub trait Physics: 'static {
     /// decides how many times per outer iter this is called — typically
     /// once per [`tick_subapp(name, n)`](crate::tick_subapp) registration.
     fn step(&mut self) -> StepResult;
+
+    /// Advance to the next exported seam or finish one timestep. Physics
+    /// implementations without seam support remain atomic by default.
+    fn resume(&mut self) -> PhysicsProgress {
+        self.step();
+        PhysicsProgress::Complete
+    }
 
     /// Returns `true` if this subsystem has signalled it's done (e.g. by a
     /// `system_check_done` setting `SchedulerManager::state = End`).
@@ -177,6 +193,13 @@ impl Physics for AppPhysics {
         self.app.run();
         StepResult {
             completed_full_step: true,
+        }
+    }
+
+    fn resume(&mut self) -> PhysicsProgress {
+        match self.app.resume() {
+            grass_scheduler::ScheduleProgress::Yielded(seam) => PhysicsProgress::Yielded(seam),
+            grass_scheduler::ScheduleProgress::Complete => PhysicsProgress::Complete,
         }
     }
 

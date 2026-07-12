@@ -42,7 +42,7 @@
 //!   it when the parent App's scheduler should drive sub-App ticks (the
 //!   default Tier-0 model).
 
-use crate::physics::{AppPhysics, Physics};
+use crate::physics::{AppPhysics, Physics, PhysicsProgress};
 use crate::remote::RemoteMirrorPhysics;
 use crate::transport::Transport;
 use grass_app::App;
@@ -244,6 +244,14 @@ impl SubApps {
         self.prepare(ns);
         let idx = self.idx_of(ns).expect("known sub-App after preparation");
         self.physics[idx].borrow_mut().step();
+    }
+
+    /// Advance a named participant to its next exported seam or timestep
+    /// completion. Preparation is enforced exactly as for [`tick`](Self::tick).
+    pub fn resume(&mut self, ns: &str) -> PhysicsProgress {
+        self.prepare(ns);
+        let idx = self.idx_of(ns).expect("known sub-App after preparation");
+        self.physics[idx].borrow_mut().resume()
     }
 
     /// Returns `true` if any registered sub-App has signalled `is_done()`.
@@ -497,6 +505,38 @@ pub fn tick_n_times<NS: Namespace>(n: usize) -> impl FnMut(ResMut<SubApps>) {
         for _ in 0..n {
             subs.tick(NS::NAME);
         }
+    }
+}
+
+/// Parent-system constructor that advances typed child `NS` to its next seam
+/// and verifies its stable protocol ID. Completion or another seam fails
+/// closed. The `ResMut<SubApps>` borrow ends when this system returns, before
+/// the following parent coupling system begins.
+pub fn advance_to_seam<NS: Namespace>(expected: &'static str) -> impl FnMut(ResMut<SubApps>) {
+    move |mut subs: ResMut<SubApps>| match subs.resume(NS::NAME) {
+        PhysicsProgress::Yielded(seam) if seam.id() == expected => {}
+        PhysicsProgress::Yielded(seam) => panic!(
+            "advance_to_seam<{}>: expected seam `{expected}`, got `{}`",
+            NS::NAME,
+            seam.id()
+        ),
+        PhysicsProgress::Complete => panic!(
+            "advance_to_seam<{}>: expected seam `{expected}`, but the child timestep completed",
+            NS::NAME
+        ),
+    }
+}
+
+/// Parent-system constructor that requires typed child `NS` to finish its
+/// current timestep. Yielding at any seam fails closed.
+pub fn complete_subapp_step<NS: Namespace>() -> impl FnMut(ResMut<SubApps>) {
+    move |mut subs: ResMut<SubApps>| match subs.resume(NS::NAME) {
+        PhysicsProgress::Complete => {}
+        PhysicsProgress::Yielded(seam) => panic!(
+            "complete_subapp_step<{}>: expected timestep completion, got seam `{}`",
+            NS::NAME,
+            seam.id()
+        ),
     }
 }
 
