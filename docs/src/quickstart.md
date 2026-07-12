@@ -113,7 +113,7 @@ Everything above is one solver. GRASS earns its keep when you grow it:
   editing the original. See
   [App, Plugin, PluginGroup](./model/app-plugin.md).
 - **Coupling.** Run several `App`s as sub-Apps under one parent and exchange
-  state each step with `MultiRes<T, NS>` / `MultiResMut<T, NS>` — in one process
+  state from the parent each step with `MultiRes<T, NS>` / `MultiResMut<T, NS>` — in one process
   (`add_subapp`) or across separate MPI binaries (`add_remote_subapp` +
   `MpiInterCommTransport`). See [MPI and Coupling](./model/mpi-coupling.md).
 - **I/O for free.** Add the `grass_io` plugins for a TOML-configured clock,

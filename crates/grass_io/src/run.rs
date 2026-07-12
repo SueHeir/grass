@@ -669,6 +669,35 @@ mod tests {
         assert_eq!(UPDATE_CYCLE.name(), "update_cycle");
     }
 
+    #[test]
+    fn multistage_boundary_waits_for_next_stage_setup() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "first"
+            steps = 1
+
+            [[run]]
+            name = "second"
+            steps = 1
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        // Force App through the fallible-setup lifecycle used by downstream
+        // input plugins. Every later run stage must still receive setup.
+        app.add_fallible_setup_system(
+            "fallible-input",
+            |_app: &mut App| Ok(()),
+            ScheduleSetupSet::PreSetup,
+        );
+        app.try_start().expect("multi-stage fallible lifecycle");
+
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.total_cycle, 2);
+        assert_eq!(state.cycle_count, vec![1, 1]);
+    }
+
     #[derive(Debug, Default, Deserialize, PartialEq)]
     #[serde(deny_unknown_fields)]
     struct SolverKnobs {

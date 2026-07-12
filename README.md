@@ -344,8 +344,11 @@ also generate configuration examples and field references from plugin metadata.
 
 ### Sub-apps keep complete solvers independent
 
-`grass_multi` places several `App`s under a parent. `MultiRes<T, NS>` and
-`MultiResMut<T, NS>` provide namespaced access to resources held by those Apps.
+`grass_multi` places several `App`s under a parent. Parent coupling systems use
+`MultiRes<T, NS>` and `MultiResMut<T, NS>` for namespaced access to resources
+held by those Apps. These parameters are not injected into child Apps: a child
+system uses ordinary `Res<T>` / `ResMut<T>` for its own resources, while the
+parent drives whole ticks or stops at exported scheduler seams.
 A dedicated coupling package can read both solvers' state, perform the physical
 conversion, and write the result without either solver depending on the other.
 

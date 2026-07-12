@@ -37,9 +37,8 @@ fn direct_exchange(
 fn final_state(parent: &App) -> FinalState {
     let subs = parent.get_resource_ref::<SubApps>().expect("sub-apps");
     let read = |name| {
-        let cell = subs
-            .find(name)
-            .expect("known sub-app")
+        let participant = subs.find(name).expect("known sub-app");
+        let cell = participant
             .resource_cell(std::any::TypeId::of::<OscillatorState>())
             .expect("oscillator state")
             .borrow();

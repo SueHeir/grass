@@ -164,6 +164,6 @@ Nested support preserves these invariants:
    at timestep completion; it never runs through a seam silently.
 
 These rules make the parent schedule an inspectable statement of the coupled
-algorithm. Child-level `MultiRes` remains available as an advanced integration
-tool, but it does not replace explicit orchestration when convergence,
-transport, or rollback spans multiple solvers.
+algorithm. Cross-solver `Multi` / `MultiRes` access stays in the parent between
+resume operations. Child systems use ordinary `Res` / `ResMut` for their own
+state; they do not reach into peer Apps while a child scheduler is active.

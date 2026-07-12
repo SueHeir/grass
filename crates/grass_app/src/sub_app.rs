@@ -112,13 +112,6 @@ impl SubApp {
         }
     }
 
-    /// Runs the update loop after setup has completed.
-    pub(crate) fn run_until_done(&mut self) {
-        while !self.is_done() {
-            self.scheduler.run();
-        }
-    }
-
     /// Returns `true` if a system has signalled simulation end via
     /// [`SchedulerManager::state`](grass_scheduler::SchedulerManager) == `End`.
     pub fn is_done(&self) -> bool {
@@ -126,6 +119,15 @@ impl SubApp {
         self.scheduler
             .get_resource_ref::<SchedulerManager>()
             .map(|sm| matches!(sm.state, SchedulerState::End))
+            .unwrap_or(false)
+    }
+
+    /// Returns whether the scheduler has requested the next setup pass.
+    pub(crate) fn needs_setup(&self) -> bool {
+        use grass_scheduler::{SchedulerManager, SchedulerState};
+        self.scheduler
+            .get_resource_ref::<SchedulerManager>()
+            .map(|sm| matches!(sm.state, SchedulerState::Setup))
             .unwrap_or(false)
     }
 

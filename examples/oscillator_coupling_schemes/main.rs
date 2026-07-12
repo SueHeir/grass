@@ -56,20 +56,21 @@ fn build() -> (App, Case) {
     }
     (parent, case)
 }
-fn cell<'a, T: 'static>(
-    subs: &'a SubApps,
-    name: &str,
-) -> &'a std::cell::RefCell<Box<dyn std::any::Any>> {
-    subs.find(name)
-        .unwrap()
+fn get<T: Copy + 'static>(subs: &SubApps, name: &str) -> T {
+    let participant = subs.find(name).unwrap();
+    let value = *participant
         .resource_cell(TypeId::of::<T>())
         .unwrap()
-}
-fn get<T: Copy + 'static>(subs: &SubApps, name: &str) -> T {
-    *cell::<T>(subs, name).borrow().downcast_ref::<T>().unwrap()
+        .borrow()
+        .downcast_ref::<T>()
+        .unwrap();
+    value
 }
 fn put<T: Copy + 'static>(subs: &SubApps, name: &str, value: T) {
-    *cell::<T>(subs, name)
+    let participant = subs.find(name).unwrap();
+    *participant
+        .resource_cell(TypeId::of::<T>())
+        .unwrap()
         .borrow_mut()
         .downcast_mut::<T>()
         .unwrap() = value;

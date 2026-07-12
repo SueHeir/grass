@@ -32,3 +32,4 @@
 - [Public API and extension points](./reference/public-api.md)
 - [Generated plugin contracts](./reference/generated-contracts.md)
 - [Derive Macros](./reference/derives.md)
+- [Downstream compatibility contract](./reference/downstream-compatibility.md)

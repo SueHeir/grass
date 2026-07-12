@@ -7,9 +7,9 @@
 //! exactly as if it were local, and the value it sees is governed solely by the
 //! explicit pump systems — never by the parameter retrieval.
 //!
-//! This does **not** prove that a system running inside a child scheduler can
-//! request `MultiRes`; child-scheduler access needs a composition context that
-//! remains available while that child is executing and is covered separately.
+//! Cross-solver typed access is intentionally parent-owned. Child schedulers use
+//! ordinary `Res` / `ResMut` and yield through exported seams when orchestration
+//! is needed inside a complex step.
 //!
 //! This is the load-bearing invariant behind single-binary SPMD coupling:
 //! `MultiRes::retrieve` / `MultiResMut::retrieve` only borrow a local resource

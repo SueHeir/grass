@@ -28,9 +28,9 @@
 //!
 //! Each `MultiRes*` resolves a non-owning participant handle from the shared
 //! [`MultiContext`](crate::MultiContext), then holds both the participant guard
-//! and the `Ref` / `RefMut` on the specific resource cell for `T`. The same
-//! context is installed in the parent and every local child before preparation,
-//! so an unchanged system signature works at either scheduler level.
+//! and the `Ref` / `RefMut` on the specific resource cell for `T`. The context
+//! is installed only on the parent App: cross-solver access belongs in explicit
+//! parent coupling phases between child resume/tick operations.
 //!
 //! Because both must coexist in one struct (self-referential), the
 //! constructor uses one `unsafe` lifetime extension. The retained `Rc`
@@ -42,8 +42,8 @@
 //! - **`Multi` / `MultiRef` / `MultiMut`** (string-keyed): namespace is
 //!   runtime data — config-driven, debug taps, per-instance bindings.
 //! - **`MultiRes<T, NS>` / `MultiResMut<T, NS>`** (typed): namespace is fixed at
-//!   the system's site of definition. The common case for coupling
-//!   systems between known sub-Apps.
+//!   the system's site of definition. Use these in parent coupling systems
+//!   between known sub-Apps, never inside a child scheduler.
 
 use crate::multi::{MultiContext, Namespace, Participant};
 use crate::Physics;

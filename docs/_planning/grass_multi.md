@@ -24,8 +24,8 @@ The parent schedule is the coupling contract.
 | `Multi<'w>` | `multi.rs:154` | String-keyed; `.read::<T>(ns)` / `.write::<T>(ns)` return `Option<MultiRef>` / `Option<MultiMut>`; `.expect_read` / `.expect_write` panic with a message. Takes `Res<SubApps>` internally. |
 | `MultiRef<'w, T>` | `multi.rs:235` | Read handle; `Deref → &T`. |
 | `MultiMut<'w, T>` | `multi.rs:249` | Mut handle; `Deref/DerefMut → &mut T`. |
-| `MultiRes<T, NS>` | `typed_multi.rs:61` | Compile-time-keyed read borrow; `SystemParam`; holds an `unsafe`-extended `Ref` pair (outer `SubApps` + inner resource cell). |
-| `MultiResMut<T, NS>` | `typed_multi.rs:135` | Compile-time-keyed mut borrow; same two-ref structure as `MultiRes`. |
+| `MultiRes<T, NS>` | `typed_multi.rs:61` | Parent-only compile-time-keyed read borrow across a known participant; never installed in a child App. |
+| `MultiResMut<T, NS>` | `typed_multi.rs:135` | Parent-only compile-time-keyed mutable borrow; same scope as `MultiRes`. |
 
 ### Traits
 
@@ -244,7 +244,7 @@ chapter.
    ```
    Show substepping variant: `tick_n_times::<Spring>(3)` for 3:1 ratio.
 
-6. **Write a coupling system** using `MultiRes` / `MultiResMut`.
+6. **Write a parent coupling system** using `MultiRes` / `MultiResMut`.
    ```rust
    fn exchange(sp: MultiRes<SpringState, Spring>, mut m: MultiResMut<MassState, Mass>) {
        m.force = sp.extension * K;

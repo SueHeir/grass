@@ -62,22 +62,16 @@ enum ParticipantState {
     Cleaned,
 }
 
-/// Shared, non-owning participant registry injected into the parent and every
-/// local child App. It lets a system running inside one child resolve a peer
-/// without borrowing the parent's monolithic [`SubApps`] resource.
+/// Shared, non-owning participant registry installed on the parent App.
+/// Coupling systems use it between child resume/tick operations; it is not
+/// injected into child schedulers.
 #[derive(Clone)]
 pub struct MultiContext {
     participants: HashMap<String, Weak<RefCell<Box<dyn Physics>>>>,
-    current: Option<String>,
 }
 
 impl MultiContext {
     pub(crate) fn resolve(&self, ns: &str) -> Option<Participant> {
-        if self.current.as_deref() == Some(ns) {
-            panic!(
-                "MultiRes self-access in child `{ns}` is not allowed; use ordinary Res/ResMut for the child’s own resources"
-            );
-        }
         self.participants.get(ns)?.upgrade()
     }
 
@@ -117,7 +111,6 @@ pub struct SubApps {
     /// makes both preparation and cleanup idempotent regardless of whether a
     /// particular `Physics` implementation protects its own hooks.
     states: Vec<ParticipantState>,
-    contexts_installed: bool,
 }
 
 impl Default for SubApps {
@@ -136,7 +129,6 @@ impl SubApps {
             names: Vec::new(),
             name_to_idx: HashMap::new(),
             states: Vec::new(),
-            contexts_installed: false,
         }
     }
 
@@ -151,7 +143,6 @@ impl SubApps {
         self.names.push(name);
         self.physics.push(Rc::new(RefCell::new(p)));
         self.states.push(ParticipantState::Registered);
-        self.contexts_installed = false;
     }
 
     /// Look up a physics by name. Returns `None` if no such namespace.
@@ -197,23 +188,7 @@ impl SubApps {
                 .cloned()
                 .zip(self.physics.iter().map(Rc::downgrade))
                 .collect(),
-            current: None,
         }
-    }
-
-    fn install_contexts(&mut self) {
-        if self.contexts_installed {
-            return;
-        }
-        let context = self.context();
-        for (name, participant) in self.names.iter().zip(&self.physics) {
-            if let Some(app) = participant.borrow_mut().local_app_mut() {
-                let mut child_context = context.clone();
-                child_context.current = Some(name.clone());
-                app.add_resource(child_context);
-            }
-        }
-        self.contexts_installed = true;
     }
 
     /// Run a named sub-App's one-time preparation without advancing it.
@@ -222,7 +197,6 @@ impl SubApps {
     /// complete before the outer iteration begins. [`Self::tick`] continues
     /// to prepare lazily for the usual case.
     pub fn prepare(&mut self, ns: &str) {
-        self.install_contexts();
         let idx = self
             .idx_of(ns)
             .unwrap_or_else(|| panic!("SubApps::prepare: unknown namespace `{ns}`"));

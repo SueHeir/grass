@@ -668,7 +668,14 @@ impl App {
         self.sub_apps.main.organize_systems();
         self.try_setup()?;
         self.sub_apps.main.set_running();
-        self.sub_apps.main.run_until_done();
+        while !self.sub_apps.main.is_done() {
+            self.sub_apps.main.run();
+            if self.sub_apps.main.needs_setup() {
+                self.sub_apps.main.organize_systems();
+                self.try_setup()?;
+                self.sub_apps.main.set_running();
+            }
+        }
         self.run_cleanup();
         Ok(())
     }

@@ -26,7 +26,7 @@ private resources ─────────────────►     con
 systems and plugins                      direct MultiRes or optional Port<T>                     systems and plugins
 ```
 
-At the framework level, a library owns typed resources and systems, packages them as plugins, and declares dependencies/capabilities. Systems make their read/write access visible as `Res<T>`/`ResMut<T>`; execution is currently single-threaded and deterministic. A coupling owner owns the parent schedule and stop policy. A pair-specific coupling can access both sides directly with `MultiRes`; an optional `Port<T>` is useful when several implementations genuinely share one interface-owned exchange contract.
+At the framework level, a library defines typed resources and systems and packages them as plugins; the App holds the resource instances and declares dependencies/capabilities. Systems make their read/write access visible as `Res<T>`/`ResMut<T>`; execution is currently single-threaded and deterministic. A coupling owner owns the parent schedule and stop policy. A pair-specific parent coupling can access both sides directly with `MultiRes`; an optional `Port<T>` is useful when several implementations genuinely share one interface-owned exchange contract. Child systems use ordinary `Res`/`ResMut` and never receive cross-App `MultiRes` access.
 
 Read the precise requirements and their executable checks in the [library composition contract](./reference/library-composition-contract.md). They define how libraries designed for this boundary can compose; they are not a universal adapter for arbitrary software.
 
