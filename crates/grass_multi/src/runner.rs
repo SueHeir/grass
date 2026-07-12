@@ -1,6 +1,7 @@
 //! Declarative process runner for a locally composed or MPI-split solver pair.
 
-use crate::{LocalTransport, MpiInterCommTransport, Transport};
+use crate::role_exchange::LocalRoleExchange;
+use crate::{MpiRoleExchange, RoleExchange, SinglePeerTransport, Transport};
 use grass_mpi::{config_digest, Bootstrap, MpiRuntime, RoleTopology, TopologyConfig};
 use serde::Deserialize;
 use std::fmt;
@@ -10,7 +11,7 @@ pub struct RoleLaunch {
     role: String,
     peer: String,
     config_source: String,
-    transport: Box<dyn Transport>,
+    exchange: Box<dyn RoleExchange>,
 }
 
 impl RoleLaunch {
@@ -32,12 +33,22 @@ impl RoleLaunch {
 
     /// Consume the launch and recover its already-selected transport.
     pub fn into_transport(self) -> Box<dyn Transport> {
-        self.transport
+        Box::new(SinglePeerTransport::new(self.exchange))
+    }
+
+    /// Consume the launch and recover the multi-rank role exchange. Each call
+    /// collectively contributes this rank's interface shard and returns all
+    /// peer-role shards in deterministic peer role-rank order.
+    pub fn into_role_exchange(self) -> Box<dyn RoleExchange> {
+        self.exchange
     }
 
     /// Split the launch into its input document and transport.
     pub fn into_parts(self) -> (String, Box<dyn Transport>) {
-        (self.config_source, self.transport)
+        (
+            self.config_source,
+            Box::new(SinglePeerTransport::new(self.exchange)),
+        )
     }
 }
 
@@ -81,12 +92,12 @@ impl CoupledPairRunner {
                 .map_err(|source| RunnerError::ReadConfig { path, source })?,
             None => default_source.to_owned(),
         };
-        Self::from_str(&source)
+        Self::from_source(&source)
     }
 
     /// Parse a complete input document and validate that it declares exactly
     /// two roles. Role order is the topology declaration order.
-    pub fn from_str(source: &str) -> Result<Self, RunnerError> {
+    pub fn from_source(source: &str) -> Result<Self, RunnerError> {
         #[derive(Deserialize)]
         struct BootstrapDocument {
             topology: TopologyConfig,
@@ -140,9 +151,9 @@ impl CoupledPairRunner {
         First: FnOnce(RoleLaunch) -> T + Send + 'static,
         Second: FnOnce(RoleLaunch) -> T + Send + 'static,
     {
-        let (first_transport, second_transport) = LocalTransport::pair();
-        let first_launch = self.launch(&self.first, &self.second, first_transport);
-        let second_launch = self.launch(&self.second, &self.first, second_transport);
+        let (first_exchange, second_exchange) = LocalRoleExchange::pair();
+        let first_launch = self.launch(&self.first, &self.second, first_exchange);
+        let second_launch = self.launch(&self.second, &self.first, second_exchange);
         let first_thread = std::thread::spawn(move || first(first_launch));
         let second_thread = std::thread::spawn(move || second(second_launch));
         let first_result = first_thread.join();
@@ -169,14 +180,6 @@ impl CoupledPairRunner {
         Second: FnOnce(RoleLaunch) -> T,
     {
         let role = runtime.assignment().name().to_owned();
-        if runtime.assignment().role_size() != 1 {
-            let error = RunnerError::MultiRankRole {
-                role,
-                ranks: runtime.assignment().role_size(),
-            };
-            runtime.finalize();
-            return Err(error);
-        }
         let (peer, run): (&str, Box<dyn FnOnce(RoleLaunch) -> T>) = if role == self.first {
             (&self.second, Box::new(first))
         } else if role == self.second {
@@ -186,12 +189,15 @@ impl CoupledPairRunner {
             runtime.finalize();
             return Err(error);
         };
-        let peer_rank = runtime
+        let peer_range = runtime
             .topology()
             .role_world_range(peer)
-            .expect("validated peer role")
-            .start;
-        let launch = self.launch(&role, peer, MpiInterCommTransport::new(peer_rank));
+            .expect("validated peer role");
+        let exchange: Box<dyn RoleExchange> = Box::new(MpiRoleExchange::new(
+            peer_range.start,
+            peer_range.end - peer_range.start,
+        ));
+        let launch = self.launch(&role, peer, exchange);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(launch)));
         runtime.finalize();
         match result {
@@ -200,12 +206,12 @@ impl CoupledPairRunner {
         }
     }
 
-    fn launch(&self, role: &str, peer: &str, transport: impl Transport) -> RoleLaunch {
+    fn launch(&self, role: &str, peer: &str, exchange: Box<dyn RoleExchange>) -> RoleLaunch {
         RoleLaunch {
             role: role.to_owned(),
             peer: peer.to_owned(),
             config_source: self.source.clone(),
-            transport: Box::new(transport),
+            exchange,
         }
     }
 }
@@ -226,13 +232,6 @@ pub enum RunnerError {
     RoleCount(usize),
     /// MPI/topology bootstrap failed.
     Bootstrap(String),
-    /// The current point-to-point runner cannot map a multi-rank role yet.
-    MultiRankRole {
-        /// Role name.
-        role: String,
-        /// Configured ranks.
-        ranks: i32,
-    },
     /// Bootstrap returned a role outside the validated pair.
     UnknownRole(String),
     /// A locally composed role panicked.
@@ -247,9 +246,10 @@ impl fmt::Display for RunnerError {
         match self {
             Self::ReadConfig { path, source } => write!(f, "read config `{path}`: {source}"),
             Self::Config(error) => write!(f, "invalid coupled-runner config: {error}"),
-            Self::RoleCount(count) => write!(f, "coupled pair requires exactly two roles, got {count}"),
+            Self::RoleCount(count) => {
+                write!(f, "coupled pair requires exactly two roles, got {count}")
+            }
             Self::Bootstrap(error) => write!(f, "bootstrap coupled topology: {error}"),
-            Self::MultiRankRole { role, ranks } => write!(f, "role `{role}` has {ranks} ranks; paired point-to-point coupling currently requires one"),
             Self::UnknownRole(role) => write!(f, "bootstrap selected unknown role `{role}`"),
             Self::RolePanicked { role } => write!(f, "local role `{role}` panicked"),
         }
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn parses_declared_pair_in_topology_order() {
-        let runner = CoupledPairRunner::from_str(
+        let runner = CoupledPairRunner::from_source(
             r#"
                 [topology]
                 mode = "auto"
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn rejects_non_pair_topology_before_mpi_bootstrap() {
-        let error = CoupledPairRunner::from_str(
+        let error = CoupledPairRunner::from_source(
             r#"
                 [topology]
                 [[topology.role]]

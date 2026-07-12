@@ -206,14 +206,63 @@ interface history: heat flux and wall temperature, fluid force and particle
 motion, or whichever conserved quantities define the coupling. Compare those
 histories and conservation residuals, not merely final values.
 
-## Current boundary
+## 7. Unequal multi-rank roles
 
-`CoupledPairRunner` deliberately matches the capability that is validated now:
-two roles with one coupling rank each. The underlying topology runtime can
-split multiple ranks per role, but general `N`-to-`M` interface routing still
-requires a declared gather/scatter or distributed ownership map. The runner
-rejects multi-rank roles instead of silently choosing an invalid mapping.
+The runner also accepts unequal role sizes:
 
-That fail-closed boundary is part of the lesson: configuration should select
-among validated execution models, not imply capabilities the coupling layer
-does not yet possess.
+```toml
+[[topology.role]]
+name = "dem"
+ranks = 3
+
+[[topology.role]]
+name = "cfd"
+ranks = 2
+```
+
+Multi-rank role code consumes the collective exchange instead of the legacy
+one-peer transport:
+
+```rust,ignore
+fn run_dem(launch: RoleLaunch) {
+    let exchange = launch.into_role_exchange();
+    let local_interface = pack_local_dem_interface();
+    let cfd_shards = exchange.exchange(&local_interface)?;
+    apply_cfd_shards_to_local_particles(cfd_shards);
+}
+```
+
+`RoleExchange::exchange` performs a correctness-first root bridge:
+
+```text
+local role shards
+    → gather in deterministic role-rank order
+    → deadlock-safe exchange between role roots
+    → broadcast all peer shards inside the receiving role
+```
+
+Every rank therefore sees the complete peer interface and can apply the same
+deterministic ownership/interpolation rule. This is intentionally not the final
+scalable algorithm—it duplicates peer-interface memory and mapping work—but it
+is correct for unequal role sizes and provides a validation baseline for a
+later sparse owner-to-owner route.
+
+GRASS does **not** scatter opaque shards round-robin. CFD-cell→DEM-particle
+mapping depends on geometry, interpolation support, partition ownership, and
+conservation policy. The coupling package must state that scientific map
+explicitly; a generic runtime cannot infer it from rank counts.
+
+The live `multirank_role_exchange` test launches three DEM ranks plus two CFD
+ranks, exchanges differently sized 128-KiB-plus shards, and verifies that all
+five ranks recover the complete peer set in role-rank order. Payloads exceed
+common MPI eager limits, so the test also exercises the deadlock-safe root
+exchange path.
+
+The remaining scalability milestone is sparse distributed routing:
+
+```text
+CFD partition owners → only intersecting DEM partition owners
+```
+
+That optimization must reproduce the root bridge's mapped values and
+conservation residuals before replacing it in production-scale runs.

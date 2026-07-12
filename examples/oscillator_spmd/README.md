@@ -64,11 +64,11 @@ The declarative mode is enforced, not advisory:
 
 ## Limitations (current)
 
-- **One coupling rank per role.** Each role is one rank, and coupling is a
-  single point-to-point pair (role `a` rank 0 ↔ role `b` rank 0). Multi-rank
-  roles split correctly into role-local communicators, but the cross-role
-  coupling transport here still assumes a single peer rank; a multi-rank
-  coupling map is future work.
+- **This oscillator uses one rank per role.** Its scalar mirror uses the legacy
+  `Transport` adapter. Multi-rank applications use `RoleExchange`: each rank
+  contributes an interface shard and receives all peer-role shards in peer
+  role-rank order. The application still owns the scientific spatial mapping;
+  GRASS does not invent a CFD-cell↔DEM-particle scatter rule.
 - **Two roles.** The physics and the recurrence checker are a two-body pair.
   The topology layer itself is N-role; the example is deliberately the minimal
   coupled pair.
