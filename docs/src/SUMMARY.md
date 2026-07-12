@@ -14,6 +14,7 @@
 - [The Scheduler](./model/scheduler.md)
 - [I/O and Configuration](./model/io.md)
 - [MPI and Coupling](./model/mpi-coupling.md)
+- [Exported Child-Schedule Seams](./model/exported-seams.md)
 
 # Tutorial
 

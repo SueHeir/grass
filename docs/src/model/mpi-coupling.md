@@ -349,6 +349,12 @@ For rollback-style coupling (Picard iteration, adaptive retries),
 and restore a sub-App's resource around an inner loop. To test coupling wiring
 without real MPI, `LocalTransport::pair()` gives a paired in-memory channel.
 
+When a coupler must run between phases *inside* a child timestep, use an
+[exported child-schedule seam](./exported-seams.md). Current seams support
+parent-controlled coupling between top-level child schedule nodes; the linked
+chapter also records the scientific motivation and invariants for future seams
+inside loops, branches, and rollback fragments.
+
 ## Cross-process coupling: the remote variant
 
 To put one solver in a *separate process*, replace its `add_subapp_typed` with a
