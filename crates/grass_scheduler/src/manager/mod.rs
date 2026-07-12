@@ -1118,8 +1118,8 @@ impl Scheduler {
     ///   registered yet (conditions are `prepare`d here against the current
     ///   resource index).
     pub fn set_schedule(&mut self, mut schedule: Schedule) {
-        assert_eq!(
-            matches!(self.schedule_execution, ExecutionState::NotStarted), true,
+        assert!(
+            matches!(self.schedule_execution, ExecutionState::NotStarted),
             "cannot replace a hierarchical Schedule while a timestep is suspended at an exported seam; finish the timestep with `run()` first"
         );
         validate_exported_seams(&schedule.root);
