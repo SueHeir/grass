@@ -2,10 +2,14 @@
 //!
 //! `multi_phase3` proves the remote-mirror pump with the untyped [`Multi`]
 //! accessor. This test pins the same explicit-synchronization contract for the
-//! typed [`MultiRes`] / [`MultiResMut`] SystemParams: a child-scheduler system
+//! typed [`MultiRes`] / [`MultiResMut`] SystemParams: a parent-scheduler system
 //! reads and writes a remote peer's mirrored resource through the typed handles
 //! exactly as if it were local, and the value it sees is governed solely by the
 //! explicit pump systems — never by the parameter retrieval.
+//!
+//! This does **not** prove that a system running inside a child scheduler can
+//! request `MultiRes`; child-scheduler access needs a composition context that
+//! remains available while that child is executing and is covered separately.
 //!
 //! This is the load-bearing invariant behind single-binary SPMD coupling:
 //! `MultiRes::retrieve` / `MultiResMut::retrieve` only borrow a local resource
