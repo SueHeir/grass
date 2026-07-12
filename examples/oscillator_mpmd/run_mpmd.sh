@@ -6,7 +6,31 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 local=$(cargo run --quiet --example oscillator_mpmd_local)
-if ! mpi=$(mpirun -np 1 target/debug/examples/oscillator_mpmd_a : -np 1 target/debug/examples/oscillator_mpmd_b 2>&1); then
+set +e
+mpi=$(mpirun -np 1 target/debug/examples/oscillator_mpmd_a : -np 1 target/debug/examples/oscillator_mpmd_b 2>&1)
+mpi_status=$?
+set -e
+
+# Some packaged Open MPI/PRRTE combinations crash in the launcher's MPMD
+# colon/appfile parser (even for `/bin/true : /bin/true`).  Exit 139 is thus
+# distinguished from an application failure and retried through one SPMD
+# shell allocation that execs the intended binary on each world rank.  The
+# resulting MPI_COMM_WORLD and the two application processes are identical
+# from the binaries' perspective.
+if [ "$mpi_status" -eq 139 ]; then
+    mpi=$(mpirun -np 2 sh -c '
+        rank=${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${PMIX_RANK:-}}}
+        case "$rank" in
+            0) exec target/debug/examples/oscillator_mpmd_a ;;
+            1) exec target/debug/examples/oscillator_mpmd_b ;;
+            *) echo "cannot determine MPI world rank for MPMD dispatch" >&2; exit 2 ;;
+        esac
+    ' 2>&1) || {
+        printf '%s\n' "$mpi" >&2
+        printf '%s\n' "MPMD launcher fallback failed before a complete trace." >&2
+        exit 1
+    }
+elif [ "$mpi_status" -ne 0 ]; then
     printf '%s\n' "$mpi" >&2
     printf '%s\n' "MPMD launcher failed before a complete trace; verify MPI runtime/library compatibility, then rank order (-np 1 a : -np 1 b)." >&2
     exit 1
