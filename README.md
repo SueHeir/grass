@@ -222,8 +222,8 @@ grass_mpi       = { git = "https://github.com/SueHeir/grass" }
 grass_multi     = { git = "https://github.com/SueHeir/grass" }
 ```
 
-Start with [GRASS in 5 minutes](https://sueheir.github.io/grass/quickstart.html)
-or [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-own-solver.html).
+Start with the runnable [`hello_app`](examples/hello_app/README.md) and
+[`verlet_minisolver`](examples/verlet_minisolver/README.md) examples.
 
 ## Crate map
 
@@ -236,8 +236,8 @@ or [Write Your Own Solver](https://sueheir.github.io/grass/tutorial/write-your-o
 | [`grass_mpi`](crates/grass_mpi/README.md) | Single-process and MPI communication backends and topology bootstrap |
 | [`grass_multi`](crates/grass_multi/README.md) | Optional sub-apps, namespaced access, and local or distributed orchestration |
 
-The mdBook under `docs/` is the detailed documentation and builds with
-`mdbook build`.
+Runnable guidance lives beside the examples. Public API, scheduling, MPI, and
+composition details live in the crate READMEs and Rust documentation.
 
 ## Ecosystem
 
