@@ -29,8 +29,8 @@ explicit lifecycle and schedule.
   dependencies, validating contracts, and replacing defaults.
 - **TOML configuration and observability** with generated configuration metadata,
   simulation clocks, run control, terminal output, and dumps.
-- **MPI abstractions** with single-process and MPI backends, communicators, and
-  topology bootstrap.
+- **A shared MPI runtime** with single-process and MPI communication backends,
+  communicator lifecycle, and topology bootstrap for libraries built on GRASS.
 - **Optional sub-app composition** for applications that need several complete
   scheduled components under one parent.
 
@@ -126,9 +126,15 @@ Applications can also build schedule trees from sequences, loops, branches, and
 phases, then add typed `.before()` and `.after()` relationships where causal
 ordering matters.
 
-Execution is deterministic by phase, namespace, explicit dependencies, and
-registration order. The current scheduler runs systems sequentially; GRASS does
-not presently provide local parallel system dispatch.
+Execution within one process is deterministic by phase, namespace, explicit
+dependencies, and registration order. The scheduler does not dispatch systems
+concurrently within a rank. That is separate from distributed solver execution:
+`grass_mpi` provides a shared MPI lifecycle and `CommResource` abstraction so
+libraries built on GRASS can use the same launched MPI world, or split it into
+solver-local communicators, without each library independently owning MPI
+initialization and finalization. The library above GRASS still owns its actual
+parallel algorithm; for example, SOIL owns particle-domain decomposition,
+migration, and halo exchange across ranks.
 
 ### Plugins make capabilities replaceable
 
@@ -178,7 +184,10 @@ modular without that program exposing a useful library boundary.
 
 Current limitations include:
 
-- Systems execute sequentially within a process.
+- GRASS does not decide how a scientific problem is partitioned or parallelized.
+  Its scheduler orders systems within each rank, while `grass_mpi` supplies the
+  common MPI runtime and communicator resources used by parallel libraries such
+  as SOIL.
 - Resource borrowing is runtime-checked, so some access errors appear during
   preparation or execution rather than at compile time.
 - MPI and sub-app infrastructure are framework capabilities, not evidence that
