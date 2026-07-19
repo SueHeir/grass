@@ -213,13 +213,13 @@ need:
 
 ```toml
 [dependencies]
-grass_app       = { git = "https://github.com/SueHeir/grass" }
-grass_scheduler = { git = "https://github.com/SueHeir/grass" }
+grass_app       = { git = "https://github.com/SueHeir/grass", tag = "v0.1.1" }
+grass_scheduler = { git = "https://github.com/SueHeir/grass", tag = "v0.1.1" }
 
 # Optional infrastructure
-grass_io        = { git = "https://github.com/SueHeir/grass" }
-grass_mpi       = { git = "https://github.com/SueHeir/grass" }
-grass_multi     = { git = "https://github.com/SueHeir/grass" }
+grass_io        = { git = "https://github.com/SueHeir/grass", tag = "v0.1.1" }
+grass_mpi       = { git = "https://github.com/SueHeir/grass", tag = "v0.1.1" }
+grass_multi     = { git = "https://github.com/SueHeir/grass", tag = "v0.1.1" }
 ```
 
 Start with the runnable [`hello_app`](examples/hello_app/README.md) and
