@@ -1,9 +1,15 @@
 # grass_mpi
 
-Thin MPI abstraction layer used by [`grass_multi`](../grass_multi/) for
-its `MpiInterCommTransport`. Provides a `CommBackend` trait with a
-no-op single-process backend and an optional real-MPI backend behind
-the `mpi_backend` feature.
+Shared MPI lifecycle and communicator layer for libraries built on GRASS. It
+provides a `CommBackend` trait with a no-op single-process backend and an
+optional real-MPI backend behind the `mpi_backend` feature.
+
+`grass_mpi` does not parallelize a solver or make the GRASS scheduler concurrent.
+It lets multiple libraries share one launched MPI world without independently
+owning MPI initialization and finalization, and can split that world into
+solver-local communicators. Each library above GRASS still owns its parallel
+algorithm; for example, SOIL owns particle decomposition, migration, and halo
+exchange.
 
 ## Surface
 

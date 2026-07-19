@@ -50,10 +50,6 @@ name = "oscillator_demo"
 path = "examples/oscillator_demo/main.rs"
 
 [[example]]
-name = "contract_reference"
-path = "examples/contract_reference/main.rs"
-
-[[example]]
 name = "composite_system_param_validation"
 path = "examples/composite_system_param_validation/main.rs"
 
