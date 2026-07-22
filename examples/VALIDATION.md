@@ -3,6 +3,12 @@
 Validated examples commit their result plots beside the runnable example so they
 render in Gitea:
 
+- [`routed_mpi_oracle_parity`](routed_mpi_oracle_parity/README.md) embeds
+  [`plots/routed_mpi_oracle_parity.png`](routed_mpi_oracle_parity/plots/routed_mpi_oracle_parity.png),
+  comparing the direct sparse routed-MPI delivery bytes with the root-bridge
+  oracle across unequal roles and multiple epochs, plus sparse-owner and
+  fail-closed route/epoch campaign gates.
+
 - [`oscillator_demo`](oscillator_demo/README.md) embeds
   [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
   comparing an uncoupled numerical oscillator with its analytical solution, and
