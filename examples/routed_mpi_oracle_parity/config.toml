@@ -1,0 +1,24 @@
+# Declarative real-MPI campaign matrix.  Each check is expected to pass.
+[campaign]
+roles = [4, 3]
+epochs = 5
+
+[[check]]
+label = "4x3 direct versus bridge bytes"
+test = "routed_mpi_oracle_parity"
+filter = "direct_sparse_mpi_is_byte_identical_to_root_bridge_oracle"
+
+[[check]]
+label = "sparse and empty owners"
+test = "sparse_routing_scaling"
+filter = "sparse_unequal_roles_deliver_only_addressed_owners"
+
+[[check]]
+label = "invalid route fails closed"
+test = "multirank_role_exchange"
+filter = "one_invalid_route_aborts_every_rank_without_deadlock"
+
+[[check]]
+label = "stale epoch fails closed"
+test = "multirank_role_exchange"
+filter = "one_stale_epoch_aborts_every_rank_without_deadlock"
