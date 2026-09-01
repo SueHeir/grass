@@ -483,6 +483,7 @@ grass_mpi       = { git = "https://github.com/SueHeir/grass" }
 | [`grass_multi`](crates/grass_multi/README.md) | Sub-apps, namespaced resource access, coupling orchestration, routed role exchange, and local/remote transports |
 | [`grass_io`](crates/grass_io/README.md) | TOML configuration, simulation clock, run control, terminal output, and dumps |
 | [`grass_mpi`](crates/grass_mpi/README.md) | MPI backend, topology bootstrap, role-local solver communicators, and coupling-runtime support |
+| [`grass_compute`](crates/grass_compute/README.md) | CubeCL compute device, device buffers, explicit host/device transfers, and named coherence sync points (behind the off-by-default `cubecl` feature) |
 
 ## Choose your route
 

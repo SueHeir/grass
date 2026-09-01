@@ -1,0 +1,41 @@
+[package]
+name = "grass_compute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Compute-device abstraction for the grass simulation framework: a CubeCL runtime/device resource, device buffers, explicit host/device transfer points, and named schedule-set sync points"
+keywords = ["gpu", "cubecl", "compute", "simulation"]
+categories = ["simulation", "science"]
+
+[features]
+# Off by default. With no features, this crate is the vocabulary only:
+# `ComputeSyncSet`, `TransferCounts`, and the capability tag. It pulls in no
+# CubeCL code and adds nothing to a build of the existing CPU path.
+default = []
+
+# The abstraction *and* the local verification runtime.
+#
+# `cubecl/cpu` is folded into this feature deliberately: elizabeth-hpc has no
+# discrete GPU, so `cubecl-cpu` is the only runtime anything here can actually
+# execute, and a `cubecl` build that could not run its own equivalence test
+# would be a build nobody can check. See README.md, "Why `cpu` is not its own
+# feature".
+cubecl = ["dep:cubecl", "cubecl/cpu"]
+
+# Discrete-GPU runtimes. Additive on top of `cubecl`, and NOT built or tested
+# here — no CUDA, no ROCm, and only an integrated Radeon for wgpu. They exist
+# so a machine that has the hardware can turn one on without editing anything.
+cubecl-cuda = ["cubecl", "cubecl/cuda"]
+cubecl-hip = ["cubecl", "cubecl/hip"]
+cubecl-wgpu = ["cubecl", "cubecl/wgpu"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_derive = { workspace = true }
+grass_scheduler = { workspace = true }
+# Pinned exact: 0.11.0-pre.3 is a pre-release and its API moves between
+# pre-releases. Bumping it is its own reviewed change, not a side effect of
+# some other work. See the CubeCL migration plan of record, rule 4.
+cubecl = { version = "=0.11.0-pre.3", optional = true }

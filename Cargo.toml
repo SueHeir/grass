@@ -23,6 +23,7 @@ grass_scheduler = { path = "crates/grass_scheduler", version = "0.1.0" }
 grass_app       = { path = "crates/grass_app",       version = "0.1.0" }
 grass_io        = { path = "crates/grass_io",        version = "0.1.0" }
 grass_mpi       = { path = "crates/grass_mpi",       version = "0.1.0", default-features = false }
+grass_compute   = { path = "crates/grass_compute",   version = "0.1.0", default-features = false }
 grass_derive    = { path = "crates/grass_derive",    version = "0.1.0" }
 grass_multi     = { path = "crates/grass_multi",     version = "0.1.0" }
 oscillator_demo = { path = "crates/oscillator_demo", version = "0.1.0" }
@@ -38,12 +39,17 @@ grass_app = { workspace = true }
 grass_io = { workspace = true }
 grass_multi = { workspace = true }
 grass_mpi = { workspace = true, optional = true }
+grass_compute = { workspace = true, optional = true }
 oscillator_demo = { workspace = true }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 
 [features]
 mpi = ["grass_multi/mpi", "dep:grass_mpi", "grass_mpi/mpi_backend"]
+# Stage 1 of the CubeCL migration. Off by default: with the feature absent the
+# workspace builds and tests exactly as it did before `grass_compute` existed.
+# Enabling it also enables `cubecl-cpu`, the only runtime this machine can run.
+cubecl = ["dep:grass_compute", "grass_compute/cubecl"]
 
 [[example]]
 name = "oscillator_demo"
