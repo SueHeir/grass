@@ -727,6 +727,13 @@ impl App {
         self
     }
 
+    /// Stops the per-system timing table from being printed when the run
+    /// ends. Library callers that own stdout (Python bindings) want this.
+    pub fn disable_timing_print(&mut self) -> &mut Self {
+        self.sub_apps.main.disable_timing_print();
+        self
+    }
+
     /// Sets human-readable stage names for multi-stage simulations.
     pub fn set_stage_names(&mut self, names: &[&str]) -> &mut Self {
         self.sub_apps.main.set_stage_names(names);

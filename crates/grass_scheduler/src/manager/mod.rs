@@ -534,6 +534,9 @@ pub struct Scheduler {
     pub(crate) system_timings: Vec<f64>,
     /// Number of timesteps completed (for timing averages).
     pub(crate) timing_steps: usize,
+    /// When false, the per-system timing table is not printed at the end of
+    /// a run. Defaults to true unless `SIM_QUIET_TIMING` is set.
+    pub(crate) print_timing: bool,
     /// When true, prints system names to stderr during execution.
     pub(crate) trace: bool,
     /// When true, suppresses schedule validation warnings.
@@ -571,6 +574,7 @@ impl Default for Scheduler {
             print_schedule: false,
             system_timings: Vec::new(),
             timing_steps: 0,
+            print_timing: std::env::var("SIM_QUIET_TIMING").is_err(),
             trace: std::env::var("SIM_TRACE").is_ok(),
             suppress_warnings: std::env::var("SIM_SUPPRESS_WARNINGS").is_ok(),
             stage_names: Vec::new(),
@@ -1235,7 +1239,7 @@ impl Scheduler {
         }
 
         // Print per-system timing breakdown
-        if self.timing_steps > 0 && !self.system_timings.is_empty() {
+        if self.print_timing && self.timing_steps > 0 && !self.system_timings.is_empty() {
             let total: f64 = self.system_timings.iter().sum();
             let mut sorted: Vec<_> = self
                 .update_systems
@@ -1409,6 +1413,12 @@ impl Scheduler {
     /// Enables writing a Graphviz DOT file (`schedule.dot`) after organizing systems.
     pub fn enable_schedule_print(&mut self) {
         self.print_schedule = true;
+    }
+
+    /// Stops the per-system timing table from being printed when a run ends,
+    /// for library callers (such as Python bindings) that own stdout.
+    pub fn disable_timing_print(&mut self) {
+        self.print_timing = false;
     }
 
     /// Sets the stage names for multi-stage simulations (from `[[run]]` config sections).

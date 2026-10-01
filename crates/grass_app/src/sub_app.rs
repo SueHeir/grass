@@ -210,6 +210,11 @@ impl SubApp {
         self.scheduler.enable_schedule_print();
     }
 
+    /// Stops the per-system timing table from being printed when a run ends.
+    pub fn disable_timing_print(&mut self) {
+        self.scheduler.disable_timing_print();
+    }
+
     /// Sets human-readable stage names for multi-stage simulations.
     pub fn set_stage_names(&mut self, names: &[&str]) {
         self.scheduler.set_stage_names(names);
