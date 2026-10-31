@@ -139,6 +139,7 @@
 
 #![warn(missing_docs)]
 
+mod ensemble;
 mod implicit;
 mod mapped_port;
 mod multi;
@@ -163,6 +164,9 @@ mod wire;
 // get both with `use grass_multi::*;`.
 pub use grass_derive::Namespace;
 
+#[cfg(feature = "mpi")]
+pub use ensemble::gather_outputs;
+pub use ensemble::{partition, Ensemble, Member, Summary};
 pub use implicit::{checkpoint_window, converge_window, ImplicitCoupling, WindowStep};
 pub use mapped_port::{consume_on, expose_on, MappedPort, Mesh, Published, Quantity};
 pub use multi::{

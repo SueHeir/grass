@@ -25,6 +25,7 @@ parent App's own schedule is the orchestrator.
 | [`OuterIteration`](src/relax.rs) + [`Relaxation`](src/relax.rs) | interface fixed-point acceleration: fixed under-relaxation, Aitken, or IQN-ILS with window reuse and QR filtering |
 | [`ImplicitCoupling`](src/implicit.rs) + [`checkpoint_window`](src/implicit.rs) / [`converge_window`](src/implicit.rs) | implicit coupling over time windows: checkpoint, iterate to convergence (restoring solver state), accept, advance |
 | [`Waveform`](src/waveform.rs) | interface data over a window for subcycling; consumers interpolate at their own substep times (linear is second order in time) |
+| [`Ensemble`](src/ensemble.rs) + [`Summary`](src/ensemble.rs) | run many independent members (each usually its own `App`) on a thread pool with reproducible per-member seeds; `run_rank` + `gather_outputs` (feature `mpi`) split members over MPI ranks and collect them on rank 0; `Summary` keeps running mean, variance, min and max |
 | [`OuterIterStopPlugin`](src/outer_iter.rs) | drop into the parent's schedule for fixed-iter termination |
 
 ## Example shape
