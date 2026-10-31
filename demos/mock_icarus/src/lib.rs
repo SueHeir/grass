@@ -637,3 +637,97 @@ fn step_aero(
         ..aero.trajectory()
     };
 }
+
+// ─── coupling configuration (shared by the in-process and MPI drivers) ──────
+
+/// `[coupling]`
+#[derive(Debug, Clone, Deserialize, Serialize, DeriveConfigDescription)]
+#[serde(deny_unknown_fields)]
+#[config_description(
+    section = "coupling",
+    narrative = "How the flow code and the ablator are coupled along the trajectory."
+)]
+pub struct CouplingConfig {
+    /// "explicit" (one pass per window, lagged blowing) or "implicit" (iterate each window).
+    pub scheme: String,
+    /// Coupling window [s]. The flow code takes one step per window.
+    pub window: f64,
+    /// Ablator steps per window.
+    pub tps_substeps: usize,
+    /// Stop after this much flight time [s] (or when the heating pulse ends).
+    pub final_time: f64,
+    /// Implicit only: "iqn", "aitken" or "picard".
+    #[serde(default = "d_accel")]
+    pub acceleration: String,
+    /// Implicit only: tolerance on the blowing-rate residual [kg/m2/s].
+    #[serde(default = "d_tol")]
+    pub tol: f64,
+    /// Implicit only: iteration cap per window.
+    #[serde(default = "d_iters")]
+    pub max_iters: u32,
+}
+
+fn d_accel() -> String {
+    "iqn".into()
+}
+fn d_tol() -> f64 {
+    1e-6
+}
+fn d_iters() -> u32 {
+    30
+}
+
+impl Default for CouplingConfig {
+    fn default() -> Self {
+        Self {
+            scheme: "implicit".into(),
+            window: 0.5,
+            tps_substeps: 5,
+            final_time: 60.0,
+            acceleration: d_accel(),
+            tol: d_tol(),
+            max_iters: d_iters(),
+        }
+    }
+}
+
+impl CouplingConfig {
+    /// The interface acceleration named by `acceleration`.
+    pub fn relaxation(&self) -> grass_multi::Relaxation {
+        use grass_multi::Relaxation;
+        match self.acceleration.as_str() {
+            // A looser QR filter than the library default: with 1e-8 and
+            // reuse of old windows, IQN stalls in the early, pyrolysis-dominated
+            // windows of this problem.
+            "iqn" => Relaxation::IqnIls {
+                omega0: 0.5,
+                reuse: 8,
+                filter: 1e-2,
+            },
+            "aitken" => Relaxation::Aitken { omega0: 0.5 },
+            "picard" => Relaxation::Fixed(1.0),
+            other => panic!("[coupling] acceleration = {other:?}: expected iqn, aitken or picard"),
+        }
+    }
+}
+
+/// A hash of the exact bits of every station's final surface state, to
+/// check that two runs (in-process, threads, MPI) produced identical results.
+pub fn surface_fingerprint(surface: &[SurfaceOut]) -> String {
+    let mut bytes = Vec::new();
+    for s in surface {
+        for v in [
+            s.t_wall,
+            s.t_back,
+            s.recession,
+            s.mdot_gas,
+            s.mdot_char,
+            s.q_conv,
+            s.q_rad,
+            s.thickness,
+        ] {
+            bytes.extend_from_slice(&v.to_bits().to_le_bytes());
+        }
+    }
+    format!("{:016x}", grass_io::fnv1a64(&bytes))
+}

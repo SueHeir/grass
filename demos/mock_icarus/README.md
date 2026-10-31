@@ -199,6 +199,86 @@ That is the honest pitch. GRASS won't make loose coupling wrong or tight
 coupling necessary. It makes the choice a line in the input file, so you can
 measure which one the problem needs.
 
+## 3. Run each code on its own MPI ranks
+
+```sh
+cargo build --release --features mpi
+./target/release/entry_mpi entry_mpi.toml                  # one thread per code
+mpirun -np 3 ./target/release/entry_mpi entry_mpi.toml     # flow on 1 rank, ablator on 2
+```
+
+[`src/bin/entry_mpi.rs`](src/bin/entry_mpi.rs) runs the same coupled entry
+with each code as its own *role*. `[topology]` in
+[`entry_mpi.toml`](entry_mpi.toml) says how many ranks each role gets:
+
+```toml
+[topology]
+mode = "auto"          # threads at world size 1, MPI split at the declared size
+[[topology.role]]
+name = "flow"
+ranks = 1
+[[topology.role]]
+name = "tps"
+ranks = 2              # the ablator's stations are split across these ranks
+```
+
+`grass_multi::CoupledRunner` places the roles and hands each one its own
+solver communicator. It also gives every pair of roles a channel that spans
+only those two roles, and the runner accepts any number of roles.
+`grass_multi::DistributedImplicit` runs the same windowed implicit coupling
+as the in-process version, but across ranks:
+
+1. At the start of each window, every role saves its own state. On a
+   repeat, every role restores it.
+2. The ablator ranks' blowing rates are gathered to one rank.
+3. IQN-ILS runs on that rank.
+4. The next guess is scattered back, and every rank of every role learns
+   whether to repeat the window or move on.
+
+```rust
+match ic.begin() {
+    WindowAction::Save => saved = ablator.save(),
+    WindowAction::Restore => ablator.restore(&saved),
+}
+flow.exchange(&guess)?;                   // my stations' blowing guess -> flow
+let env = flow.exchange(&[])?;            // ch, h_r <- flow
+/* ... set the boundary condition, step the Fortran code ... */
+let (step, next) = ic.end(Some(&mdot));   // gather, IQN, scatter, agree
+guess = next.unwrap();
+```
+
+The results are **bit-identical** to the in-process `entry` binary in all
+of these cases: threads, `mpirun -np 3`, and explicit and implicit coupling.
+The final surface state of every station hashes to the same fingerprint.
+
+### Scaling on this machine
+
+[`scaling.py`](scaling.py) produced [`scaling_output.txt`](scaling_output.txt)
+on a 4-core VM. The setup is 1024 stations × 100 cells, the flow code on one
+rank, and the ablator on the rest:
+
+| ranks | ablator ranks | wall time | speedup | efficiency |
+|---|---|---|---|---|
+| in-process | – | 11.6 s | | |
+| 2 | 1 | 12.2 s | 1.00 | 100% |
+| 3 | 2 | 6.9 s | 1.76 | 88% |
+| 4 | 3 | 5.3 s | 2.30 | 77% |
+
+Weak scaling at 512 stations per ablator rank is 93% at 2 ranks and 84% at
+3. Every run produced the same fingerprint as the in-process run. MPI costs
+about 5% over the in-process run at one ablator rank.
+
+There are two limits to keep in mind:
+
+* **This is one small VM.** It is not evidence for scaling on a cluster.
+  The next step is the same script on real nodes with hundreds of ranks.
+* **The flow and the ablator take turns.** This coupling is Gauss-Seidel:
+  flow, then ablator, then check. A role on its own ranks runs at the same
+  time as the others only when the coupling lets it, for example Jacobi
+  coupling, where both codes step on the previous iterate. Inside one
+  process, sub-Apps always tick one after another, so to overlap two codes,
+  split them into roles.
+
 ## What a production version would change
 
 * **The real code's API.** Icarus is a large Fortran code. Wrapping it means
@@ -220,10 +300,12 @@ c/aero.c                the aeroheating code
 build.rs                compiles both with gfortran / cc
 src/lib.rs              safe wrappers + AblatorPlugin + AeroPlugin
 src/bin/arcjet.rs       standalone arc-jet test
-src/bin/entry.rs        coupled entry (explicit or implicit)
+src/bin/entry.rs        coupled entry (explicit or implicit), one process
+src/bin/entry_mpi.rs    the same, each code its own MPI role (--features mpi)
 tests/ffi.rs            wrapper tests (save/restore exactness, physics sanity)
-*.toml                  inputs;  sweep.py  the coupling study
+*.toml                  inputs;  sweep.py  the coupling study;  scaling.py  MPI scaling
 ```
 
 The demo has its own Cargo workspace, so building GRASS itself never needs
-`gfortran`. Requirements are `gfortran`, a C compiler and Rust 1.80 or newer.
+`gfortran`. Requirements are `gfortran`, a C compiler and Rust 1.80 or newer,
+plus an MPI installation (OpenMPI or MPICH) for `entry_mpi`.

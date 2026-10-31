@@ -108,6 +108,25 @@ impl RoutedRoleExchange {
         }
     }
 
+    /// Direct sparse exchange over explicit communicators (`coupling` spans
+    /// exactly the two coupled roles; the peer occupies `peer_root..`).
+    pub(crate) fn new_sparse_on(
+        role: SimpleCommunicator,
+        coupling: SimpleCommunicator,
+        peer_root: i32,
+        peer_size: i32,
+    ) -> Self {
+        Self {
+            backend: RoutedBackend::Sparse(MpiSparseRoutedExchange {
+                role,
+                coupling,
+                peer_root,
+                peer_size,
+                transport_round: AtomicU64::new(0),
+            }),
+        }
+    }
+
     /// Rank and size within the local solver role.
     pub fn role_position(&self) -> (i32, i32) {
         match &self.backend {

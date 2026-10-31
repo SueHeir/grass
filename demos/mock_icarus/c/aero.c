@@ -19,11 +19,10 @@
 #include <string.h>
 
 #define MAX_INST 64
-#define MAX_ST 64
 
 typedef struct {
     int live, n;
-    double theta[MAX_ST], mdot[MAX_ST];
+    double *theta, *mdot;               /* per station, heap-allocated */
     double rn, beta;              /* nose radius m, ballistic coefficient kg/m2 */
     double t, h, v, gamma, range; /* state */
 } aero_t;
@@ -38,11 +37,14 @@ static double density(double alt) { return RHO0 * exp(-alt / HS); }
 
 int aero_create(int nstations, const double *theta_deg, double nose_radius, double ballistic_coef,
                 double v0, double gamma0_deg, double h0) {
-    if (nstations < 1 || nstations > MAX_ST) return -1;
+    if (nstations < 1) return -1;
     for (int i = 0; i < MAX_INST; i++) {
         if (pool[i].live) continue;
         aero_t *a = &pool[i];
         memset(a, 0, sizeof *a);
+        a->theta = calloc(nstations, sizeof(double));
+        a->mdot = calloc(nstations, sizeof(double));
+        if (!a->theta || !a->mdot) { free(a->theta); free(a->mdot); return -1; }
         a->live = 1; a->n = nstations;
         for (int s = 0; s < nstations; s++) a->theta[s] = theta_deg[s] * M_PI / 180.0;
         a->rn = nose_radius; a->beta = ballistic_coef;
@@ -52,7 +54,13 @@ int aero_create(int nstations, const double *theta_deg, double nose_radius, doub
     return -1;
 }
 
-void aero_destroy(int h) { aero_t *a = get(h); if (a) a->live = 0; }
+void aero_destroy(int h) {
+    aero_t *a = get(h);
+    if (!a) return;
+    free(a->theta); free(a->mdot);
+    a->theta = a->mdot = NULL;
+    a->live = 0;
+}
 
 /* wall mass injection rate [kg/m2/s] at station s (0-based) */
 void aero_set_blowing(int h, int s, double mdot) {

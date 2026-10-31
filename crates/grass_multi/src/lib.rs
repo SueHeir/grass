@@ -139,6 +139,8 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "mpi")]
+mod coupled;
 mod ensemble;
 mod implicit;
 mod mapped_port;
@@ -164,6 +166,11 @@ mod wire;
 // get both with `use grass_multi::*;`.
 pub use grass_derive::Namespace;
 
+#[cfg(feature = "mpi")]
+pub use coupled::{
+    CoupledRun, CoupledRunner, CouplingGroup, DistributedImplicit, RoleCollective, RoleContext,
+    WindowAction,
+};
 #[cfg(feature = "mpi")]
 pub use ensemble::gather_outputs;
 pub use ensemble::{partition, Ensemble, Member, Summary};

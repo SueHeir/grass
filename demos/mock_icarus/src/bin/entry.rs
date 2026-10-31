@@ -31,68 +31,18 @@ use grass_io::prelude::*;
 use grass_io::ProvenancePlugin;
 use grass_multi::{
     checkpoint_window, converge_window, tick_subapp, ImplicitCoupling, Multi, OuterIteration,
-    Relaxation, WindowStep,
+    WindowStep,
 };
 use grass_scheduler::prelude::*;
 use mock_icarus::{
     Ablator, AblatorDt, AblatorPlugin, Aero, AeroDt, AeroPlugin, Environment, Surface, SurfaceBc,
     Trajectory, WallBlowing,
 };
-use serde::{Deserialize, Serialize};
 
 const FLOW: &str = "flow";
 const TPS: &str = "tps";
 
-/// `[coupling]`
-#[derive(Debug, Clone, Deserialize, Serialize, grass_derive::ConfigDescription)]
-#[serde(deny_unknown_fields)]
-#[config_description(
-    section = "coupling",
-    narrative = "How the flow code and the ablator are coupled along the trajectory."
-)]
-struct Coupling {
-    /// "explicit" (one pass per window, lagged blowing) or "implicit" (iterate each window).
-    scheme: String,
-    /// Coupling window [s]. The flow code takes one step per window.
-    window: f64,
-    /// Ablator steps per window.
-    tps_substeps: usize,
-    /// Stop after this much flight time [s] (or when the heating pulse ends).
-    final_time: f64,
-    /// Implicit only: "iqn", "aitken" or "picard".
-    #[serde(default = "d_accel")]
-    acceleration: String,
-    /// Implicit only: tolerance on the blowing-rate residual [kg/m2/s].
-    #[serde(default = "d_tol")]
-    tol: f64,
-    /// Implicit only: iteration cap per window.
-    #[serde(default = "d_iters")]
-    max_iters: u32,
-}
-
-fn d_accel() -> String {
-    "iqn".into()
-}
-fn d_tol() -> f64 {
-    1e-6
-}
-fn d_iters() -> u32 {
-    30
-}
-
-impl Default for Coupling {
-    fn default() -> Self {
-        Self {
-            scheme: "implicit".into(),
-            window: 0.5,
-            tps_substeps: 5,
-            final_time: 60.0,
-            acceleration: d_accel(),
-            tol: d_tol(),
-            max_iters: d_iters(),
-        }
-    }
-}
+use mock_icarus::CouplingConfig as Coupling;
 
 #[derive(Debug, Clone, Copy, ScheduleSet)]
 enum Entry {
@@ -212,16 +162,7 @@ fn explicit(parent: &mut App, c: Coupling) {
 }
 
 fn implicit(parent: &mut App, c: Coupling, stations: usize) {
-    let relax = match c.acceleration.as_str() {
-        "iqn" => Relaxation::IqnIls {
-            omega0: 0.5,
-            reuse: 8,
-            filter: 1e-2,
-        },
-        "aitken" => Relaxation::Aitken { omega0: 0.5 },
-        "picard" => Relaxation::Fixed(1.0),
-        other => panic!("[coupling] acceleration = {other:?}: expected iqn, aitken or picard"),
-    };
+    let relax = c.relaxation();
     let n_windows = (c.final_time / c.window).round() as u64;
     parent.add_resource(ImplicitCoupling::new(
         OuterIteration::new(vec![0.0; stations], relax, c.tol, c.max_iters),
@@ -407,5 +348,9 @@ fn main() {
             ic.unconverged_windows().len()
         );
     }
+    println!(
+        "final surface fingerprint {}",
+        mock_icarus::surface_fingerprint(&surf.0)
+    );
     println!("wall time {wall:.2} s, history in {dir}/history.csv");
 }

@@ -15,6 +15,15 @@ grass_derive = { path = "../../crates/grass_derive" }
 grass_multi = { path = "../../crates/grass_multi" }
 grass_scheduler = { path = "../../crates/grass_scheduler" }
 serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[features]
+# Builds `entry_mpi` (needs an MPI installation and mpicc).
+mpi = ["grass_multi/mpi"]
+
+[[bin]]
+name = "entry_mpi"
+required-features = ["mpi"]
 
 [profile.release]
 debug = 1
