@@ -32,6 +32,9 @@ mod sealed {
 pub trait FieldKind: sealed::Sealed + 'static {
     /// Human-readable kind name.
     const NAME: &'static str;
+    /// Whether fields of this kind are mapped by redistribution (totals
+    /// preserved) rather than by sampling (constants preserved).
+    const CONSERVATIVE: bool;
 }
 
 /// Kinds that are mapped by sampling: [`Intensive`] and [`Density`].
@@ -52,12 +55,15 @@ impl sealed::Sealed for Density {}
 impl sealed::Sealed for Extensive {}
 impl FieldKind for Intensive {
     const NAME: &'static str = "intensive";
+    const CONSERVATIVE: bool = false;
 }
 impl FieldKind for Density {
     const NAME: &'static str = "density";
+    const CONSERVATIVE: bool = false;
 }
 impl FieldKind for Extensive {
     const NAME: &'static str = "extensive";
+    const CONSERVATIVE: bool = true;
 }
 impl Sampled for Intensive {}
 impl Sampled for Density {}

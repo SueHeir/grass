@@ -17,6 +17,7 @@ mpi = ["dep:grass_mpi", "grass_mpi/mpi_backend", "dep:mpi"]
 [dependencies]
 grass_app = { workspace = true }
 grass_derive = { workspace = true }
+grass_map = { workspace = true }
 grass_scheduler = { workspace = true }
 grass_mpi = { workspace = true, optional = true }
 mpi = { version = "0.8", optional = true }

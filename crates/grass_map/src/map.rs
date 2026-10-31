@@ -24,7 +24,9 @@
 //! energy-consistent.
 
 use crate::discretization::{Discretization, SamplePoint, Sampling};
-use crate::field::{Extensive, Field, Sampled};
+use std::marker::PhantomData;
+
+use crate::field::{Extensive, Field, FieldKind, Sampled};
 use crate::geom::Aabb;
 use crate::index::SpatialIndex;
 use crate::sparse::CsrMatrix;
@@ -179,6 +181,26 @@ impl<'a> MapBuilder<'a> {
         self
     }
 
+    /// A map for fields of kind `K`, choosing the direction from the kind:
+    /// sampling for [`Intensive`](crate::Intensive) and
+    /// [`Density`](crate::Density), redistribution for [`Extensive`]. Useful
+    /// in generic code (such as coupling ports) that is written once for
+    /// every kind.
+    pub fn build<K: FieldKind>(self) -> Map<K> {
+        let (op, report) = if K::CONSERVATIVE {
+            let c = self.conservative();
+            (c.c, c.report)
+        } else {
+            let w = self.consistent();
+            (w.w, w.report)
+        };
+        Map {
+            op,
+            report,
+            kind: PhantomData,
+        }
+    }
+
     /// A sampling map for intensive and density fields: target entities
     /// average the source over their own sample points.
     pub fn consistent(self) -> ConsistentMap {
@@ -194,6 +216,49 @@ impl<'a> MapBuilder<'a> {
             c: w.transpose(),
             report,
         }
+    }
+}
+
+/// A map for one field kind, built by [`MapBuilder::build`]. Rows: target
+/// entities.
+#[derive(Debug, Clone)]
+pub struct Map<K: FieldKind> {
+    op: CsrMatrix,
+    report: MapReport,
+    kind: PhantomData<K>,
+}
+
+impl<K: FieldKind> Map<K> {
+    /// `dst = M src`. For a sampled kind, unmapped target entities keep their
+    /// previous values; for an extensive kind `dst` is overwritten and
+    /// amounts on unmapped source entities are dropped.
+    pub fn apply(&self, src: &Field<K>, dst: &mut Field<K>) {
+        assert_eq!(src.ncomp, dst.ncomp, "component count mismatch");
+        if K::CONSERVATIVE {
+            dst.values.iter_mut().for_each(|v| *v = 0.0);
+        }
+        self.op.apply(&src.values, &mut dst.values, src.ncomp);
+    }
+
+    /// The operator (rows: target, columns: source).
+    pub fn matrix(&self) -> &CsrMatrix {
+        &self.op
+    }
+
+    /// Coverage diagnostics. [`MapReport::unmapped`] lists target entities
+    /// for a sampled kind and source entities for an extensive one.
+    pub fn report(&self) -> &MapReport {
+        &self.report
+    }
+
+    /// Number of target entities.
+    pub fn target_len(&self) -> usize {
+        self.op.nrows()
+    }
+
+    /// Number of source entities.
+    pub fn source_len(&self) -> usize {
+        self.op.ncols()
     }
 }
 
