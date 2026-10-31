@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+mod app;
+
 use grass_map::{
     AdjointPair as RAdjointPair, CellBasis, Density, Discretization, Extensive, Field, Intensive,
     MapBuilder, MapReport, Method, PointBasis, PointCloud as RPointCloud, Sampling, SurfaceDofs,
@@ -654,5 +656,6 @@ fn grass(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OuterIteration>()?;
     m.add_class::<Waveform>()?;
     m.add_function(wrap_pyfunction!(read_checkpoint, m)?)?;
+    app::register(m)?;
     Ok(())
 }

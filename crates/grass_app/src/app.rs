@@ -611,6 +611,17 @@ impl App {
         Ok(self)
     }
 
+    /// Update systems as `(namespace, phase index, phase name, system)`, in
+    /// execution order after [`organize_systems`](Self::organize_systems).
+    pub fn update_system_listing(&self) -> Vec<(u32, u32, &'static str, String)> {
+        self.sub_apps.main.scheduler.update_system_listing()
+    }
+
+    /// Setup systems, as for [`update_system_listing`](Self::update_system_listing).
+    pub fn setup_system_listing(&self) -> Vec<(u32, u32, &'static str, String)> {
+        self.sub_apps.main.scheduler.setup_system_listing()
+    }
+
     /// Returns `true` if a system has signalled simulation end via
     /// [`SchedulerManager`](grass_scheduler::SchedulerManager).
     pub fn is_done(&self) -> bool {

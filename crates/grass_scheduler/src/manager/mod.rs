@@ -1349,6 +1349,30 @@ impl Scheduler {
         self.update_systems.retain(|(entry, _)| entry.name != name);
     }
 
+    /// `(namespace, phase index, phase name, system name)` for every update
+    /// system, in execution order once [`organize_systems`](Self::organize_systems)
+    /// has run (registration order before that).
+    pub fn update_system_listing(&self) -> Vec<(u32, u32, &'static str, String)> {
+        self.update_systems
+            .iter()
+            .map(|(e, p)| {
+                let (ns, idx) = p.sort_key();
+                (ns, idx, p.phase_name(), e.label.clone().unwrap_or_else(|| e.name.clone()))
+            })
+            .collect()
+    }
+
+    /// Same as [`update_system_listing`](Self::update_system_listing) for setup systems.
+    pub fn setup_system_listing(&self) -> Vec<(u32, u32, &'static str, String)> {
+        self.setup_systems
+            .iter()
+            .map(|(e, p)| {
+                let (ns, idx) = p.sort_key();
+                (ns, idx, p.phase_name(), e.label.clone().unwrap_or_else(|| e.name.clone()))
+            })
+            .collect()
+    }
+
     /// Removes all update systems whose explicit label matches `label`.
     pub fn remove_update_system_by_label(&mut self, label: &str) {
         self.update_systems
