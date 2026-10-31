@@ -1,0 +1,34 @@
+# A simulated arc-jet test of a PICA-like coupon, driven entirely from TOML:
+# 30 s at 200 W/cm2 cold-wall heat flux and 20 MJ/kg, then a 60 s cooldown.
+
+[ablator]             # the Fortran code
+thickness = 0.05      # m
+cells = 100
+dt = 0.05             # s
+# any material property can be overridden here, e.g.
+# k_char = 0.5
+
+[arcjet]              # the facility condition
+q_cw = 200.0          # W/cm2
+h_r = 20.0            # MJ/kg
+blowing = true
+
+[term_out]
+every = 100
+columns = ["time", "T_wall", "T_back", "recession_mm", "mdot_gas", "q_conv_Wcm2"]
+
+[checkpoint]
+every = 600           # at the end of the exposure
+keep = 0
+
+[output]
+dir = "out/arcjet"
+
+[[run]]
+name = "exposure"
+steps = 600           # 30 s
+
+[[run]]
+name = "cooldown"
+steps = 1200          # 60 s, model turned off
+arcjet = { q_cw = 0.0 }
