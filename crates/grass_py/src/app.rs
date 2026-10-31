@@ -63,18 +63,29 @@ const PY_RESTORE_NAMESPACE: u32 = 1150;
 // ─── Resources ──────────────────────────────────────────────────────────────
 
 type ErrorSlot = Rc<RefCell<Option<PyErr>>>;
+type Keys = Rc<RefCell<Vec<Py<PyAny>>>>;
+
+/// How a resource key reads in messages: a class by its name, a string as itself.
+fn key_label(k: &Bound<'_, PyAny>) -> String {
+    if let Ok(s) = k.extract::<String>() {
+        return format!("'{s}'");
+    }
+    k.getattr("__name__")
+        .and_then(|n| n.extract::<String>())
+        .unwrap_or_else(|_| k.to_string())
+}
 
 /// The Python resources of one App.
 struct PyWorld {
     dict: Py<PyDict>,
     error: ErrorSlot,
-    checkpointed: Rc<RefCell<Vec<String>>>,
+    checkpointed: Keys,
 }
 
 /// Checkpointed Python resources, pickled when grass_io writes a checkpoint.
 struct PySnapshot {
     dict: Option<Py<PyDict>>,
-    names: Rc<RefCell<Vec<String>>>,
+    names: Keys,
     restored: Option<Vec<u8>>,
 }
 
@@ -87,11 +98,12 @@ impl Serialize for PySnapshot {
                 .ok_or_else(|| PyRuntimeError::new_err("snapshot not attached"))?
                 .bind(py);
             let out = PyDict::new(py);
-            for n in self.names.borrow().iter() {
-                let v = src
-                    .get_item(n)?
-                    .ok_or_else(|| PyKeyError::new_err(format!("checkpointed resource '{n}'")))?;
-                out.set_item(n, v)?;
+            for k in self.names.borrow().iter() {
+                let k = k.bind(py);
+                let v = src.get_item(k)?.ok_or_else(|| {
+                    PyKeyError::new_err(format!("checkpointed resource {}", key_label(k)))
+                })?;
+                out.set_item(k, v)?;
             }
             let b = py.import("pickle")?.call_method1("dumps", (out,))?;
             Ok(b.downcast::<PyBytes>()?.as_bytes().to_vec())
@@ -150,8 +162,10 @@ impl Sim {
 
     /// Advance child App `name` by up to `n` steps now (parent systems
     /// only). Stops early if the child ends; returns the steps taken.
-    #[pyo3(signature = (name, n = 1))]
-    fn tick(&mut self, name: &str, n: usize) -> PyResult<usize> {
+    #[pyo3(signature = (child, n = 1))]
+    fn tick(&mut self, child: &Bound<'_, PyAny>, n: usize) -> PyResult<usize> {
+        let name = child_name(child)?;
+        let name = name.as_str();
         if self.subapps.is_null() {
             return Err(PyRuntimeError::new_err(
                 "sim.tick: this App has no child Apps (or the call is outside its system)",
@@ -173,8 +187,9 @@ impl Sim {
     }
 }
 
-/// A child App's resources, seen from a parent system.
-#[pyclass(unsendable, module = "grass")]
+/// A child App's resources, seen from a parent system. Subclass it to
+/// make a typed marker for a child: `class Hot(grass.AppView): pass`.
+#[pyclass(unsendable, subclass, module = "grass")]
 pub struct AppView {
     name: String,
     dict: Py<PyDict>,
@@ -194,10 +209,13 @@ impl AppView {
                 ))
             })
     }
-    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
-        self.__getattr__(py, key)
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.dict.bind(py).get_item(key)?.map(|v| v.unbind()).ok_or_else(|| {
+            PyKeyError::new_err(format!("App '{}' has no resource {}", self.name, key_label(key)))
+        })
     }
-    fn __setitem__(&self, py: Python<'_>, key: &str, value: PyObject) -> PyResult<()> {
+    fn __setitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        check_typed(key, value)?;
         self.dict.bind(py).set_item(key, value)
     }
     fn __repr__(&self, py: Python<'_>) -> String {
@@ -206,7 +224,7 @@ impl AppView {
             .bind(py)
             .keys()
             .iter()
-            .map(|k| k.to_string())
+            .map(|k| key_label(&k))
             .collect();
         format!("<App '{}' resources={keys:?}>", self.name)
     }
@@ -215,7 +233,9 @@ impl AppView {
 // ─── Python systems ─────────────────────────────────────────────────────────
 
 enum Arg {
-    Resource(String),
+    /// A resource, keyed by its class (annotated parameter) or by the
+    /// parameter's name (unannotated).
+    Resource(Py<PyAny>, String),
     Child(String, Py<PyDict>),
     Sim,
     /// `res`: this App's own resources, for systems that pick them at run time.
@@ -228,25 +248,58 @@ struct Call {
 }
 
 impl Call {
-    fn new(py: Python<'_>, func: Py<PyAny>, children: &HashMap<String, Py<PyDict>>) -> PyResult<Self> {
-        let sig = py
-            .import("inspect")?
-            .call_method1("signature", (func.bind(py),))?;
+    fn new(py: Python<'_>, func: Py<PyAny>, children: &[Child]) -> PyResult<Self> {
+        let f = func.bind(py);
+        let sig = py.import("inspect")?.call_method1("signature", (f,))?;
         let params = sig.getattr("parameters")?;
+        // Resolve string annotations too; unannotated callables give {}.
+        let hints = py
+            .import("typing")?
+            .call_method1("get_type_hints", (f,))
+            .and_then(|h| Ok(h.downcast_into::<PyDict>()?))
+            .unwrap_or_else(|_| PyDict::new(py));
+        let sim_type = py.get_type::<Sim>();
         let mut args = Vec::new();
         for name in params.call_method0("keys")?.try_iter()? {
             let name: String = name?.extract()?;
-            args.push(if name == "sim" {
-                Arg::Sim
-            } else if name == "res" {
-                Arg::Own
-            } else if let Some(d) = children.get(&name) {
-                Arg::Child(name, d.clone_ref(py))
-            } else {
-                Arg::Resource(name)
-            });
+            let arg = match hints.get_item(&name)? {
+                Some(hint) => {
+                    if hint.is(&sim_type) {
+                        Arg::Sim
+                    } else if let Some(c) = children.iter().find(|c| c.key.bind(py).is(&hint)) {
+                        Arg::Child(c.name.clone(), c.dict.clone_ref(py))
+                    } else if hint.is_instance_of::<pyo3::types::PyType>() {
+                        let label = key_label(&hint);
+                        Arg::Resource(hint.unbind(), label)
+                    } else {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "parameter '{name}': annotate with a resource class (got {hint})"
+                        )));
+                    }
+                }
+                None if name == "sim" => Arg::Sim,
+                None if name == "res" => Arg::Own,
+                None => match children.iter().find(|c| c.name == name) {
+                    Some(c) => Arg::Child(name, c.dict.clone_ref(py)),
+                    None => {
+                        let label = format!("'{name}'");
+                        Arg::Resource(pyo3::types::PyString::new(py, &name).into_any().unbind(), label)
+                    }
+                },
+            };
+            args.push(arg);
         }
         Ok(Self { func, args })
+    }
+
+    fn needs(&self, py: Python<'_>) -> Vec<(Py<PyAny>, String)> {
+        self.args
+            .iter()
+            .filter_map(|a| match a {
+                Arg::Resource(k, l) => Some((k.clone_ref(py), l.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     fn call<'py>(
@@ -276,10 +329,10 @@ impl Call {
                     },
                 )?
                 .into_any(),
-                Arg::Resource(r) => world.get_item(r)?.ok_or_else(|| {
-                    let have: Vec<String> = world.keys().iter().map(|k| k.to_string()).collect();
+                Arg::Resource(k, label) => world.get_item(k)?.ok_or_else(|| {
+                    let have: Vec<String> = world.keys().iter().map(|k| key_label(&k)).collect();
                     PyKeyError::new_err(format!(
-                        "system '{system}' needs resource '{r}', which this App does not have \
+                        "system '{system}' needs resource {label}, which this App does not have \
                          (resources: {have:?})"
                     ))
                 })?,
@@ -484,6 +537,38 @@ fn provenance_plugin(
 
 // ─── App ────────────────────────────────────────────────────────────────────
 
+/// A child App as its parent sees it.
+struct Child {
+    /// What parent systems use to ask for it: a class or a string.
+    key: Py<PyAny>,
+    /// The sub-App namespace in grass_multi.
+    name: String,
+    dict: Py<PyDict>,
+}
+
+/// The namespace for a child key: the string itself, or the class name.
+fn child_name(key: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(s) = key.extract::<String>() {
+        return Ok(s);
+    }
+    key.getattr("__name__")?.extract()
+}
+
+/// `app[SomeClass] = value` must hold a `SomeClass`.
+fn check_typed(key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    if let Ok(t) = key.downcast::<pyo3::types::PyType>() {
+        if !value.is_instance(t)? {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "resource keyed by {} must be a {} (got {})",
+                key_label(key),
+                key_label(key),
+                key_label(&value.get_type().into_any())
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// A GRASS App: resources, systems in ordered phases, plugins, child Apps.
 #[pyclass(unsendable, module = "grass")]
 pub struct App {
@@ -492,9 +577,11 @@ pub struct App {
     moved_into: Option<String>,
     world: Py<PyDict>,
     error: ErrorSlot,
-    checkpointed: Rc<RefCell<Vec<String>>>,
+    checkpointed: Keys,
     phases: Vec<&'static str>,
-    children: HashMap<String, Py<PyDict>>,
+    children: Vec<Child>,
+    /// Resources each update system needs: (system label, key, key label).
+    needs: Vec<(String, Py<PyAny>, String)>,
     child_errors: Vec<ErrorSlot>,
     plugins: HashSet<String>,
     prepared: bool,
@@ -538,7 +625,7 @@ impl App {
 
     #[allow(clippy::too_many_arguments)]
     fn make_system(
-        &self,
+        &mut self,
         py: Python<'_>,
         func: Py<PyAny>,
         label: Option<String>,
@@ -556,6 +643,10 @@ impl App {
             .map(|c| Call::new(py, c, &self.children))
             .transpose()?;
         let label = label.unwrap_or_else(|| name.clone());
+        let cond_needs = condition.as_ref().map(|c| c.needs(py)).unwrap_or_default();
+        for (k, l) in body.needs(py).into_iter().chain(cond_needs) {
+            self.needs.push((label.clone(), k, l));
+        }
         Ok(SystemDescriptor {
             system: PySystem {
                 name: label.clone(),
@@ -630,7 +721,7 @@ impl App {
         });
         let world = PyDict::new(py).unbind();
         let error: ErrorSlot = Rc::default();
-        let checkpointed: Rc<RefCell<Vec<String>>> = Rc::default();
+        let checkpointed: Keys = Rc::default();
         app.add_resource(PyWorld {
             dict: world.clone_ref(py),
             error: error.clone(),
@@ -643,7 +734,8 @@ impl App {
             error,
             checkpointed,
             phases: Vec::new(),
-            children: HashMap::new(),
+            children: Vec::new(),
+            needs: Vec::new(),
             child_errors: Vec::new(),
             plugins: HashSet::new(),
             prepared: false,
@@ -654,32 +746,43 @@ impl App {
 
     // ── resources ──
 
-    fn __setitem__(&self, py: Python<'_>, name: &str, value: PyObject) -> PyResult<()> {
-        if name == "sim" || name == "res" || self.children.contains_key(name) {
-            return Err(PyValueError::new_err(format!("'{name}' is a reserved name")));
-        }
-        self.world.bind(py).set_item(name, value)
+    /// Add a resource keyed by its class: `app.insert(Temperature(...))`.
+    /// Systems receive it through a parameter annotated `: Temperature`.
+    fn insert(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.world.bind(py).set_item(value.get_type(), value)
     }
 
-    fn __getitem__(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+    /// `app[Temperature]` for a typed resource, or `app["name"]` for one
+    /// added by name (unannotated parameters look resources up by name).
+    fn __setitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if let Ok(name) = key.extract::<String>() {
+            if name == "sim" || name == "res" || self.children.iter().any(|c| c.name == name) {
+                return Err(PyValueError::new_err(format!("'{name}' is a reserved name")));
+            }
+        }
+        check_typed(key, value)?;
+        self.world.bind(py).set_item(key, value)
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         self.world
             .bind(py)
-            .get_item(name)?
+            .get_item(key)?
             .map(|v| v.unbind())
-            .ok_or_else(|| PyKeyError::new_err(name.to_string()))
+            .ok_or_else(|| PyKeyError::new_err(format!("no resource {}", key_label(key))))
     }
 
-    fn __contains__(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
-        self.world.bind(py).contains(name)
+    fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.world.bind(py).contains(key)
     }
 
-    /// Names of this App's Python resources.
+    /// This App's resources (classes by name, named resources quoted).
     fn resources(&self, py: Python<'_>) -> Vec<String> {
         self.world
             .bind(py)
             .keys()
             .iter()
-            .map(|k| k.to_string())
+            .map(|k| key_label(&k))
             .collect()
     }
 
@@ -746,6 +849,7 @@ impl App {
             .pop()
             .ok_or_else(|| PyValueError::new_err("label"))?;
         self.app()?.remove_update_system_by_label(&label);
+        self.needs.retain(|(l, _, _)| *l != label);
         Ok(())
     }
 
@@ -833,15 +937,15 @@ impl App {
 
     /// Include these resources in grass_io checkpoints (pickled) and
     /// restore them on restart. Needs `grass.plugins.Checkpoint()` first.
-    #[pyo3(signature = (*names))]
-    fn checkpoint(&mut self, py: Python<'_>, names: Vec<String>) -> PyResult<()> {
+    #[pyo3(signature = (*keys))]
+    fn checkpoint(&mut self, py: Python<'_>, keys: Vec<Py<PyAny>>) -> PyResult<()> {
         if !self.plugins.contains("rust:Checkpoint") {
             return Err(PyRuntimeError::new_err(
                 "add grass.plugins.Checkpoint() before app.checkpoint(...)",
             ));
         }
         let first = self.checkpointed.borrow().is_empty();
-        self.checkpointed.borrow_mut().extend(names);
+        self.checkpointed.borrow_mut().extend(keys);
         if first {
             let snap = PySnapshot {
                 dict: Some(self.world.clone_ref(py)),
@@ -859,11 +963,15 @@ impl App {
 
     // ── child Apps ──
 
-    /// Make `child` part of this App under `name`. Parent systems with a
-    /// parameter called `name` see the child's resources.
-    fn add_app(&mut self, py: Python<'_>, name: &str, child: &Bound<'_, App>) -> PyResult<()> {
-        if self.world.bind(py).contains(name)? || name == "sim" {
+    /// Make `child` part of this App. `key` is a class (parent systems
+    /// annotate a parameter with it) or a string (matched by parameter name).
+    fn add_app(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>, child: &Bound<'_, App>) -> PyResult<()> {
+        let name = child_name(key)?;
+        if self.world.bind(py).contains(key)? || name == "sim" || name == "res" {
             return Err(PyValueError::new_err(format!("'{name}' is already a resource name")));
+        }
+        if self.children.iter().any(|c| c.name == name) {
+            return Err(PyValueError::new_err(format!("child App '{name}' already added")));
         }
         let mut c = child.borrow_mut();
         if c.prepared {
@@ -872,10 +980,10 @@ impl App {
         let inner = c.inner.take().ok_or_else(|| {
             PyRuntimeError::new_err("child App was already added to a parent")
         })?;
-        c.moved_into = Some(name.to_string());
+        c.moved_into = Some(name.clone());
         let first = self.children.is_empty();
         let app = self.app()?;
-        app.add_subapp(name, inner);
+        app.add_subapp(&name, inner);
         if first {
             app.set_schedule_namespace::<ChildDone>(CHILD_DONE_NAMESPACE);
             app.add_update_system(
@@ -888,20 +996,25 @@ impl App {
                 ChildDone::Check,
             );
         }
-        self.children.insert(name.to_string(), c.world.clone_ref(py));
+        self.children.push(Child {
+            key: key.clone().unbind(),
+            name,
+            dict: c.world.clone_ref(py),
+        });
         self.child_errors.push(c.error.clone());
         Ok(())
     }
 
-    /// Advance child `name` by `n` steps each parent step, in `phase`.
-    #[pyo3(signature = (name, n = 1, phase = "tick"))]
-    fn tick(&mut self, name: &str, n: usize, phase: &str) -> PyResult<()> {
-        if !self.children.contains_key(name) {
+    /// Advance a child by `n` steps each parent step, in `phase`.
+    #[pyo3(signature = (child, n = 1, phase = "tick"))]
+    fn tick(&mut self, child: &Bound<'_, PyAny>, n: usize, phase: &str) -> PyResult<()> {
+        let name = child_name(child)?;
+        if !self.children.iter().any(|c| c.name == name) {
             return Err(PyKeyError::new_err(format!("no child App '{name}'")));
         }
         let phase = self.phase(phase);
         self.app()?
-            .add_update_system(tick_subapp(name, n).label(format!("tick {name}")), phase);
+            .add_update_system(tick_subapp(&name, n).label(format!("tick {name}")), phase);
         Ok(())
     }
 
@@ -923,6 +1036,25 @@ impl App {
         self.prepared = true;
         if let Some(e) = self.take_error() {
             return Err(e);
+        }
+        if !prepared {
+            // Every update system's resources must exist before step 1
+            // (setup systems have had their chance to insert them).
+            let world = self.world.bind(py);
+            let mut missing = Vec::new();
+            for (system, key, label) in &self.needs {
+                if !world.contains(key.bind(py))? {
+                    missing.push(format!("  system '{system}' needs {label}"));
+                }
+            }
+            if !missing.is_empty() {
+                self.finish();
+                return Err(PyKeyError::new_err(format!(
+                    "missing resources (have: {:?}):\n{}",
+                    self.resources(py),
+                    missing.join("\n")
+                )));
+            }
         }
         let mut n = 0u64;
         loop {
@@ -969,7 +1101,7 @@ impl App {
             "<grass.App phases={:?} resources={:?} children={:?}>",
             self.phases,
             self.resources(py),
-            self.children.keys().collect::<Vec<_>>()
+            self.children.iter().map(|c| &c.name).collect::<Vec<_>>()
         )
     }
 }

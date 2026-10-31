@@ -40,28 +40,38 @@ The crate targets the stable ABI (`abi3-py39`), so one build works on Python 3.9
 
 ## Apps from Python
 
+Resources are keyed by their class, the way `Res<T>` is in Rust. A system parameter annotated `temp: Temperature` receives the `Temperature` resource:
+
 ```python
+@dataclass
+class Temperature:
+    T: np.ndarray
+
+@dataclass
+class RodParams:
+    r: float
+
+def diffuse(temp: Temperature, p: RodParams) -> None:
+    temp.T[1:-1] += p.r * (temp.T[2:] - 2 * temp.T[1:-1] + temp.T[:-2])
+
 app = grass.App(config="[run]\nsteps = 200\n", output_dir="out")   # same TOML a Rust code reads
 app.add_plugin(grass.plugins.Run())          # Rust plugins: Run, Checkpoint, Provenance
-app["T"] = np.zeros(21)                      # resources are Python objects, by name
-app["params"] = {"r": 0.4}
-app.add_phases("boundary", "diffuse")        # phases run in declaration order
-
-def diffuse(T, params):                      # parameter names pick the resources
-    T[1:-1] += params["r"] * (T[2:] - 2 * T[1:-1] + T[:-2])
-
+app.insert(Temperature(np.zeros(21)))
+app.insert(RodParams(r=0.4))
 app.add_system(diffuse, "diffuse")
 app.run()
+app[Temperature].T                           # typed as Temperature for pyright / mypy
 ```
 
-* **Systems** take resources by parameter name. Two names are special. `sim` gives `step`, `time` (settable), `stop()`, and `tick(child, n)` in a parent. `res` gives the App's whole resource table.
-* **Schedule.** Use `add_system(f, phase, label=, before=, after=, run_if=)`, `add_setup_system`, and `remove_system(label_or_function)`. `app.schedule()` lists the order the scheduler will run, including Rust plugin systems and their namespaces. Within a phase, `before` and `after` are honoured by GRASS's topological sort.
+* **Type checking.** The stubs in `python/typings` let pyright and mypy check field access inside systems and every `app[SomeClass]`. A resource no system can find is reported before step 1, naming the system and the class. Any class can be a resource type, so `app.insert(np.random.default_rng(7))` is received by `rng: np.random.Generator`.
+* **Special parameters.** `sim: grass.Sim` gives `step`, `time` (settable), `stop()`, and `tick(Child, n)` in a parent. Unannotated parameters fall back to string keys (`app["name"] = ...`), and `res` gives the whole resource table. Both are an opt-in escape hatch.
+* **Schedule.** Use `add_system(f, phase, label=, before=, after=, run_if=)`, `add_setup_system`, and `remove_system(f_or_label)`. `app.schedule()` lists the real execution order, including Rust plugin systems and their namespaces. Run conditions resolve resources the same way systems do.
 * **Plugins.** A Python plugin is any object with `build(app)`. An optional `requires = ["OtherPlugin"]` is checked, and each plugin type can be added once. Rust plugins come from `grass.plugins`.
-* **Checkpoints.** `app.checkpoint("x", "rng")` pickles those resources into GRASS's checkpoint files, and `[checkpoint] restart = "..."` restores them. A restart is bit-identical, including NumPy RNG state.
-* **Several codes.** `parent.add_app("hot", hot_app)` moves an App under a parent. Parent systems with a parameter named `hot` see its resources. `parent.tick("cold", 4)` subcycles a child declaratively. `sim.tick("cold", 4)` lets a parent system drive the children itself, which is what an implicit coupling loop needs. The parent ends when any child ends.
-* **Errors.** An exception in a system stops the run and is re-raised from `run()` with a note naming the GRASS system. A missing resource names both the system and the resource.
+* **Checkpoints.** `app.checkpoint(Population, np.random.Generator)` pickles those resources into GRASS's checkpoint files, and `[checkpoint] restart = "..."` restores them. A restart is bit-identical.
+* **Several codes.** `class Hot(grass.AppView): pass` makes a typed child marker, and `parent.add_app(Hot, hot_app)` moves the App under the parent. Parent systems annotated `hot: Hot` see `hot[Slab]` as a `Slab`. `parent.tick(Cold, 4)` subcycles declaratively, and `sim.tick(Cold, 4)` lets a parent system drive the children itself, which is what an implicit coupling loop needs. The parent ends when any child ends.
+* **Errors.** An exception in a system stops the run and is re-raised from `run()` with a note naming the GRASS system.
 
-`python/examples/app_walkthrough.py` shows all of this in four parts. The last part runs two heat codes as child Apps of one parent, with the cold one subcycled 4x. Each time window is converged implicitly with IQN-ILS across non-matching interface meshes, taking 14 iterations in the first window and 4 by the last. Aitken takes 13 and 10.
+`python/examples/app_walkthrough.py` shows all of this in four parts and type-checks clean under pyright. The last part runs two heat codes as child Apps under one parent, with the cold one subcycled 4x. Each time window is converged implicitly with IQN-ILS across non-matching interface meshes, taking 14 iterations in the first window and 4 by the last. Aitken takes 13 and 10.
 
 ### Limits of the preview
 
