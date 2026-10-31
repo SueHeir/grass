@@ -730,7 +730,10 @@ pub struct Input {
 /// emit their snippets via `App::add_config_snippet`
 /// and the App exits before running).
 ///
-/// **CLI surface:** `myapp <config.toml> [--generate-config]`
+/// **CLI surface:** `myapp <config.toml> | --generate-config | --config-docs`.
+/// `--config-docs` prints a Markdown reference of every plugin's sections
+/// (see [`App::config_reference`](grass_app::App::config_reference)) and
+/// exits.
 ///
 /// **Programmatic use:** if a [`Config`] resource is already present on
 /// the App when this plugin runs `build`, CLI parsing is skipped — tests
@@ -747,6 +750,18 @@ impl Plugin for InputPlugin {
 
         let args: Vec<String> = env::args().collect();
 
+        if args.iter().any(|a| a == "--config-docs") {
+            app.add_resource(Config {
+                table: toml::Table::new(),
+            });
+            app.add_resource(Input {
+                filename: String::new(),
+                output_dir: None,
+            });
+            app.add_resource(grass_app::ConfigDocsFlag);
+            return;
+        }
+
         if args.iter().any(|a| a == "--generate-config") {
             app.add_resource(Config {
                 table: toml::Table::new(),
@@ -760,7 +775,7 @@ impl Plugin for InputPlugin {
         }
 
         let input_file = args.get(1).cloned().unwrap_or_else(|| {
-            eprintln!("Usage: <binary> <input.toml> [--generate-config]");
+            eprintln!("Usage: <binary> <input.toml> | --generate-config | --config-docs");
             std::process::exit(1);
         });
         let table =
