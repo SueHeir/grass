@@ -90,10 +90,11 @@ pub use sub_app::*;
 /// single `use grass_app::prelude::*;`.
 pub mod prelude {
     pub use crate::{
-        app::App, app::AppError, app::CapabilityProvider, app::ConfigSnippets,
-        app::GenerateConfigFlag, app::MissingCapability, app::MissingPluginDependency,
-        app::PluginContract, app::PluginContracts, app::PluginDependency, setup::ScheduleSetupSet,
-        sub_app::SubApp, CapabilityId, FallibleSetupSystem, Plugin, PluginGroup,
-        PluginGroupBuilder, StageAdvancePlugin, StageNames, StatesPlugin,
+        app::App, app::AppError, app::CapabilityProvider, app::ConfigDescriptions,
+        app::ConfigDocsFlag, app::ConfigSnippets, app::GenerateConfigFlag, app::MissingCapability,
+        app::MissingPluginDependency, app::PluginContract, app::PluginContracts,
+        app::PluginDependency, setup::ScheduleSetupSet, sub_app::SubApp, CapabilityId,
+        FallibleSetupSystem, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin,
+        StageNames, StatesPlugin,
     };
 }

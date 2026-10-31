@@ -14,6 +14,10 @@
 //!   - [`DumpPlugin`] — periodic file output, LAMMPS-style.
 //!   - [`RunPlugin`] — drives multi-stage `[[run]]` workflows and the
 //!     run-end check.
+//!   - [`CheckpointPlugin`] — periodic checkpoints of registered resources
+//!     and bit-identical restart.
+//!   - [`ProvenancePlugin`] — a record of how the run was produced, written
+//!     next to the output and embedded in checkpoints.
 //!
 //! All of these **ship today** — they are plugins you opt into, not stubs.
 //! Apps that don't want any of this don't depend on `grass_io` at all.
@@ -33,6 +37,7 @@
 //! | `100` ([`TERM_OUT_NAMESPACE`]) | [`TermOutPlugin`] | gather + print the terminal log line |
 //! | `200` ([`DUMP_NAMESPACE`]) | [`DumpPlugin`] | write periodic dump files |
 //! | `1000` ([`RUN_NAMESPACE`]) | [`RunPlugin`] | advance the `[[run]]` stage / signal end-of-run |
+//! | `1100` ([`CHECKPOINT_NAMESPACE`]) | [`CheckpointPlugin`] | write checkpoints (after the step counter, so they record completed steps) |
 //!
 //! The gaps are intentional: observability (term_out, dump) sees the
 //! step's *final* state because it runs after the solver, and the run-end /
@@ -57,12 +62,19 @@ pub mod __private {
     pub use toml;
 }
 
+mod checkpoint;
 mod clock;
 mod config;
 mod dump;
+mod provenance;
 mod run;
 mod term_out;
 
+pub use checkpoint::{
+    Checkpoint, CheckpointAppExt, CheckpointConfig, CheckpointEntry, CheckpointError,
+    CheckpointHeader, CheckpointPlugin, CheckpointSchedule, Checkpoints, RestartSchedule,
+    CHECKPOINT_NAMESPACE,
+};
 pub use clock::{advance_step, every_n_steps, ClockConfig, SimClock, SimClockPlugin};
 pub use config::{
     deep_merge, load_toml, try_load_toml, Config, ConfigChoices, ConfigError, DescribedConfig,
@@ -71,6 +83,7 @@ pub use config::{
 pub use dump::{
     DumpBuffer, DumpConfig, DumpFormat, DumpPlugin, DumpSchedule, RawFrameWriter, DUMP_NAMESPACE,
 };
+pub use provenance::{fnv1a64, Provenance, ProvenancePlugin};
 pub use run::{
     run_read_input, set_stage_name, try_validate_stages, update_cycle, validate_stages,
     FirstStageOnlyConfigs, RunConfig, RunPlugin, RunSchedule, RunState, StageConfig,

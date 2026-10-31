@@ -148,6 +148,62 @@ impl ConfigDescription {
     }
 }
 
+impl ConfigDescription {
+    /// Renders a Markdown reference for this section: the narrative, then a
+    /// table of fields with type, default, allowed values and description.
+    pub fn render_markdown(&self) -> String {
+        fn cell(s: &str) -> String {
+            s.replace('|', "\\|").replace('\n', " ")
+        }
+        let mut out = String::new();
+        let header = if self.array_table {
+            format!("### `[[{}]]`\n\n", self.section)
+        } else {
+            format!("### `[{}]`\n\n", self.section)
+        };
+        out.push_str(&header);
+        if !self.narrative.trim().is_empty() {
+            out.push_str(self.narrative.trim());
+            out.push_str("\n\n");
+        }
+        if self.fields.is_empty() {
+            out.push_str("No fields.\n");
+            return out;
+        }
+        out.push_str("| key | type | default | description |\n|---|---|---|---|\n");
+        for f in &self.fields {
+            let default = if f.required {
+                "**required**".to_string()
+            } else {
+                match &f.default {
+                    Some(d) => format!("`{}`", cell(d)),
+                    None => "not set".to_string(),
+                }
+            };
+            let mut desc = cell(&f.description);
+            if !f.choices.is_empty() {
+                desc.push_str(" One of: ");
+                desc.push_str(
+                    &f.choices
+                        .iter()
+                        .map(|c| format!("`{}`", cell(c)))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                desc.push('.');
+            }
+            out.push_str(&format!(
+                "| `{}` | {} | {} | {} |\n",
+                f.name,
+                cell(&f.ty),
+                default,
+                desc
+            ));
+        }
+        out
+    }
+}
+
 /// Convenience macro to build a `Vec<TypeId>` from a list of types.
 ///
 /// ```rust,ignore
