@@ -407,6 +407,7 @@ pub struct TriSurface {
     triangles: Vec<[usize; 3]>,
     dofs: SurfaceDofs,
     tolerance: f64,
+    subdivision: usize,
     index: SpatialIndex,
 }
 
@@ -447,7 +448,29 @@ impl TriSurface {
             triangles,
             dofs,
             tolerance,
+            subdivision: 1,
         }
+    }
+
+    /// Split every triangle into `n × n` congruent sub-triangles when
+    /// generating sample points, each with its own 3-point rule.
+    ///
+    /// The default (`n = 1`) is exact for quadratic integrands on each
+    /// triangle, which suits smooth targets. When the other side is a grid or
+    /// mesh whose cells are about as large as these triangles, the cell
+    /// indicator functions are not smooth on a triangle and the default rule
+    /// can put most of a triangle's weight in one cell. Subdividing places
+    /// sample points at roughly `1/n` of the triangle size, so the amount
+    /// each target cell receives in a conservative transfer converges to the
+    /// exact overlap at first order in `1/n`. Totals are preserved at every
+    /// `n`.
+    ///
+    /// # Panics
+    /// Panics if `n == 0`.
+    pub fn with_subdivision(mut self, n: usize) -> Self {
+        assert!(n > 0, "subdivision must be at least 1");
+        self.subdivision = n;
+        self
     }
 
     /// The vertices.
@@ -501,24 +524,45 @@ impl Discretization for TriSurface {
     }
 
     fn sample_points(&self, out: &mut Vec<SamplePoint>) {
+        let n = self.subdivision;
+        let nf = n as f64;
+        // Sub-triangles of the reference triangle in (u, v) lattice units:
+        // "upward" (i,j),(i+1,j),(i,j+1) and "downward"
+        // (i+1,j),(i+1,j+1),(i,j+1). Each has 1/n² of the area.
+        let mut subs: Vec<[[f64; 2]; 3]> = Vec::with_capacity(n * n);
+        for j in 0..n {
+            for i in 0..n - j {
+                let (fi, fj) = (i as f64, j as f64);
+                subs.push([[fi, fj], [fi + 1.0, fj], [fi, fj + 1.0]]);
+                if i + j + 1 < n {
+                    subs.push([[fi + 1.0, fj], [fi + 1.0, fj + 1.0], [fi, fj + 1.0]]);
+                }
+            }
+        }
         for (t, tri) in self.triangles.iter().enumerate() {
             let [a, b, c] = self.corners(t);
-            let w = triangle_area(a, b, c) / 3.0;
-            for bary in TRI_RULE {
-                let point = add(add(scale(a, bary[0]), scale(b, bary[1])), scale(c, bary[2]));
-                match self.dofs {
-                    SurfaceDofs::Face => out.push(SamplePoint {
-                        dof: t,
-                        point,
-                        weight: w,
-                    }),
-                    SurfaceDofs::Vertex => {
-                        for k in 0..3 {
-                            out.push(SamplePoint {
-                                dof: tri[k],
-                                point,
-                                weight: w * bary[k],
-                            });
+            let w = triangle_area(a, b, c) / (3.0 * nf * nf);
+            for sub in &subs {
+                for rule in TRI_RULE {
+                    // Parent-triangle barycentrics of this quadrature point.
+                    let u = (0..3).map(|k| rule[k] * sub[k][0]).sum::<f64>() / nf;
+                    let v = (0..3).map(|k| rule[k] * sub[k][1]).sum::<f64>() / nf;
+                    let bary = [1.0 - u - v, u, v];
+                    let point = add(add(scale(a, bary[0]), scale(b, bary[1])), scale(c, bary[2]));
+                    match self.dofs {
+                        SurfaceDofs::Face => out.push(SamplePoint {
+                            dof: t,
+                            point,
+                            weight: w,
+                        }),
+                        SurfaceDofs::Vertex => {
+                            for k in 0..3 {
+                                out.push(SamplePoint {
+                                    dof: tri[k],
+                                    point,
+                                    weight: w * bary[k],
+                                });
+                            }
                         }
                     }
                 }
