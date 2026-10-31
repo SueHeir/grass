@@ -602,6 +602,11 @@ pub trait MultiAppExt {
         name: &str,
         transport: Tr,
     ) -> RemoteSubAppBuilder<'_>;
+
+    /// Register any [`Physics`] implementation as a sub-App participant
+    /// (for example one backed by an App compiled into another library and
+    /// reached through a C ABI).
+    fn add_physics(&mut self, physics: Box<dyn Physics>) -> &mut Self;
 }
 
 impl MultiAppExt for App {
@@ -634,6 +639,11 @@ impl MultiAppExt for App {
 
     fn add_mapped_port<Q: crate::Quantity>(&mut self, method: grass_map::Method) -> &mut Self {
         self.add_resource(crate::mapped_port::MappedPort::<Q>::new(method));
+        self
+    }
+
+    fn add_physics(&mut self, physics: Box<dyn Physics>) -> &mut Self {
+        register_physics(self, physics);
         self
     }
 

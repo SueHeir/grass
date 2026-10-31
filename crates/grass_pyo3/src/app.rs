@@ -12,9 +12,11 @@
 //!   parent's schedule (`tick`) or from a parent system (`sim.tick`). The
 //!   child's resources are visible to parent systems under the child's name.
 
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use grass_app::prelude::App as RustApp;
 use grass_io::{
@@ -25,10 +27,72 @@ use grass_scheduler::prelude::*;
 use grass_scheduler::{SchedulerState, System, SystemDescriptor};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple, PyType};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ─── Phases ─────────────────────────────────────────────────────────────────
+
+/// Python phases run after the Rust physics phases of a step (namespace 0)
+/// and before output (TermOut 100, Dump 200) and run control (1000).
+pub const PY_NAMESPACE: u32 = 10;
+
+/// A phase of a Rust plugin, exposed so Python systems can run inside it
+/// (e.g. between force computation and integration).
+#[pyclass(frozen, name = "RustPhase")]
+#[derive(Clone, Copy)]
+pub struct RustPhase {
+    pub(crate) phase: StoredPhase,
+}
+
+#[pymethods]
+impl RustPhase {
+    fn __repr__(&self) -> String {
+        format!("<phase {}>", self.phase.phase_name())
+    }
+}
+
+impl RustPhase {
+    /// Expose `phase` to Python.
+    pub fn new(phase: impl ScheduleSet) -> Self {
+        Self {
+            phase: StoredPhase::new(phase),
+        }
+    }
+}
+
+// ─── Rust resources seen from Python ────────────────────────────────────────
+
+/// How a Rust resource appears to Python systems. A parameter annotated
+/// with `py_type` receives `read(deps)`; if `write` is set, it is called
+/// with the same object after the system returns.
+pub struct RustView {
+    /// The Python class systems annotate with.
+    pub py_type: Py<PyType>,
+    /// The Rust resources the view is built from.
+    pub deps: Vec<(TypeId, &'static str)>,
+    /// Build the Python object from the resources (in `deps` order).
+    pub read: fn(Python<'_>, &[&dyn Any]) -> PyResult<PyObject>,
+    /// Apply changes made in Python back to the resources.
+    pub write: Option<fn(&Bound<'_, PyAny>, &mut [&mut dyn Any]) -> PyResult<()>>,
+}
+
+thread_local! {
+    static VIEWS: RefCell<Vec<Rc<RustView>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Make a Rust resource available to Python systems of this module's Apps.
+pub fn register_view(view: RustView) {
+    VIEWS.with(|v| v.borrow_mut().push(Rc::new(view)));
+}
+
+fn find_view(hint: &Bound<'_, PyAny>) -> Option<Rc<RustView>> {
+    VIEWS.with(|v| {
+        v.borrow()
+            .iter()
+            .find(|view| view.py_type.bind(hint.py()).is(hint))
+            .cloned()
+    })
+}
 
 /// A phase named from Python. Ordered by declaration within the App.
 #[derive(Clone, Copy, Debug)]
@@ -62,7 +126,7 @@ const PY_RESTORE_NAMESPACE: u32 = 1150;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
-type ErrorSlot = Rc<RefCell<Option<PyErr>>>;
+pub(crate) type ErrorSlot = Rc<RefCell<Option<PyErr>>>;
 type Keys = Rc<RefCell<Vec<Py<PyAny>>>>;
 
 /// How a resource key reads in messages: a class by its name, a string as itself.
@@ -143,7 +207,7 @@ fn py_restore(mut snap: ResMut<PySnapshot>, world: Res<PyWorld>) {
 // ─── Sim handle ─────────────────────────────────────────────────────────────
 
 /// Passed to a system that has a parameter named `sim`.
-#[pyclass(unsendable, module = "grass")]
+#[pyclass(unsendable)]
 pub struct Sim {
     #[pyo3(get)]
     step: u64,
@@ -155,6 +219,12 @@ pub struct Sim {
 
 #[pymethods]
 impl Sim {
+    /// Lets Apps from other GRASS modules recognise this class.
+    #[classattr]
+    fn __grass_role__() -> &'static str {
+        "sim"
+    }
+
     /// End the run after this step.
     fn stop(&mut self) {
         self.stopped = true;
@@ -189,7 +259,7 @@ impl Sim {
 
 /// A child App's resources, seen from a parent system. Subclass it to
 /// make a typed marker for a child: `class Hot(grass.AppView): pass`.
-#[pyclass(unsendable, subclass, module = "grass")]
+#[pyclass(unsendable, subclass)]
 pub struct AppView {
     name: String,
     dict: Py<PyDict>,
@@ -240,6 +310,8 @@ enum Arg {
     Sim,
     /// `res`: this App's own resources, for systems that pick them at run time.
     Own,
+    /// A Rust resource seen through a registered [`RustView`].
+    Rust(Rc<RustView>, Vec<usize>),
 }
 
 struct Call {
@@ -264,8 +336,14 @@ impl Call {
             let name: String = name?.extract()?;
             let arg = match hints.get_item(&name)? {
                 Some(hint) => {
-                    if hint.is(&sim_type) {
+                    let role = hint
+                        .getattr("__grass_role__")
+                        .ok()
+                        .and_then(|r| r.extract::<String>().ok());
+                    if hint.is(&sim_type) || role.as_deref() == Some("sim") {
                         Arg::Sim
+                    } else if let Some(view) = find_view(&hint) {
+                        Arg::Rust(view, Vec::new())
                     } else if let Some(c) = children.iter().find(|c| c.key.bind(py).is(&hint)) {
                         Arg::Child(c.name.clone(), c.dict.clone_ref(py))
                     } else if hint.is_instance_of::<pyo3::types::PyType>() {
@@ -302,16 +380,47 @@ impl Call {
             .collect()
     }
 
+    /// Resolve Rust-view resource indices; returns missing type names.
+    fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
+        let mut missing = Vec::new();
+        for a in &mut self.args {
+            if let Arg::Rust(view, idx) = a {
+                idx.clear();
+                for (t, name) in &view.deps {
+                    match index.get(t) {
+                        Some(&i) => idx.push(i),
+                        None => missing.push(name.to_string()),
+                    }
+                }
+            }
+        }
+        missing
+    }
+
     fn call<'py>(
         &self,
         py: Python<'py>,
         world: &Bound<'py, PyDict>,
         sim: &Bound<'py, Sim>,
         system: &str,
+        resources: &[RefCell<Box<dyn Any>>],
     ) -> PyResult<Bound<'py, PyAny>> {
         let mut vals = Vec::with_capacity(self.args.len());
+        let mut writes = Vec::new();
         for a in &self.args {
             vals.push(match a {
+                Arg::Rust(view, idx) => {
+                    let obj = {
+                        let refs: Vec<_> = idx.iter().map(|&i| resources[i].borrow()).collect();
+                        let anys: Vec<&dyn Any> = refs.iter().map(|r| &***r as &dyn Any).collect();
+                        (view.read)(py, &anys)?
+                    };
+                    let obj = obj.into_bound(py);
+                    if view.write.is_some() {
+                        writes.push((view.clone(), idx.clone(), obj.clone()));
+                    }
+                    obj
+                }
                 Arg::Sim => sim.clone().into_any(),
                 Arg::Own => Bound::new(
                     py,
@@ -338,7 +447,14 @@ impl Call {
                 })?,
             });
         }
-        self.func.bind(py).call1(PyTuple::new(py, vals)?)
+        let out = self.func.bind(py).call1(PyTuple::new(py, vals)?)?;
+        for (view, idx, obj) in writes {
+            let mut refs: Vec<_> = idx.iter().map(|&i| resources[i].borrow_mut()).collect();
+            let mut anys: Vec<&mut dyn Any> =
+                refs.iter_mut().map(|r| &mut ***r as &mut dyn Any).collect();
+            (view.write.expect("write"))(&obj, &mut anys)?;
+        }
+        Ok(out)
     }
 
     fn wants_sim(&self) -> bool {
@@ -359,10 +475,9 @@ struct PySystem {
 impl System for PySystem {
     fn prepare(
         &mut self,
-        index: &HashMap<std::any::TypeId, usize>,
-        _resources: &[RefCell<Box<dyn std::any::Any>>],
+        index: &HashMap<TypeId, usize>,
+        _resources: &[RefCell<Box<dyn Any>>],
     ) -> Vec<String> {
-        use std::any::TypeId;
         let mut missing = Vec::new();
         match index.get(&TypeId::of::<PyWorld>()) {
             Some(&i) => self.world = i,
@@ -374,6 +489,10 @@ impl System for PySystem {
         }
         self.clock = index.get(&TypeId::of::<SimClock>()).copied();
         self.subapps = index.get(&TypeId::of::<SubApps>()).copied();
+        missing.extend(self.body.prepare(index));
+        if let Some(c) = self.condition.as_mut() {
+            missing.extend(c.prepare(index));
+        }
         missing
     }
 
@@ -381,7 +500,7 @@ impl System for PySystem {
         &self.name
     }
 
-    fn run(&mut self, resources: &[RefCell<Box<dyn std::any::Any>>]) {
+    fn run(&mut self, resources: &[RefCell<Box<dyn Any>>]) {
         let (dict, error) = {
             let w = resources[self.world].borrow();
             let w = w.downcast_ref::<PyWorld>().expect("PyWorld");
@@ -424,11 +543,11 @@ impl System for PySystem {
             )?;
             let result = (|| -> PyResult<()> {
                 if let Some(cond) = &self.condition {
-                    if !cond.call(py, world, &sim, &self.name)?.is_truthy()? {
+                    if !cond.call(py, world, &sim, &self.name, resources)?.is_truthy()? {
                         return Ok(());
                     }
                 }
-                self.body.call(py, world, &sim, &self.name)?;
+                self.body.call(py, world, &sim, &self.name, resources)?;
                 Ok(())
             })();
             let mut s = sim.borrow_mut();
@@ -465,37 +584,35 @@ impl System for PySystem {
 
 // ─── Rust plugins ───────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-enum RustPluginKind {
-    Run,
-    Checkpoint,
-    Provenance {
-        name: String,
-        version: String,
-        notes: Vec<(String, String)>,
-    },
-}
+type BuildFn = Arc<dyn Fn(&mut RustApp) + Send + Sync>;
 
-/// A plugin implemented in Rust (see `grass.plugins`).
-#[pyclass(module = "grass", name = "RustPlugin")]
+/// A plugin implemented in Rust. Extension modules make these with
+/// [`RustPluginPy::new`] (see `grass.plugins` for the standard ones).
+#[pyclass(name = "RustPlugin", frozen)]
 #[derive(Clone)]
 pub struct RustPluginPy {
-    kind: RustPluginKind,
+    label: String,
+    build: BuildFn,
 }
 
 #[pymethods]
 impl RustPluginPy {
     fn __repr__(&self) -> String {
-        format!("<grass.plugins.{}>", self.label())
+        format!("<RustPlugin {}>", self.label)
+    }
+    /// Lets Apps from other GRASS modules give a clear error.
+    #[classattr]
+    fn __grass_role__() -> &'static str {
+        "rust_plugin"
     }
 }
 
 impl RustPluginPy {
-    fn label(&self) -> &'static str {
-        match self.kind {
-            RustPluginKind::Run => "Run",
-            RustPluginKind::Checkpoint => "Checkpoint",
-            RustPluginKind::Provenance { .. } => "Provenance",
+    /// A plugin named `label` whose build step is `build`.
+    pub fn new(label: &str, build: impl Fn(&mut RustApp) + Send + Sync + 'static) -> Self {
+        Self {
+            label: label.to_string(),
+            build: Arc::new(build),
         }
     }
 }
@@ -503,17 +620,17 @@ impl RustPluginPy {
 /// `[run]` steps / stages and end-of-run control.
 #[pyfunction(name = "Run")]
 fn run_plugin() -> RustPluginPy {
-    RustPluginPy {
-        kind: RustPluginKind::Run,
-    }
+    RustPluginPy::new("Run", |app| {
+        app.add_plugins(RunPlugin);
+    })
 }
 
 /// Periodic checkpoints and restart (`[checkpoint]` every / dir / keep / restart).
 #[pyfunction(name = "Checkpoint")]
 fn checkpoint_plugin() -> RustPluginPy {
-    RustPluginPy {
-        kind: RustPluginKind::Checkpoint,
-    }
+    RustPluginPy::new("Checkpoint", |app| {
+        app.add_plugins(CheckpointPlugin);
+    })
 }
 
 /// Writes provenance.toml (code version, host, input hash, notes) at start.
@@ -526,13 +643,13 @@ fn provenance_plugin(
 ) -> RustPluginPy {
     let mut notes: Vec<_> = notes.unwrap_or_default().into_iter().collect();
     notes.sort();
-    RustPluginPy {
-        kind: RustPluginKind::Provenance {
-            name,
-            version,
-            notes,
-        },
-    }
+    RustPluginPy::new("Provenance", move |app| {
+        let mut pl = ProvenancePlugin::new(&name, &version);
+        for (k, v) in &notes {
+            pl = pl.note(k, v);
+        }
+        app.add_plugins(pl);
+    })
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
@@ -570,7 +687,7 @@ fn check_typed(key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()>
 }
 
 /// A GRASS App: resources, systems in ordered phases, plugins, child Apps.
-#[pyclass(unsendable, module = "grass")]
+#[pyclass(unsendable)]
 pub struct App {
     inner: Option<RustApp>,
     /// Name of the parent this App was moved into, if any.
@@ -607,6 +724,22 @@ impl App {
             ))),
             (None, None) => Err(PyRuntimeError::new_err("App is not available")),
         }
+    }
+
+    /// A phase argument: a name (Python phase) or a module's `RustPhase`.
+    fn resolve_phase(&mut self, phase: Option<&Bound<'_, PyAny>>, default: &str) -> PyResult<StoredPhase> {
+        let Some(p) = phase else {
+            return Ok(StoredPhase::new(self.phase(default)));
+        };
+        if let Ok(name) = p.extract::<String>() {
+            return Ok(StoredPhase::new(self.phase(&name)));
+        }
+        if let Ok(rp) = p.downcast::<RustPhase>() {
+            return Ok(rp.get().phase);
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "phase must be a name or a RustPhase of this App's module (got {p})"
+        )))
     }
 
     fn phase(&mut self, name: &str) -> PyPhase {
@@ -710,6 +843,7 @@ impl App {
     #[pyo3(signature = (config = None, output_dir = None))]
     fn new(py: Python<'_>, config: Option<&str>, output_dir: Option<String>) -> PyResult<Self> {
         let mut app = RustApp::new();
+        app.set_schedule_namespace::<PyPhase>(PY_NAMESPACE);
         if let Some(c) = config {
             let cfg = Config::try_from_str(c)
                 .map_err(|e| PyValueError::new_err(format!("config: {e}")))?;
@@ -807,37 +941,37 @@ impl App {
     /// Run `func` every step in `phase`. Its parameter names pick the
     /// resources it receives. `before` / `after` take labels or functions;
     /// `run_if` is a callable with the same parameter rules.
-    #[pyo3(signature = (func, phase = "update", *, label = None, before = None, after = None, run_if = None))]
+    #[pyo3(signature = (func, phase = None, *, label = None, before = None, after = None, run_if = None))]
     #[allow(clippy::too_many_arguments)]
     fn add_system(
         &mut self,
         py: Python<'_>,
         func: Py<PyAny>,
-        phase: &str,
+        phase: Option<&Bound<'_, PyAny>>,
         label: Option<String>,
         before: Option<&Bound<'_, PyAny>>,
         after: Option<&Bound<'_, PyAny>>,
         run_if: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         self.app()?;
+        let phase = self.resolve_phase(phase, "update")?;
         let sys = self.make_system(py, func, label, one_name(before)?, one_name(after)?, run_if)?;
-        let phase = self.phase(phase);
         self.app()?.add_update_system(sys, phase);
         Ok(())
     }
 
     /// Run `func` once, before the first step.
-    #[pyo3(signature = (func, phase = "setup", *, label = None))]
+    #[pyo3(signature = (func, phase = None, *, label = None))]
     fn add_setup_system(
         &mut self,
         py: Python<'_>,
         func: Py<PyAny>,
-        phase: &str,
+        phase: Option<&Bound<'_, PyAny>>,
         label: Option<String>,
     ) -> PyResult<()> {
         self.app()?;
+        let phase = self.resolve_phase(phase, "setup")?;
         let sys = self.make_system(py, func, label, vec![], vec![], None)?;
-        let phase = self.phase(phase);
         self.app()?.add_setup_system(sys, phase);
         Ok(())
     }
@@ -874,36 +1008,32 @@ impl App {
     /// Add a plugin: a `grass.plugins` Rust plugin, or any object with a
     /// `build(app)` method. Each plugin type may be added once.
     fn add_plugin(slf: &Bound<'_, Self>, plugin: &Bound<'_, PyAny>) -> PyResult<()> {
-        if let Ok(p) = plugin.extract::<RustPluginPy>() {
+        if let Ok(p) = plugin.downcast::<RustPluginPy>() {
+            let p = p.get();
             let mut me = slf.borrow_mut();
-            let key = format!("rust:{}", p.label());
+            let key = format!("rust:{}", p.label);
             if !me.plugins.insert(key) {
                 return Err(PyValueError::new_err(format!(
                     "plugin {} was already added",
-                    p.label()
+                    p.label
                 )));
             }
             let app = me.app()?;
-            match p.kind {
-                RustPluginKind::Run => {
-                    app.add_plugins(RunPlugin);
-                }
-                RustPluginKind::Checkpoint => {
-                    app.add_plugins(CheckpointPlugin);
-                }
-                RustPluginKind::Provenance {
-                    name,
-                    version,
-                    notes,
-                } => {
-                    let mut pl = ProvenancePlugin::new(&name, &version);
-                    for (k, v) in &notes {
-                        pl = pl.note(k, v);
-                    }
-                    app.add_plugins(pl);
-                }
-            }
+            (p.build)(app);
             return Ok(());
+        }
+        if plugin
+            .getattr("__grass_role__")
+            .ok()
+            .and_then(|r| r.extract::<String>().ok())
+            .as_deref()
+            == Some("rust_plugin")
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "{plugin} was built by a different GRASS module. A Rust plugin can only join an \
+                 App from its own module (e.g. dirt.App for dirt.plugins); combine Apps from \
+                 different modules with add_app instead"
+            )));
         }
         let ty = plugin.get_type();
         let key = format!("py:{}", ty.fully_qualified_name()?);
@@ -965,7 +1095,7 @@ impl App {
 
     /// Make `child` part of this App. `key` is a class (parent systems
     /// annotate a parameter with it) or a string (matched by parameter name).
-    fn add_app(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>, child: &Bound<'_, App>) -> PyResult<()> {
+    fn add_app(&mut self, py: Python<'_>, key: &Bound<'_, PyAny>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let name = child_name(key)?;
         if self.world.bind(py).contains(key)? || name == "sim" || name == "res" {
             return Err(PyValueError::new_err(format!("'{name}' is already a resource name")));
@@ -973,17 +1103,35 @@ impl App {
         if self.children.iter().any(|c| c.name == name) {
             return Err(PyValueError::new_err(format!("child App '{name}' already added")));
         }
-        let mut c = child.borrow_mut();
-        if c.prepared {
-            return Err(PyRuntimeError::new_err("child App has already run"));
-        }
-        let inner = c.inner.take().ok_or_else(|| {
-            PyRuntimeError::new_err("child App was already added to a parent")
-        })?;
-        c.moved_into = Some(name.clone());
+        self.app()?;
+        // Same module: move the Rust App in directly. Another module: go
+        // through the stable C ABI (see `abi`).
+        let (dict, error) = if let Ok(child) = child.downcast::<App>() {
+            let mut c = child.borrow_mut();
+            if c.prepared {
+                return Err(PyRuntimeError::new_err("child App has already run"));
+            }
+            let inner = c.inner.take().ok_or_else(|| {
+                PyRuntimeError::new_err("child App was already added to a parent")
+            })?;
+            c.moved_into = Some(name.clone());
+            self.app()?.add_subapp(&name, inner);
+            (c.world.clone_ref(py), c.error.clone())
+        } else if child.hasattr("_grass_participant")? {
+            let (capsule, dict): (Bound<'_, PyAny>, Bound<'_, PyDict>) = child
+                .call_method1("_grass_participant", (&name,))?
+                .extract()?;
+            let error: ErrorSlot = Rc::default();
+            let physics = crate::abi::ForeignPhysics::claim(name.clone(), &capsule, error.clone())?;
+            self.app()?.add_physics(Box::new(physics));
+            (dict.unbind(), error)
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "add_app needs a GRASS App (from any GRASS module), got {child}"
+            )));
+        };
         let first = self.children.is_empty();
         let app = self.app()?;
-        app.add_subapp(&name, inner);
         if first {
             app.set_schedule_namespace::<ChildDone>(CHILD_DONE_NAMESPACE);
             app.add_update_system(
@@ -999,20 +1147,35 @@ impl App {
         self.children.push(Child {
             key: key.clone().unbind(),
             name,
-            dict: c.world.clone_ref(py),
+            dict,
         });
-        self.child_errors.push(c.error.clone());
+        self.child_errors.push(error);
         Ok(())
     }
 
+    /// Hand this App to a parent from another GRASS module: returns the
+    /// C-ABI participant capsule and this App's resource dict. Used by
+    /// `add_app`; not meant to be called directly.
+    fn _grass_participant(&mut self, py: Python<'_>, parent_name: String) -> PyResult<(Py<pyo3::types::PyCapsule>, Py<PyDict>)> {
+        if self.prepared {
+            return Err(PyRuntimeError::new_err("child App has already run"));
+        }
+        let inner = self.inner.take().ok_or_else(|| {
+            PyRuntimeError::new_err("child App was already added to a parent")
+        })?;
+        self.moved_into = Some(parent_name);
+        let capsule = crate::abi::export(py, inner, self.error.clone())?;
+        Ok((capsule, self.world.clone_ref(py)))
+    }
+
     /// Advance a child by `n` steps each parent step, in `phase`.
-    #[pyo3(signature = (child, n = 1, phase = "tick"))]
-    fn tick(&mut self, child: &Bound<'_, PyAny>, n: usize, phase: &str) -> PyResult<()> {
+    #[pyo3(signature = (child, n = 1, phase = None))]
+    fn tick(&mut self, child: &Bound<'_, PyAny>, n: usize, phase: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let name = child_name(child)?;
         if !self.children.iter().any(|c| c.name == name) {
             return Err(PyKeyError::new_err(format!("no child App '{name}'")));
         }
-        let phase = self.phase(phase);
+        let phase = self.resolve_phase(phase, "tick")?;
         self.app()?
             .add_update_system(tick_subapp(&name, n).label(format!("tick {name}")), phase);
         Ok(())
@@ -1131,11 +1294,14 @@ fn short(name: &str) -> String {
     }
 }
 
-pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+/// Add `App`, `Sim`, `AppView`, `RustPlugin`, `RustPhase` and a `plugins`
+/// submodule with the standard Rust plugins to module `m`.
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<App>()?;
     m.add_class::<Sim>()?;
     m.add_class::<AppView>()?;
     m.add_class::<RustPluginPy>()?;
+    m.add_class::<RustPhase>()?;
     let plugins = PyModule::new(m.py(), "plugins")?;
     plugins.add_function(wrap_pyfunction!(run_plugin, &plugins)?)?;
     plugins.add_function(wrap_pyfunction!(checkpoint_plugin, &plugins)?)?;
@@ -1144,6 +1310,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.py()
         .import("sys")?
         .getattr("modules")?
-        .set_item("grass.plugins", &plugins)?;
+        .set_item(format!("{}.plugins", m.name()?), &plugins)?;
     Ok(())
 }

@@ -1,0 +1,16 @@
+[package]
+name = "grass_pyo3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python App bindings shared by every GRASS-based extension module, and the stable C ABI they use to compose"
+publish = false
+
+[dependencies]
+grass_app = { workspace = true }
+grass_scheduler = { workspace = true }
+grass_io = { workspace = true }
+grass_multi = { workspace = true }
+pyo3 = { version = "0.25", features = ["abi3-py39"] }
+serde = "1"
