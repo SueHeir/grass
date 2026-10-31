@@ -371,3 +371,44 @@ fn volume_trace_onto_boundary_surface_reads_the_adjacent_cells() {
         out.values
     );
 }
+
+/// Uniform flux on a coarse surface, deposited conservatively onto a grid
+/// whose cells are comparable to the triangles: each cell should receive
+/// flux × (its overlap with the surface). The default 3-point rule is far
+/// off; subdividing converges to the exact overlap.
+fn surface_deposit_error(subdivision: usize) -> f64 {
+    // 3 × 3 quads (18 triangles) over [0,1]², grid of 5 × 5 cells.
+    let surf = plane(3, 3, 1.0, 1.0, 0.5, SurfaceDofs::Face, 1e-9).with_subdivision(subdivision);
+    let grid = UniformGrid::new([0.0; 3], [1.0; 3], [5, 5, 1]);
+    let flux = Field::<Density>::scalar(vec![2.0; surf.len()]);
+    let q = flux.to_extensive(&surf.measures());
+    let map = MapBuilder::new(&surf, &grid).conservative();
+    let mut out = Field::<Extensive>::zeros(grid.len(), 1);
+    map.apply(&q, &mut out);
+    assert!(
+        (out.totals()[0] - 2.0).abs() < TOL,
+        "total {}",
+        out.totals()[0]
+    );
+    let exact = 2.0 / 25.0;
+    out.values
+        .iter()
+        .map(|v| (v - exact).abs() / exact)
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn subdivided_surface_quadrature_converges_to_exact_overlap() {
+    let errs: Vec<f64> = [1, 2, 4, 8, 16]
+        .iter()
+        .map(|&n| surface_deposit_error(n))
+        .collect();
+    eprintln!("max relative cell error by subdivision 1,2,4,8,16: {errs:?}");
+    assert!(
+        errs[0] > 0.2,
+        "default rule unexpectedly accurate: {}",
+        errs[0]
+    );
+    assert!(errs[4] < 0.1, "subdivision 16 still off: {}", errs[4]);
+    assert!(errs[4] < errs[0] / 8.0);
+}
