@@ -22,6 +22,9 @@ parent App's own schedule is the orchestrator.
 | [`MpiInterCommTransport`](src/transport.rs) (feature `mpi`) | point-to-point on `MPI_COMM_WORLD` for MPMD launches |
 | [`Port<T>`](src/port.rs) + [`expose_field`](src/port.rs) / [`consume_field`](src/port.rs) | a typed exchange slot; producer and consumer share only `T` |
 | [`MappedPort<Q>`](src/mapped_port.rs) + [`expose_on`](src/mapped_port.rs) / [`consume_on`](src/mapped_port.rs) | a port whose field is mapped (with [`grass_map`](../grass_map/)) onto each consumer's own mesh, surface or point cloud; sampled or conservative by the quantity's kind, map cached per mesh pair |
+| [`OuterIteration`](src/relax.rs) + [`Relaxation`](src/relax.rs) | interface fixed-point acceleration: fixed under-relaxation, Aitken, or IQN-ILS with window reuse and QR filtering |
+| [`ImplicitCoupling`](src/implicit.rs) + [`checkpoint_window`](src/implicit.rs) / [`converge_window`](src/implicit.rs) | implicit coupling over time windows: checkpoint, iterate to convergence (restoring solver state), accept, advance |
+| [`Waveform`](src/waveform.rs) | interface data over a window for subcycling; consumers interpolate at their own substep times (linear is second order in time) |
 | [`OuterIterStopPlugin`](src/outer_iter.rs) | drop into the parent's schedule for fixed-iter termination |
 
 ## Example shape
