@@ -64,5 +64,5 @@ pub use discretization::{Discretization, SamplePoint, Sampling, TopoDim};
 pub use field::{Density, Extensive, Field, FieldKind, Intensive, Sampled};
 pub use geom::{Aabb, Point};
 pub use index::SpatialIndex;
-pub use map::{AdjointPair, ConservativeMap, ConsistentMap, MapBuilder, MapReport, Method};
+pub use map::{AdjointPair, ConservativeMap, ConsistentMap, Map, MapBuilder, MapReport, Method};
 pub use sparse::CsrMatrix;

@@ -555,6 +555,16 @@ pub trait MultiAppExt {
     /// ```
     fn add_port<T: 'static>(&mut self) -> &mut Self;
 
+    /// Register a [`MappedPort<Q>`](crate::MappedPort) on the parent App: a
+    /// port whose field is mapped onto each consumer's own discretization
+    /// with `method`. See [`expose_on`](crate::expose_on) and
+    /// [`consume_on`](crate::consume_on).
+    ///
+    /// ```rust,ignore
+    /// parent.add_mapped_port::<WallTemperature>(grass_map::Method::Native);
+    /// ```
+    fn add_mapped_port<Q: crate::Quantity>(&mut self, method: grass_map::Method) -> &mut Self;
+
     /// Register a remote (cross-process) sub-App backed by a [`Transport`].
     /// Returns a [`RemoteSubAppBuilder`] for declaring which resource types
     /// cross the wire, in which direction, and at what cadence:
@@ -619,6 +629,11 @@ impl MultiAppExt for App {
 
     fn add_port<T: 'static>(&mut self) -> &mut Self {
         self.add_resource(crate::port::Port::<T>::default());
+        self
+    }
+
+    fn add_mapped_port<Q: crate::Quantity>(&mut self, method: grass_map::Method) -> &mut Self {
+        self.add_resource(crate::mapped_port::MappedPort::<Q>::new(method));
         self
     }
 

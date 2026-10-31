@@ -139,6 +139,7 @@
 
 #![warn(missing_docs)]
 
+mod mapped_port;
 mod multi;
 mod outer_iter;
 mod physics;
@@ -160,6 +161,7 @@ mod wire;
 // get both with `use grass_multi::*;`.
 pub use grass_derive::Namespace;
 
+pub use mapped_port::{consume_on, expose_on, MappedPort, Mesh, Published, Quantity};
 pub use multi::{
     advance_to_seam, complete_subapp_step, tick_n_times, tick_subapp, Multi, MultiAppExt,
     MultiContext, MultiMut, MultiRef, Namespace, RemoteSubAppBuilder, SubApps,
