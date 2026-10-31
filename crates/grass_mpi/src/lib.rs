@@ -188,6 +188,14 @@ pub trait CommBackend: Send + Sync + 'static {
     fn all_reduce_sum_f64(&self, local: f64) -> f64;
     /// Min of `local` across all ranks, returned to every rank (e.g. global dt).
     fn all_reduce_min_f64(&self, local: f64) -> f64;
+    /// Element-wise sum of `values` across all ranks, in place, in one
+    /// collective (e.g. a load-balance histogram). The default issues one
+    /// scalar reduction per element; backends should override it.
+    fn all_reduce_sum_f64_slice(&self, values: &mut [f64]) {
+        for v in values.iter_mut() {
+            *v = self.all_reduce_sum_f64(*v);
+        }
+    }
     /// Block until every rank reaches this point.
     fn barrier(&self);
 
@@ -653,6 +661,15 @@ impl CommBackend for MpiCommBackend {
         result
     }
 
+    fn all_reduce_sum_f64_slice(&self, values: &mut [f64]) {
+        if values.is_empty() {
+            return;
+        }
+        let local = values.to_vec();
+        self.world
+            .all_reduce_into(&local[..], values, SystemOperation::sum());
+    }
+
     fn barrier(&self) {
         self.world.barrier();
     }
@@ -781,6 +798,9 @@ mod tests {
         let comm = SingleProcessComm::new();
         assert_eq!(comm.all_reduce_sum_f64(42.0), 42.0);
         assert_eq!(comm.all_reduce_min_f64(7.5), 7.5);
+        let mut values = [1.0, -2.0, 3.5];
+        comm.all_reduce_sum_f64_slice(&mut values);
+        assert_eq!(values, [1.0, -2.0, 3.5]);
     }
 
     #[test]
