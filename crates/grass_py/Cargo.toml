@@ -1,0 +1,20 @@
+[package]
+name = "grass_py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for grass: mapping between discretizations, coupling acceleration, waveforms, checkpoints"
+publish = false
+
+[lib]
+name = "grass"
+crate-type = ["cdylib"]
+
+[dependencies]
+grass_map = { workspace = true }
+grass_multi = { workspace = true }
+grass_io = { workspace = true }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
+numpy = "0.25"
+toml = "0.8"
