@@ -170,6 +170,8 @@ Runnable examples and their acceptance criteria live together in the repository:
 | [`typed_system_labels`](examples/typed_system_labels/README.md) | Typed ordering, dependencies, and failure diagnostics |
 | [`fallible_lifecycle`](examples/fallible_lifecycle/README.md) | Setup-error propagation, update short-circuiting, and cleanup |
 | [`observed_oscillator`](examples/observed_oscillator/README.md) | Configuration, clocks, terminal output, and dumps |
+| [`mapping_tour`](examples/mapping_tour/README.md) | Mapping between a fluid grid, a non-matching shield surface and particles, with conservation checks |
+| [`mock_icarus`](examples/mock_icarus/README.md) | Wrapping a Fortran ablator and a C aeroheating code as plugins, then coupling them explicitly, implicitly (IQN-ILS) and across MPI roles. Its own Cargo workspace; needs `gfortran` and a C compiler |
 
 The complete evidence index is [Example Validation](examples/VALIDATION.md).
 These checks validate framework behavior and the particular examples; they do
@@ -235,6 +237,8 @@ Start with the runnable [`hello_app`](examples/hello_app/README.md) and
 | [`grass_io`](crates/grass_io/README.md) | TOML configuration, clocks, run control, terminal output, and dumps |
 | [`grass_mpi`](crates/grass_mpi/README.md) | Single-process and MPI communication backends and topology bootstrap |
 | [`grass_multi`](crates/grass_multi/README.md) | Optional sub-apps, namespaced access, and local or distributed orchestration |
+| [`grass_precice`](crates/grass_precice/README.md) | Run a grass App as a preCICE participant (meshes, data, implicit checkpoints, time-step control) |
+| [`grass_map`](crates/grass_map/README.md) | Mapping data between meshes, surfaces, particles and point clouds: consistent, conservative and adjoint operators |
 
 Runnable guidance lives beside the examples. Public API, scheduling, MPI, and
 composition details live in the crate READMEs and Rust documentation.

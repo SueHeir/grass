@@ -52,6 +52,21 @@ fn mpi_backend_collectives() {
     let min = backend.all_reduce_min_f64((rank + 1) as f64);
     assert_eq!(min, 1.0, "all_reduce_min_f64: expected 1.0, got {min}");
 
+    // all_reduce_sum_f64_slice: element k gets (rank + 1) * (k + 1) from each
+    // rank, so the sum is (k + 1) * size*(size+1)/2. Also check that the
+    // override agrees with the scalar default it replaces.
+    let mut values: Vec<f64> = (0..5).map(|k| ((rank + 1) * (k + 1)) as f64).collect();
+    backend.all_reduce_sum_f64_slice(&mut values);
+    for (k, v) in values.iter().enumerate() {
+        let expected = (k as f64 + 1.0) * expected_sum;
+        assert_eq!(
+            *v, expected,
+            "all_reduce_sum_f64_slice[{k}]: expected {expected}, got {v}"
+        );
+    }
+    let mut empty: [f64; 0] = [];
+    backend.all_reduce_sum_f64_slice(&mut empty);
+
     // all_reduce_min sees a value contributed only by the highest rank: make
     // every rank report a large sentinel except the last, which reports -3.0.
     let sentinel = if rank == size - 1 { -3.0 } else { 1.0e9 };

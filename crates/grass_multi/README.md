@@ -20,6 +20,12 @@ parent App's own schedule is the orchestrator.
 | [`Namespace`](src/multi.rs) trait — via `#[derive(Namespace)]` or the [`namespace!`](src/multi.rs) macro | compile-time markers for sub-App names |
 | [`Wire`](src/wire.rs) | impl on resources that cross the wire (the MPI two-binary case) — defines `pack` / `unpack` bytes |
 | [`MpiInterCommTransport`](src/transport.rs) (feature `mpi`) | point-to-point on `MPI_COMM_WORLD` for MPMD launches |
+| [`Port<T>`](src/port.rs) + [`expose_field`](src/port.rs) / [`consume_field`](src/port.rs) | a typed exchange slot; producer and consumer share only `T` |
+| [`MappedPort<Q>`](src/mapped_port.rs) + [`expose_on`](src/mapped_port.rs) / [`consume_on`](src/mapped_port.rs) | a port whose field is mapped (with [`grass_map`](../grass_map/)) onto each consumer's own mesh, surface or point cloud; sampled or conservative by the quantity's kind, map cached per mesh pair |
+| [`OuterIteration`](src/relax.rs) + [`Relaxation`](src/relax.rs) | interface fixed-point acceleration: fixed under-relaxation, Aitken, or IQN-ILS with window reuse and QR filtering |
+| [`ImplicitCoupling`](src/implicit.rs) + [`checkpoint_window`](src/implicit.rs) / [`converge_window`](src/implicit.rs) | implicit coupling over time windows: checkpoint, iterate to convergence (restoring solver state), accept, advance |
+| [`Waveform`](src/waveform.rs) | interface data over a window for subcycling; consumers interpolate at their own substep times (linear is second order in time) |
+| [`Ensemble`](src/ensemble.rs) + [`Summary`](src/ensemble.rs) | run many independent members (each usually its own `App`) on a thread pool with reproducible per-member seeds; `run_rank` + `gather_outputs` (feature `mpi`) split members over MPI ranks and collect them on rank 0; `Summary` keeps running mean, variance, min and max |
 | [`OuterIterStopPlugin`](src/outer_iter.rs) | drop into the parent's schedule for fixed-iter termination |
 
 ## Example shape

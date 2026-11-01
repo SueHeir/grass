@@ -139,6 +139,11 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "mpi")]
+mod coupled;
+mod ensemble;
+mod implicit;
+mod mapped_port;
 mod multi;
 mod outer_iter;
 mod physics;
@@ -154,12 +159,23 @@ mod runner;
 mod snapshot;
 mod transport;
 mod typed_multi;
+mod waveform;
 mod wire;
 
 // Re-export the `Namespace` derive macro alongside the trait so users
 // get both with `use grass_multi::*;`.
 pub use grass_derive::Namespace;
 
+#[cfg(feature = "mpi")]
+pub use coupled::{
+    CoupledRun, CoupledRunner, CouplingGroup, DistributedImplicit, RoleCollective, RoleContext,
+    WindowAction,
+};
+#[cfg(feature = "mpi")]
+pub use ensemble::gather_outputs;
+pub use ensemble::{partition, Ensemble, Member, Summary};
+pub use implicit::{checkpoint_window, converge_window, ImplicitCoupling, WindowStep};
+pub use mapped_port::{consume_on, expose_on, MappedPort, Mesh, Published, Quantity};
 pub use multi::{
     advance_to_seam, complete_subapp_step, tick_n_times, tick_subapp, Multi, MultiAppExt,
     MultiContext, MultiMut, MultiRef, Namespace, RemoteSubAppBuilder, SubApps,
@@ -186,6 +202,7 @@ pub use snapshot::{restore_subapp_resource, snapshot_subapp_resource};
 pub use transport::MpiInterCommTransport;
 pub use transport::{LocalTransport, Transport, TransportError, TransportOperation};
 pub use typed_multi::{MultiRes, MultiResMut};
+pub use waveform::{Interpolation, Waveform};
 pub use wire::{Wire, WireUnpackError};
 
 /// The `grass_multi` application prelude.

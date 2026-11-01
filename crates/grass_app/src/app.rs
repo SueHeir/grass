@@ -41,6 +41,17 @@ pub struct ConfigSnippets {
 /// emit a complete example configuration file assembled from all registered plugins.
 pub struct GenerateConfigFlag;
 
+/// Typed configuration descriptions of every registered plugin, in
+/// registration order, as `(plugin name, description)`. Populated during
+/// plugin registration; [`App::config_reference`] renders it.
+#[derive(Default)]
+pub struct ConfigDescriptions(pub Vec<(String, crate::ConfigDescription)>);
+
+/// Marker resource: when present, [`App::start`] prints a Markdown reference
+/// of every plugin's configuration ([`App::config_reference`]) and exits
+/// instead of running (`--config-docs` with `grass_io`'s `InputPlugin`).
+pub struct ConfigDocsFlag;
+
 /// Central application container. Holds resources, systems, and plugins.
 ///
 /// `App` provides a builder-style API for assembling a simulation from plugins.
@@ -375,6 +386,19 @@ impl App {
     /// If the plugin provides a [`Plugin::default_config`] snippet, appends it
     /// to the [`ConfigSnippets`] resource (creating the resource if needed).
     fn collect_config_snippet(&mut self, plugin: &dyn Plugin) {
+        if let Some(description) = plugin.config_description() {
+            let name = plugin.name().to_string();
+            if let Some(cell) = self.get_mut_resource(TypeId::of::<ConfigDescriptions>()) {
+                let mut borrow = cell.borrow_mut();
+                borrow
+                    .downcast_mut::<ConfigDescriptions>()
+                    .expect("ConfigDescriptions resource has wrong type — this is a framework bug")
+                    .0
+                    .push((name, description));
+            } else {
+                self.add_resource(ConfigDescriptions(vec![(name, description)]));
+            }
+        }
         let snippet = match plugin.config_description() {
             Some(description) => description.render_toml(),
             None => match plugin.default_config() {
@@ -655,6 +679,11 @@ impl App {
             self.run_cleanup();
             return Ok(());
         }
+        if self.get_resource_ref::<ConfigDocsFlag>().is_some() {
+            println!("{}", self.config_reference());
+            self.run_cleanup();
+            return Ok(());
+        }
         if let Err(error) = self.validate_capability_contracts_result() {
             self.run_cleanup();
             return Err(error);
@@ -678,6 +707,24 @@ impl App {
         }
         self.run_cleanup();
         Ok(())
+    }
+
+    /// A Markdown reference of every registered plugin's configuration
+    /// sections, in registration order: one heading per section with its
+    /// narrative and a table of keys, types, defaults and descriptions.
+    /// Plugins that only provide a legacy `default_config` snippet are not
+    /// included.
+    pub fn config_reference(&self) -> String {
+        let mut out = String::from("# Configuration reference\n\n");
+        let Some(descriptions) = self.get_resource_ref::<ConfigDescriptions>() else {
+            out.push_str("No plugin in this app reads a configuration section.\n");
+            return out;
+        };
+        for (plugin, d) in &descriptions.0 {
+            out.push_str(&d.render_markdown());
+            out.push_str(&format!("\n_Read by `{plugin}`._\n\n"));
+        }
+        out
     }
 
     /// Prints accumulated config snippets from all registered plugins.
