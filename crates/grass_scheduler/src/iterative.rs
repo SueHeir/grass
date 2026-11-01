@@ -20,6 +20,18 @@ pub trait LinearOperator {
     /// Implementors may panic if either slice is not [`dimension`](Self::dimension)
     /// long.
     fn apply(&self, x: &[f64], y: &mut [f64]);
+
+    /// Combine a locally computed partial sum (an inner product over this
+    /// process's entries) into the global value the solver should see.
+    ///
+    /// The default is the identity, which is right for a serial operator. A
+    /// distributed operator, whose `x`/`y` slices hold only this rank's owned
+    /// unknowns (plus zeroed padding), returns the all-reduced sum here so the
+    /// Krylov iteration's step lengths and residual norms are global and every
+    /// rank takes the same branch.
+    fn global_sum(&self, local: f64) -> f64 {
+        local
+    }
 }
 
 /// Iteration state passed to user convergence predicates.
@@ -99,8 +111,14 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(ai, bi)| ai * bi).sum()
 }
 
-fn norm(a: &[f64]) -> f64 {
-    dot(a, a).sqrt()
+/// Inner product reduced across processes by the operator.
+fn global_dot<A: LinearOperator>(operator: &A, a: &[f64], b: &[f64]) -> f64 {
+    operator.global_sum(dot(a, b))
+}
+
+/// Euclidean norm reduced across processes by the operator.
+fn global_norm<A: LinearOperator>(operator: &A, a: &[f64]) -> f64 {
+    global_dot(operator, a, a).sqrt()
 }
 
 /// Matrix-free conjugate gradient for symmetric positive definite operators.
@@ -133,7 +151,7 @@ where
         direction[i] = residual[i];
     }
 
-    let initial_residual_norm = norm(&residual);
+    let initial_residual_norm = global_norm(operator, &residual);
     let mut state = ConvergenceState {
         iteration: 0,
         residual_norm: initial_residual_norm,
@@ -143,10 +161,10 @@ where
         return Ok(IterationReport::from_state(state, true));
     }
 
-    let mut rr = dot(&residual, &residual);
+    let mut rr = global_dot(operator, &residual, &residual);
     for iteration in 1..=max_iterations {
         operator.apply(&direction, &mut ap);
-        let curvature = dot(&direction, &ap);
+        let curvature = global_dot(operator, &direction, &ap);
         if curvature <= 0.0 {
             return Err(IterationError::NonPositiveCurvature {
                 iteration,
@@ -160,7 +178,7 @@ where
             residual[i] -= alpha * ap[i];
         }
 
-        let rr_next = dot(&residual, &residual);
+        let rr_next = global_dot(operator, &residual, &residual);
         state = ConvergenceState {
             iteration,
             residual_norm: rr_next.sqrt(),
@@ -208,7 +226,7 @@ where
     for i in 0..n {
         residual[i] = rhs[i] - ax[i];
     }
-    let initial_residual_norm = norm(&residual);
+    let initial_residual_norm = global_norm(operator, &residual);
     let mut state = ConvergenceState {
         iteration: 0,
         residual_norm: initial_residual_norm,
@@ -229,7 +247,7 @@ where
         }
         state = ConvergenceState {
             iteration,
-            residual_norm: norm(&residual),
+            residual_norm: global_norm(operator, &residual),
             initial_residual_norm,
         };
         if converged(&state) {
@@ -277,6 +295,54 @@ mod tests {
         assert!((x[0] - 1.0).abs() < 1.0e-12);
         assert!((x[1] - 2.0).abs() < 1.0e-12);
         assert!((x[2] - 3.0).abs() < 1.0e-12);
+    }
+
+    /// One "rank" of a two-rank diagonal system whose other half is an exact
+    /// mirror: the global inner product is twice the local one. CG must use the
+    /// reduced sums (the residual norm it reports is the global one) and still
+    /// land on the same solution.
+    struct MirroredDiagonal {
+        inner: Diagonal,
+        reductions: std::cell::Cell<usize>,
+    }
+
+    impl LinearOperator for MirroredDiagonal {
+        fn dimension(&self) -> usize {
+            self.inner.dimension()
+        }
+
+        fn apply(&self, x: &[f64], y: &mut [f64]) {
+            self.inner.apply(x, y);
+        }
+
+        fn global_sum(&self, local: f64) -> f64 {
+            self.reductions.set(self.reductions.get() + 1);
+            2.0 * local
+        }
+    }
+
+    #[test]
+    fn cg_reduces_inner_products_through_the_operator() {
+        let operator = MirroredDiagonal {
+            inner: Diagonal {
+                values: vec![2.0, 4.0, 8.0],
+            },
+            reductions: std::cell::Cell::new(0),
+        };
+        let rhs = vec![2.0, 8.0, 24.0];
+        let mut x = vec![0.0; 3];
+        let report = conjugate_gradient(&operator, &rhs, &mut x, 10, |s| {
+            s.relative_residual() < 1.0e-12
+        })
+        .expect("cg solve");
+
+        assert!(report.converged);
+        assert!(operator.reductions.get() > 0);
+        let local_norm = rhs.iter().map(|v| v * v).sum::<f64>().sqrt();
+        assert!((report.initial_residual_norm - 2.0f64.sqrt() * local_norm).abs() < 1.0e-12);
+        for (xi, want) in x.iter().zip([1.0, 2.0, 3.0]) {
+            assert!((xi - want).abs() < 1.0e-12);
+        }
     }
 
     #[test]
