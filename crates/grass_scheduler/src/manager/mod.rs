@@ -673,6 +673,29 @@ impl Scheduler {
                 }
             }
 
+            // An ordering target that is no system's label but the function
+            // name of several systems is ambiguous: the edge would attach to
+            // whichever one happened to be registered last.
+            for (entry, phase) in &group {
+                for target in entry
+                    .befores
+                    .iter()
+                    .chain(&entry.afters)
+                    .chain(&entry.requires)
+                {
+                    if explicit_labels.contains_key(target.as_str()) {
+                        continue;
+                    }
+                    let same_name = group.iter().filter(|(e, _)| e.name == *target).count();
+                    if same_name > 1 {
+                        errors.push(format!(
+                            "  System \"{}\" in {} orders against \"{}\", but {} systems in that ScheduleSet share that function name. Give the intended target a `.label(...)` and order against the label.",
+                            entry.name, phase.phase_name(), target, same_name,
+                        ));
+                    }
+                }
+            }
+
             topo_sort_group(&mut group);
 
             self.update_systems.extend(group);
@@ -1237,7 +1260,14 @@ impl Scheduler {
             schedule_state = sm.state;
         }
 
-        // Print per-system timing breakdown
+        self.print_timing_report();
+    }
+
+    /// Prints the per-system timing breakdown accumulated over the run.
+    ///
+    /// [`start`](Self::start) calls this at the end; drivers that run the
+    /// update loop themselves can call it once after their loop.
+    pub fn print_timing_report(&self) {
         if self.timing_steps > 0 && !self.system_timings.is_empty() {
             let total: f64 = self.system_timings.iter().sum();
             let mut sorted: Vec<_> = self

@@ -26,6 +26,7 @@ use std::fmt;
 
 use grass_app::{App, ConfigDescription, Plugin, ScheduleSetupSet, StageNames};
 use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_mpi::CommResource;
 use grass_scheduler::{
     first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
     SystemLabel,
@@ -531,23 +532,37 @@ pub fn run_read_input(
     config: Res<RunConfig>,
     scheduler_manager: Res<SchedulerManager>,
     mut run_state: ResMut<RunState>,
+    comm: Option<Res<CommResource>>,
 ) {
     let index = scheduler_manager.index;
     if index >= config.num_stages() {
         return;
     }
 
-    let stage = config.current_stage(index);
-    let stage_label = stage.name.as_deref().unwrap_or("(unnamed)");
-
-    if stage.skip {
-        println!("Skipping stage {} [{}]", index, stage_label);
-        run_state.cycle_count.push(0);
-        run_state.cycle_remaining.push(0);
+    // `RunState` holds one entry per stage, indexed by stage. A second setup
+    // pass for the same stage (a system set `SchedulerState::Setup` without
+    // advancing) keeps that stage's counters instead of appending a new entry,
+    // which would shift every later stage onto the wrong counters.
+    if run_state.cycle_count.len() > index {
         return;
     }
 
-    if config.num_stages() > 1 {
+    let stage = config.current_stage(index);
+    let stage_label = stage.name.as_deref().unwrap_or("(unnamed)");
+    let steps = if stage.skip { 0 } else { stage.steps };
+    // Earlier stages always have entries (stages only advance one at a time),
+    // but pad defensively so `cycle_count[index]` is this stage's slot.
+    run_state.cycle_count.resize(index, 0);
+    run_state.cycle_remaining.resize(index, 0);
+    run_state.cycle_count.push(0);
+    run_state.cycle_remaining.push(steps);
+
+    if !is_root_rank(comm.as_deref()) {
+        return;
+    }
+    if stage.skip {
+        println!("Skipping stage {} [{}]", index, stage_label);
+    } else if config.num_stages() > 1 {
         println!(
             "Run stage {} [{}]: {} steps",
             index, stage_label, stage.steps
@@ -555,8 +570,11 @@ pub fn run_read_input(
     } else {
         println!("Run: {} steps", stage.steps);
     }
-    run_state.cycle_count.push(0);
-    run_state.cycle_remaining.push(stage.steps);
+}
+
+/// True on rank 0, or when no [`CommResource`] is installed (serial run).
+pub(crate) fn is_root_rank(comm: Option<&CommResource>) -> bool {
+    comm.is_none_or(|c| c.rank() == 0)
 }
 
 /// Setup system: leaves a `skip = true` or `steps = 0` stage before any
@@ -793,6 +811,45 @@ mod tests {
         assert_eq!(state.total_cycle, 3);
         assert_eq!(state.cycle_count, vec![0, 3, 0]);
         assert_eq!(app.get_resource_ref::<SimClock>().expect("clock").step, 3);
+    }
+
+    fn resetup_once_mid_stage(
+        mut sm: ResMut<SchedulerManager>,
+        state: Res<RunState>,
+        mut done: Local<bool>,
+    ) {
+        // Ask for a second setup pass of the current stage (e.g. a rebuild),
+        // without advancing the stage.
+        if !*done && sm.index == 0 && state.cycle_count[0] == 1 {
+            sm.state = SchedulerState::Setup;
+            *done = true;
+        }
+    }
+
+    #[test]
+    fn same_stage_resetup_keeps_one_runstate_entry_per_stage() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "first"
+            steps = 3
+
+            [[run]]
+            name = "second"
+            steps = 2
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        app.add_update_system(resetup_once_mid_stage, Physics::Step);
+        app.start();
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![0, 0, 0, 1, 1]);
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.cycle_count, vec![3, 2]);
+        assert_eq!(state.cycle_remaining, vec![3, 2]);
     }
 
     #[test]

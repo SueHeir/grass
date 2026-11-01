@@ -1374,13 +1374,16 @@ pub(crate) fn topo_sort_group(group: &mut Vec<(StoredSystemEntry, StoredPhase)>)
         return;
     }
 
-    let mut label_to_idx: HashMap<String, usize> = HashMap::new();
+    // Function names first, then explicit labels, so a label always wins over
+    // a function name it collides with, independent of registration order.
+    let mut label_to_idx: HashMap<&str, usize> = HashMap::new();
     for (i, (entry, _)) in group.iter().enumerate() {
         // Index by system name (enables function-handle-based ordering)
-        label_to_idx.insert(entry.name.clone(), i);
-        // Explicit labels override if present
+        label_to_idx.insert(entry.name.as_str(), i);
+    }
+    for (i, (entry, _)) in group.iter().enumerate() {
         if let Some(lbl) = &entry.label {
-            label_to_idx.insert(lbl.clone(), i);
+            label_to_idx.insert(lbl.as_str(), i);
         }
     }
 
@@ -1389,13 +1392,13 @@ pub(crate) fn topo_sort_group(group: &mut Vec<(StoredSystemEntry, StoredPhase)>)
 
     for (i, (entry, _)) in group.iter().enumerate() {
         for b in &entry.befores {
-            if let Some(&j) = label_to_idx.get(b) {
+            if let Some(&j) = label_to_idx.get(b.as_str()) {
                 adj[i].push(j);
                 in_degree[j] += 1;
             }
         }
         for a in &entry.afters {
-            if let Some(&j) = label_to_idx.get(a) {
+            if let Some(&j) = label_to_idx.get(a.as_str()) {
                 adj[j].push(i);
                 in_degree[i] += 1;
             }
