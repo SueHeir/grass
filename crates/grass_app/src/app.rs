@@ -582,8 +582,9 @@ impl App {
         }
         self.sub_apps.main.add_scheduler_manager();
         self.sub_apps.main.organize_systems();
+        let stage_before = self.sub_apps.main.stage_index();
         self.try_setup()?;
-        self.sub_apps.main.set_running();
+        self.sub_apps.main.set_running(stage_before);
         Ok(self)
     }
 
@@ -665,15 +666,18 @@ impl App {
             return Ok(());
         }
         self.sub_apps.main.add_scheduler_manager();
-        self.sub_apps.main.organize_systems();
-        self.try_setup()?;
-        self.sub_apps.main.set_running();
-        while !self.sub_apps.main.is_done() {
-            self.sub_apps.main.run();
+        loop {
             if self.sub_apps.main.needs_setup() {
+                // Every stage (and a stage skipped during its own setup)
+                // gets a setup pass before any update step runs.
                 self.sub_apps.main.organize_systems();
+                let stage_before = self.sub_apps.main.stage_index();
                 self.try_setup()?;
-                self.sub_apps.main.set_running();
+                self.sub_apps.main.set_running(stage_before);
+            } else if self.sub_apps.main.is_done() {
+                break;
+            } else {
+                self.sub_apps.main.run();
             }
         }
         self.run_cleanup();

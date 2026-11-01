@@ -779,6 +779,7 @@ impl Scheduler {
     /// any installed [`Schedule`].
     pub fn run_flat(&mut self) {
         let coh = self.coherence_index;
+        let mut t_prev = std::time::Instant::now();
         for (idx, (entry, phase)) in self.update_systems.iter_mut().enumerate() {
             if self.trace {
                 eprintln!(
@@ -796,9 +797,12 @@ impl Scheduler {
                     &entry.name,
                 );
             }
-            let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
-            self.system_timings[idx] += t0.elapsed().as_secs_f64();
+            // One clock read per system: each system is charged from the end
+            // of the previous one, which halves the timing overhead.
+            let t_now = std::time::Instant::now();
+            self.system_timings[idx] += (t_now - t_prev).as_secs_f64();
+            t_prev = t_now;
             if let Some(ci) = coh {
                 coherence::mark_writes(&self.resources, ci, entry.system.accesses());
             }
@@ -1063,6 +1067,7 @@ impl Scheduler {
     /// `run_node` for `ScheduleNode::Phase` dispatch.
     fn run_namespace_filtered(&mut self, ns: u32) {
         let coh = self.coherence_index;
+        let mut t_prev = std::time::Instant::now();
         for (idx, (entry, phase)) in self.update_systems.iter_mut().enumerate() {
             if phase.namespace != ns {
                 continue;
@@ -1083,9 +1088,12 @@ impl Scheduler {
                     &entry.name,
                 );
             }
-            let t0 = std::time::Instant::now();
             entry.system.run(&self.resources);
-            self.system_timings[idx] += t0.elapsed().as_secs_f64();
+            // One clock read per system: each system is charged from the end
+            // of the previous one, which halves the timing overhead.
+            let t_now = std::time::Instant::now();
+            self.system_timings[idx] += (t_now - t_prev).as_secs_f64();
+            t_prev = t_now;
             if let Some(ci) = coh {
                 coherence::mark_writes(&self.resources, ci, entry.system.accesses());
             }
@@ -1212,14 +1220,9 @@ impl Scheduler {
                 if self.print_schedule {
                     self.write_dot("schedule.dot");
                 }
+                let stage_before = self.stage_index();
                 self.setup();
-
-                let sm_idx = self.resource_index[&TypeId::of::<SchedulerManager>()];
-                let mut binding = self.resources[sm_idx].borrow_mut();
-                let sm = binding
-                    .downcast_mut::<SchedulerManager>()
-                    .expect("SchedulerManager resource missing or wrong type");
-                sm.state = SchedulerState::Run;
+                self.enter_run_after_setup(stage_before);
             }
 
             if matches!(schedule_state, SchedulerState::Run) {
@@ -1266,6 +1269,33 @@ impl Scheduler {
             }
             println!("{}", "-".repeat(70));
             println!("{:<50} {:>10.4} {:>7.1}%", "TOTAL", total, 100.0);
+        }
+    }
+
+    /// The current stage index from [`SchedulerManager`], or 0 when it is absent.
+    pub fn stage_index(&self) -> usize {
+        self.get_resource_ref::<SchedulerManager>()
+            .map(|sm| sm.index)
+            .unwrap_or(0)
+    }
+
+    /// Moves [`SchedulerManager`] from `Setup` to `Run` after a setup pass.
+    ///
+    /// Pass the [`stage_index`](Self::stage_index) read just before the setup
+    /// pass. The transition is skipped when a setup system already decided
+    /// otherwise: `End` (stop before any update step) or a changed stage index
+    /// with `Setup` (advance straight to the next stage's setup, e.g. a skipped
+    /// stage).
+    pub fn enter_run_after_setup(&mut self, stage_before_setup: usize) {
+        let Some(&sm_idx) = self.resource_index.get(&TypeId::of::<SchedulerManager>()) else {
+            return;
+        };
+        let mut binding = self.resources[sm_idx].borrow_mut();
+        let sm = binding
+            .downcast_mut::<SchedulerManager>()
+            .expect("SchedulerManager resource missing or wrong type");
+        if matches!(sm.state, SchedulerState::Setup) && sm.index == stage_before_setup {
+            sm.state = SchedulerState::Run;
         }
     }
 

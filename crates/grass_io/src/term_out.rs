@@ -77,7 +77,13 @@ impl TermOut {
     /// between, not `—`. If you need a column to read as "no data this step",
     /// set it explicitly each step (e.g. to `f64::NAN` or `0.0`).
     pub fn set(&mut self, name: &str, value: f64) {
-        self.values.insert(name.to_string(), value);
+        // Overwrite in place so the per-step call does not allocate a key.
+        match self.values.get_mut(name) {
+            Some(slot) => *slot = value,
+            None => {
+                self.values.insert(name.to_string(), value);
+            }
+        }
     }
 }
 

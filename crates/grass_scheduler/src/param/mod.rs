@@ -36,7 +36,9 @@ macro_rules! impl_system {
                 self.indices.clear();
                 self.accesses.clear();
                 let mut _missing = Vec::new();
+                let mut _locals_seen: Vec<TypeId> = Vec::new();
                 $(
+                    _missing.extend(check_local_slot::<$params>(&mut _locals_seen));
                     let _type_info = <$params as SystemParam>::resource_type_id();
                     let _idx = _type_info
                         .and_then(|(tid, _)| index.get(&tid).copied())
@@ -111,8 +113,11 @@ macro_rules! impl_condition {
 
             fn prepare(&mut self, index: &HashMap<TypeId, usize>) -> Vec<String> {
                 self.indices.clear();
+                self.accesses.clear();
                 let mut _missing = Vec::new();
+                let mut _locals_seen: Vec<TypeId> = Vec::new();
                 $(
+                    _missing.extend(check_local_slot::<$params>(&mut _locals_seen));
                     let _type_info = <$params as SystemParam>::resource_type_id();
                     let _idx = _type_info
                         .and_then(|(tid, _)| index.get(&tid).copied())
@@ -122,9 +127,17 @@ macro_rules! impl_condition {
                             _missing.push(name.to_string());
                         }
                     }
+                    let _kind = <$params as SystemParam>::access_kind();
+                    if _kind != AccessKind::None && _idx != usize::MAX {
+                        self.accesses.push((_idx, _kind));
+                    }
                     self.indices.push(_idx);
                 )*
                 _missing
+            }
+
+            fn accesses(&self) -> &[(usize, AccessKind)] {
+                &self.accesses
             }
 
             fn name(&self) -> &str {
@@ -144,7 +157,7 @@ macro_rules! impl_into_condition {
         {
             type Condition = FunctionCondition<($($params,)*), Self>;
             fn into_condition(self) -> Self::Condition {
-                FunctionCondition { f: self, marker: Default::default(), locals: HashMap::new(), indices: Vec::new() }
+                FunctionCondition { f: self, marker: Default::default(), locals: HashMap::new(), indices: Vec::new(), accesses: Vec::new() }
             }
         }
     }
@@ -212,8 +225,32 @@ pub trait SystemParam {
     fn validate(_resources: &[RefCell<Box<dyn Any>>], _index: usize) -> Vec<String> {
         Vec::new()
     }
+
+    /// The per-system storage slot this parameter claims, if it is a [`Local`].
+    ///
+    /// `Local<T>` storage is keyed by `T`, so two `Local<T>` parameters with the
+    /// same `T` in one system would hand out two `&mut T` to the same value.
+    /// Systems and conditions use this to reject that at organize time.
+    #[doc(hidden)]
+    fn local_type_id() -> Option<(TypeId, &'static str)> {
+        None
+    }
 }
 // ANCHOR_END: SystemParam
+
+/// Records `P`'s `Local` slot in `seen`, returning a validation message when a
+/// previous parameter of the same system already claimed it.
+fn check_local_slot<P: SystemParam>(seen: &mut Vec<TypeId>) -> Option<String> {
+    let (tid, name) = P::local_type_id()?;
+    if seen.contains(&tid) {
+        return Some(format!(
+            "each Local<T> parameter to have a distinct T, but Local<{name}> is declared more than once \
+             (both would alias one slot; combine the values into one struct)"
+        ));
+    }
+    seen.push(tid);
+    None
+}
 
 // ANCHOR: ResSystemParam
 impl<'res, T: 'static> SystemParam for Res<'res, T> {
@@ -351,6 +388,9 @@ impl<'res, T: Default + 'static> SystemParam for Local<'res, T> {
                 .expect("Local<T>: type mismatch in per-system local storage"),
             _marker: PhantomData,
         }
+    }
+    fn local_type_id() -> Option<(TypeId, &'static str)> {
+        Some((TypeId::of::<T>(), std::any::type_name::<T>()))
     }
 }
 
@@ -660,6 +700,15 @@ pub trait Condition {
     fn name(&self) -> &str {
         ""
     }
+
+    /// Resource slots this condition reads, populated by [`prepare`](Self::prepare).
+    ///
+    /// The scheduler merges these into the gated system's
+    /// [`System::accesses`] so host↔device coherence also covers resources a
+    /// run condition inspects. Defaults to none.
+    fn accesses(&self) -> &[(usize, AccessKind)] {
+        &[]
+    }
 }
 
 /// A type-erased wrapper around a boolean function that implements [`Condition`].
@@ -670,6 +719,7 @@ pub struct FunctionCondition<Input, F> {
     marker: PhantomData<fn() -> Input>,
     locals: HashMap<TypeId, Box<dyn Any>>,
     indices: Vec<usize>,
+    accesses: Vec<(usize, AccessKind)>,
 }
 
 /// Converts a boolean function (with up to 5 [`SystemParam`] parameters) into a [`Condition`].
@@ -700,6 +750,7 @@ impl_into_condition!(T1, T2, T3, T4, T5);
 pub struct ConditionalSystem<S: System, C: Condition> {
     system: S,
     condition: C,
+    accesses: Vec<(usize, AccessKind)>,
 }
 
 impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
@@ -715,13 +766,16 @@ impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
     ) -> Vec<String> {
         let mut missing = self.condition.prepare(index);
         missing.extend(self.system.prepare(index, resources));
+        self.accesses.clear();
+        merge_accesses(&mut self.accesses, self.condition.accesses());
+        merge_accesses(&mut self.accesses, self.system.accesses());
         missing
     }
     fn name(&self) -> &str {
         self.system.name()
     }
     fn accesses(&self) -> &[(usize, AccessKind)] {
-        self.system.accesses()
+        &self.accesses
     }
     fn condition_name(&self) -> Option<&str> {
         let n = self.condition.name();
@@ -733,6 +787,20 @@ impl<S: System, C: Condition> System for ConditionalSystem<S, C> {
     }
     fn group_info(&self) -> Option<&SystemGroupInfo> {
         self.system.group_info()
+    }
+}
+
+/// Adds `extra` to `into`, keeping one entry per slot (a write wins over a read).
+fn merge_accesses(into: &mut Vec<(usize, AccessKind)>, extra: &[(usize, AccessKind)]) {
+    for &(idx, kind) in extra {
+        match into.iter_mut().find(|(i, _)| *i == idx) {
+            Some(existing) => {
+                if kind == AccessKind::Write {
+                    existing.1 = AccessKind::Write;
+                }
+            }
+            None => into.push((idx, kind)),
+        }
     }
 }
 
@@ -804,6 +872,7 @@ impl<S: System + 'static> SystemDescriptor<S> {
             system: ConditionalSystem {
                 system: self.system,
                 condition: cond.into_condition(),
+                accesses: Vec::new(),
             },
             label: self.label,
             befores: self.befores,
@@ -830,6 +899,7 @@ where
         ConditionalSystem {
             system: self.into_system(),
             condition: cond.into_condition(),
+            accesses: Vec::new(),
         }
     }
 
@@ -921,6 +991,7 @@ pub struct SystemGroup {
     inner_systems: Vec<(StoredSystemEntry, StoredPhase)>,
     loop_condition: Option<Box<dyn Condition>>,
     info: SystemGroupInfo,
+    accesses: Vec<(usize, AccessKind)>,
 }
 
 impl SystemGroup {
@@ -937,6 +1008,7 @@ impl SystemGroup {
                 loop_condition_name: None,
                 max_iterations: None,
             },
+            accesses: Vec::new(),
         }
     }
 
@@ -1033,7 +1105,22 @@ impl System for SystemGroup {
             missing.extend(cond.prepare(index));
         }
 
+        // The scheduler only sees the group, so report everything the inner
+        // systems and the loop condition touch: coherence then syncs before the
+        // group runs and marks writes after it.
+        self.accesses.clear();
+        for (entry, _) in &self.inner_systems {
+            merge_accesses(&mut self.accesses, entry.system.accesses());
+        }
+        if let Some(cond) = &self.loop_condition {
+            merge_accesses(&mut self.accesses, cond.accesses());
+        }
+
         missing
+    }
+
+    fn accesses(&self) -> &[(usize, AccessKind)] {
+        &self.accesses
     }
 
     fn run(&mut self, resources: &[RefCell<Box<dyn Any>>]) {
@@ -1041,10 +1128,12 @@ impl System for SystemGroup {
         let mut iterations = 0;
 
         loop {
+            let mut t_prev = std::time::Instant::now();
             for (idx, (entry, _)) in self.inner_systems.iter_mut().enumerate() {
-                let t0 = std::time::Instant::now();
                 entry.system.run(resources);
-                self.info.inner_timings[idx] += t0.elapsed().as_secs_f64();
+                let t_now = std::time::Instant::now();
+                self.info.inner_timings[idx] += (t_now - t_prev).as_secs_f64();
+                t_prev = t_now;
             }
             iterations += 1;
 
