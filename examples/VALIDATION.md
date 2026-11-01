@@ -9,6 +9,13 @@ render in Gitea:
   oracle across unequal roles and multiple epochs, plus sparse-owner and
   fail-closed route/epoch campaign gates.
 
+- [`mock_icarus`](mock_icarus/README.md) embeds
+  [`coupling_sweep.png`](mock_icarus/coupling_sweep.png), comparing explicit
+  and implicit (Picard, Aitken, IQN-ILS) coupling of a Fortran ablator and a C
+  aeroheating code over the coupling window. Restarts are checked bit-identical,
+  and the in-process, threaded and `mpirun` runs print the same surface
+  fingerprint.
+
 - [`oscillator_demo`](oscillator_demo/README.md) embeds
   [`plots/oscillator_analytical_validation.png`](oscillator_demo/plots/oscillator_analytical_validation.png),
   comparing an uncoupled numerical oscillator with its analytical solution, and

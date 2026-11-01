@@ -1,0 +1,16 @@
+coupling: implicit (window 0.5 s, ablator 5 substeps, iqn to 1e-6)
+t    0.5 s  alt  124.2 km  V 11.50 km/s  q_cw    11.2 W/cm2  ch/ch0 0.998  Tw   501 K  rec 0.00 mm  iters 3
+t   10.5 s  alt  108.8 km  V 11.51 km/s  q_cw    32.8 W/cm2  ch/ch0 0.303  Tw   896 K  rec 0.00 mm  iters 3
+t   20.5 s  alt   94.4 km  V 11.51 km/s  q_cw    89.0 W/cm2  ch/ch0 0.538  Tw  1591 K  rec 0.01 mm  iters 3
+t   30.5 s  alt   81.2 km  V 11.44 km/s  q_cw   219.4 W/cm2  ch/ch0 0.767  Tw  2312 K  rec 0.13 mm  iters 2
+t   40.5 s  alt   69.2 km  V 11.03 km/s  q_cw   450.9 W/cm2  ch/ch0 0.858  Tw  2879 K  rec 0.45 mm  iters 2
+t   50.5 s  alt   59.0 km  V  9.43 km/s  q_cw   571.8 W/cm2  ch/ch0 0.888  Tw  3077 K  rec 1.12 mm  iters 2
+t   60.5 s  alt   51.5 km  V  6.37 km/s  q_cw   296.4 W/cm2  ch/ch0 0.896  Tw  2582 K  rec 2.07 mm  iters 2
+t   70.5 s  alt   46.7 km  V  3.66 km/s  q_cw    79.1 W/cm2  ch/ch0 0.895  Tw  1814 K  rec 2.95 mm  iters 2
+ station  peak q_cw   heat load   recession   peak T_wall
+       0    580.4 W/cm2     17.6 kJ/cm2    3.48 mm     3089 K
+       1    519.3 W/cm2     15.7 kJ/cm2    3.08 mm     3000 K
+       2    364.6 W/cm2     11.0 kJ/cm2    2.05 mm     2729 K
+       3    188.6 W/cm2      5.7 kJ/cm2    0.90 mm     2265 K
+160 windows, 404 coupling iterations (2.52 per window, max 7), 0 unconverged
+wall time 0.03 s, history in out/entry/history.csv

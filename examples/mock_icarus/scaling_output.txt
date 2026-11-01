@@ -1,0 +1,12 @@
+4 cores; flow takes 1 rank, tps takes the rest
+
+strong scaling, 1024 stations x 100 cells
+  in-process (entry)          wall  11.63 s   fingerprint 6c58987c791f82f6
+  mpirun -np 2 (tps 1 rank )   wall  12.16 s   speedup 1.00   efficiency 100.0%   identical
+  mpirun -np 3 (tps 2 ranks)   wall   6.91 s   speedup 1.76   efficiency  88.0%   identical
+  mpirun -np 4 (tps 3 ranks)   wall   5.28 s   speedup 2.30   efficiency  76.8%   identical
+
+weak scaling, 512 stations per tps rank
+  tps 1 rank ,   512 stations   wall   6.01 s   efficiency 100.0%
+  tps 2 ranks,  1024 stations   wall   6.43 s   efficiency  93.4%
+  tps 3 ranks,  1536 stations   wall   7.14 s   efficiency  84.2%
