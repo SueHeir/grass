@@ -1,13 +1,13 @@
 //! Matrix-free implicit Poisson solve hosted by `grass_scheduler`.
 //!
-//! This is a manufactured-solution check for the reusable CG/Picard scaffold in
-//! `grass_scheduler::iterative`. The Poisson stencil and MMS data stay here in
+//! This is a manufactured-solution check for the shared CG in `grass_linalg`. The Poisson stencil and MMS data stay here in
 //! the example; the core crate only sees a generic [`LinearOperator`] and a
 //! convergence predicate.
 //!
 //! Run with:   `cargo run --example matrix_free_poisson_cg`
 //! Test with:  `cargo test --example matrix_free_poisson_cg`
 
+use grass_linalg::{conjugate_gradient, IterationReport, LinearOperator, SingleProcessComm};
 use grass_scheduler::prelude::*;
 
 /// Scheduler phases for one implicit solve.
@@ -121,6 +121,7 @@ fn assemble(mut sweep: ResMut<Sweep>) {
 fn solve(mut sweep: ResMut<Sweep>) {
     for case in &mut sweep.cases {
         let report = conjugate_gradient(
+            &SingleProcessComm::new(),
             &case.operator,
             &case.rhs,
             &mut case.solution,
