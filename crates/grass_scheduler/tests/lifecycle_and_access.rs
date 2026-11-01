@@ -195,3 +195,73 @@ fn run_condition_reads_a_synced_mirror() {
     scheduler.run();
     assert_eq!(scheduler.get_resource_ref::<Seen>().unwrap().0, -1);
 }
+
+// ─── Ordering targets ────────────────────────────────────────────────────────
+
+#[derive(Default)]
+struct Order(Vec<&'static str>);
+
+fn first(mut order: ResMut<Order>) {
+    order.0.push("first");
+}
+
+fn second(mut order: ResMut<Order>) {
+    order.0.push("second");
+}
+
+fn third(mut order: ResMut<Order>) {
+    order.0.push("third");
+}
+
+fn run_once(scheduler: &mut Scheduler) -> Vec<&'static str> {
+    scheduler.add_resource(Order::default());
+    scheduler.organize_systems();
+    scheduler.run();
+    let order = scheduler.get_resource_ref::<Order>().unwrap().0.clone();
+    order
+}
+
+#[test]
+fn label_wins_over_a_colliding_function_name_in_either_registration_order() {
+    // `third` carries the label "...::first", which is also `first`'s function
+    // name. `second.before(label)` must attach to the labelled system whichever
+    // order the two were registered in.
+    let first_name = std::any::type_name_of_val(&first);
+    for label_first in [true, false] {
+        let mut scheduler = Scheduler::default();
+        if label_first {
+            scheduler.add_update_system(third.label(first_name), Phase::Main);
+            scheduler.add_update_system(first, Phase::Main);
+        } else {
+            scheduler.add_update_system(first, Phase::Main);
+            scheduler.add_update_system(third.label(first_name), Phase::Main);
+        }
+        // Registered last, so it only runs before `third` if the edge resolved
+        // to the labelled system.
+        scheduler.add_update_system(second.before(first_name), Phase::Main);
+        let order = run_once(&mut scheduler);
+        let pos = |name| order.iter().position(|n| *n == name).unwrap();
+        assert!(
+            pos("second") < pos("third"),
+            "label_first={label_first}: {order:?}"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "share that function name")]
+fn ordering_against_a_function_registered_twice_is_rejected() {
+    let mut scheduler = Scheduler::default();
+    scheduler.add_update_system(first, Phase::Main);
+    scheduler.add_update_system(first, Phase::Main);
+    scheduler.add_update_system(second.after(first), Phase::Main);
+    run_once(&mut scheduler);
+}
+
+#[test]
+fn a_function_registered_twice_is_fine_when_nothing_orders_against_it() {
+    let mut scheduler = Scheduler::default();
+    scheduler.add_update_system(first, Phase::Main);
+    scheduler.add_update_system(first, Phase::Main);
+    assert_eq!(run_once(&mut scheduler), vec!["first", "first"]);
+}

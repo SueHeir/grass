@@ -90,6 +90,11 @@ impl SubApp {
         self.scheduler.add_scheduler_manager();
     }
 
+    /// Prints the scheduler's per-system timing breakdown.
+    pub(crate) fn print_timing_report(&self) {
+        self.scheduler.print_timing_report();
+    }
+
     /// The current stage index, read before a setup pass for [`set_running`](Self::set_running).
     pub(crate) fn stage_index(&self) -> usize {
         self.scheduler.stage_index()

@@ -340,6 +340,11 @@ impl CommBackend for SingleProcessComm {
         // rank), so copy each op's send buffer into its recv buffer. min() guards
         // send-only / recv-only ops (to_proc == -1) whose buffers differ in length.
         for op in ops.iter_mut() {
+            // Match the MPI backend: `-1` disables that half, so leave the
+            // receive buffer untouched.
+            if op.source == -1 || op.dest == -1 {
+                continue;
+            }
             let n = op.send_buf.len().min(op.recv_buf.len());
             op.recv_buf[..n].copy_from_slice(&op.send_buf[..n]);
         }
@@ -785,6 +790,38 @@ impl CommBackend for MpiCommBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_process_batch_leaves_disabled_halves_untouched() {
+        let comm = SingleProcessComm::new();
+        let send = [1.0, 2.0];
+        let mut self_recv = [0.0; 2];
+        let mut no_source_recv = [9.0; 2];
+        let mut no_dest_recv = [9.0; 2];
+        comm.sendrecv_batch_f64_into(&mut [
+            SendRecvOp {
+                dest: 0,
+                send_buf: &send,
+                source: 0,
+                recv_buf: &mut self_recv,
+            },
+            SendRecvOp {
+                dest: 0,
+                send_buf: &send,
+                source: -1,
+                recv_buf: &mut no_source_recv,
+            },
+            SendRecvOp {
+                dest: -1,
+                send_buf: &send,
+                source: 0,
+                recv_buf: &mut no_dest_recv,
+            },
+        ]);
+        assert_eq!(self_recv, [1.0, 2.0]);
+        assert_eq!(no_source_recv, [9.0; 2]);
+        assert_eq!(no_dest_recv, [9.0; 2]);
+    }
 
     #[test]
     fn single_process_comm_rank_and_size() {

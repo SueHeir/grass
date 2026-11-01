@@ -12,6 +12,7 @@ categories = ["simulation"]
 [dependencies]
 grass_app = { workspace = true }
 grass_multi = { workspace = true }
+grass_mpi = { workspace = true }
 grass_scheduler = { workspace = true }
 grass_derive = { workspace = true }
 serde = { version = "1", features = ["derive"] }

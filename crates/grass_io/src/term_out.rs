@@ -37,6 +37,7 @@ use std::collections::HashMap;
 
 use grass_app::{App, ConfigDescription, Plugin};
 use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_mpi::CommResource;
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -201,7 +202,11 @@ fn populate_builtin_columns(clock: Res<SimClock>, mut term_out: ResMut<TermOut>)
     term_out.set("time", clock.time);
 }
 
-fn print_term_out(mut term_out: ResMut<TermOut>) {
+fn print_term_out(mut term_out: ResMut<TermOut>, comm: Option<Res<CommResource>>) {
+    // One log line per run, not one per MPI rank.
+    if !crate::run::is_root_rank(comm.as_deref()) {
+        return;
+    }
     let width = term_out.width;
     if !term_out.header_printed {
         let header = term_out

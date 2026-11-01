@@ -48,7 +48,7 @@
 //! The plugin talks to preCICE through the [`CouplingInterface`] trait. With
 //! the `precice` feature it is implemented for the official bindings'
 //! `precice::Participant` (preCICE v3.2, found with `pkg-config`); create one
-//! with [`participant`]. The trait also lets tests drive the plugin with a
+//! with `PrecicePlugin::participant` (feature `precice`). The trait also lets tests drive the plugin with a
 //! scripted stand-in.
 //!
 //! ## Output and other end-of-step plugins

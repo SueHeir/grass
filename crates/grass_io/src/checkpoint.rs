@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use grass_app::{App, ConfigDescription, Plugin};
 use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_mpi::CommResource;
 use grass_scheduler::prelude::*;
 use grass_scheduler::{Res, ResMut};
 use serde::de::DeserializeOwned;
@@ -66,6 +67,10 @@ pub struct CheckpointConfig {
     #[serde(default = "default_keep")]
     pub keep: usize,
     /// Checkpoint file to restart from. Relative paths resolve against the output directory.
+    /// In a run with more than one MPI rank, each rank writes its own file
+    /// (`checkpoint_<step>.rank<r>.grass`), so this path must contain `{rank}`,
+    /// which is replaced by the zero-padded rank (e.g.
+    /// `checkpoints/checkpoint_0000000020.rank{rank}.grass`).
     #[serde(default)]
     pub restart: Option<String>,
 }
@@ -311,7 +316,7 @@ fn output_dir(input: &Option<Res<Input>>) -> PathBuf {
         .unwrap_or_default()
 }
 
-// Runs first in Collect (registered before any resource collector).
+// Runs first in Collect: every resource collector is ordered after it.
 fn begin_checkpoint(
     clock: Res<SimClock>,
     cfg: Res<CheckpointConfig>,
@@ -329,16 +334,29 @@ fn begin_checkpoint(
     }
 }
 
+/// `Some(rank)` when the run has more than one MPI rank, so each rank needs
+/// its own checkpoint file.
+fn multi_rank(comm: &Option<Res<CommResource>>) -> Option<i32> {
+    comm.as_ref().filter(|c| c.size() > 1).map(|c| c.rank())
+}
+
 fn write_checkpoint(
     cfg: Res<CheckpointConfig>,
     mut ck: ResMut<Checkpoints>,
     input: Option<Res<Input>>,
+    comm: Option<Res<CommResource>>,
 ) {
     let Some(c) = ck.pending.take() else {
         return;
     };
     let dir = output_dir(&input).join(&cfg.dir);
-    let path = dir.join(format!("checkpoint_{:010}.grass", c.header.step));
+    // Every rank holds different data; one shared file name would let the
+    // ranks overwrite each other.
+    let name = match multi_rank(&comm) {
+        Some(rank) => format!("checkpoint_{:010}.rank{rank:05}.grass", c.header.step),
+        None => format!("checkpoint_{:010}.grass", c.header.step),
+    };
+    let path = dir.join(name);
     c.write(&path)
         .unwrap_or_else(|e| panic!("grass_io: writing {}: {e}", path.display()));
     ck.written.push(path);
@@ -355,8 +373,18 @@ fn load_restart(
     mut ck: ResMut<Checkpoints>,
     mut clock: ResMut<SimClock>,
     input: Option<Res<Input>>,
+    comm: Option<Res<CommResource>>,
 ) {
     let file = cfg.restart.as_ref().expect("restart configured");
+    let file = match multi_rank(&comm) {
+        Some(rank) if file.contains("{rank}") => file.replace("{rank}", &format!("{rank:05}")),
+        Some(_) => panic!(
+            "grass_io: restart: `{file}` names one file, but this run has several MPI ranks \
+             and each rank wrote its own checkpoint; put `{{rank}}` in the path \
+             (e.g. `checkpoint_<step>.rank{{rank}}.grass`)"
+        ),
+        None => file.replace("{rank}", "00000"),
+    };
     let mut path = PathBuf::from(file);
     if path.is_relative() {
         path = output_dir(&input).join(path);
@@ -383,14 +411,14 @@ impl CheckpointAppExt for App {
         &mut self,
         name: &'static str,
     ) -> &mut Self {
-        self.add_update_system(
-            move |t: Res<T>, mut ck: ResMut<Checkpoints>| {
-                if let Some(c) = ck.pending.as_mut() {
-                    c.put(name, &*t);
-                }
-            },
-            CheckpointSchedule::Collect,
-        );
+        // Ordered after `begin_checkpoint`, which opens the pending checkpoint,
+        // so this works whether it is registered before or after the plugin.
+        let collect = move |t: Res<T>, mut ck: ResMut<Checkpoints>| {
+            if let Some(c) = ck.pending.as_mut() {
+                c.put(name, &*t);
+            }
+        };
+        self.add_update_system(collect.after(begin_checkpoint), CheckpointSchedule::Collect);
         self.add_setup_system(
             move |mut t: ResMut<T>, ck: Res<Checkpoints>| {
                 if let Some(c) = ck.restart.as_ref() {

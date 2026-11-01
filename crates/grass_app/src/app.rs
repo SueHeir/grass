@@ -709,6 +709,8 @@ impl App {
                 self.sub_apps.main.run();
             }
         }
+        // Same per-system timing report as the infallible `start()` path.
+        self.sub_apps.main.print_timing_report();
         self.run_cleanup();
         Ok(())
     }
