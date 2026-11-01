@@ -110,6 +110,9 @@ pub enum Relaxation {
         /// QR filter: a column is dropped when orthogonalizing it against the
         /// newer ones leaves less than `filter` times its own length (it is
         /// nearly linearly dependent). `1e-8` to `1e-2`; larger is more robust.
+        /// Independently of `filter`, a column is also dropped when what
+        /// remains is below `√eps·‖x̃‖`, the level of rounding noise in
+        /// differences of nearly converged iterates.
         filter: f64,
     },
 }
@@ -317,6 +320,12 @@ impl OuterIteration {
             // Modified Gram–Schmidt QR of V (newest column first), dropping
             // columns that are nearly dependent on the ones already kept.
             let n = res.len();
+            // A column whose orthogonal part is this short is rounding error,
+            // however long the column is relative to itself: differences of
+            // nearly converged iterates carry noise of order eps·‖x̃‖, and a
+            // relative filter alone lets them in once the iteration has
+            // converged (they then poison the windows that reuse them).
+            let floor = f64::EPSILON.sqrt() * l2(x_tilde);
             let mut q: Vec<Vec<f64>> = Vec::new();
             let mut r: Vec<Vec<f64>> = Vec::new(); // r[k][j], j <= k
             let mut kept: Vec<usize> = Vec::new();
@@ -332,7 +341,7 @@ impl OuterIteration {
                     rk.push(rjk);
                 }
                 let norm = l2(&u);
-                if len == 0.0 || norm < filter * len || q.len() == n {
+                if len == 0.0 || norm < filter * len || norm < floor || q.len() == n {
                     self.filtered += 1;
                     continue;
                 }
@@ -731,6 +740,133 @@ mod tests {
             assert!(it.converged());
             assert!((it.input()[0] - x_star()).abs() < 1e-10);
             assert!(it.qn_columns() <= 1);
+            it.begin_window();
+        }
+    }
+
+    /// The interface map of a coupling-matrix case (three roles in a chain,
+    /// Gauss-Seidel, 8 interface values) on which IQN-ILS used to blow up:
+    /// a weak rank-3 map, so each window converges in a few iterations and
+    /// leaves secant pairs whose differences are at the rounding level.
+    /// With reuse and a permissive relative filter those pairs were kept,
+    /// the least-squares coefficients grew to 1e15, and a later window
+    /// diverged to 1e22 and never converged.
+    #[test]
+    fn rounding_level_pairs_from_converged_windows_are_not_reused() {
+        let n = 8;
+        let mut m = vec![vec![0.0; n]; n];
+        m[0][4] = 0.06383347307998544;
+        m[2][2] = -0.01066086506435665;
+        m[4][4] = -0.0044347577374231895;
+        let x0 = [
+            0.03923091636190357,
+            -0.7724715783505647,
+            0.4775912173541521,
+            0.9433078248873221,
+            0.5339205345999984,
+            0.4220202338402552,
+            0.6938835191440254,
+            -0.05522578830967739,
+        ];
+        let b: [[f64; 8]; 8] = [
+            [
+                0.02401795366641371,
+                -0.4879376612309469,
+                0.3733687191527278,
+                0.6164065779441,
+                0.3467189445043419,
+                0.30286635693480884,
+                0.5456748157217128,
+                -0.022022368373207955,
+            ],
+            [
+                0.02819427017625702,
+                -0.3092101931392593,
+                0.2834358427052934,
+                0.4031956147541717,
+                0.22263108529059886,
+                0.2158299884481517,
+                0.4291224626292367,
+                -0.006258832512234557,
+            ],
+            [
+                0.025923135771523536,
+                -0.19656806432797985,
+                0.21241315085580617,
+                0.26407069615827605,
+                0.141838294223032,
+                0.15293508997391067,
+                0.3374648831638453,
+                0.0006538147724864326,
+            ],
+            [
+                0.02138924923994134,
+                -0.1253375327438082,
+                0.15776867020593463,
+                0.1732289542654098,
+                0.08953257934144834,
+                0.10787340407119331,
+                0.26538472647418293,
+                0.0032215726319125434,
+            ],
+            [
+                0.016578423863966744,
+                -0.08014475311607097,
+                0.11645419156245553,
+                0.11386140995151539,
+                0.055879454629911014,
+                0.07581063443256782,
+                0.20870039094284756,
+                0.003768582540589548,
+            ],
+            [
+                0.0123237782398086,
+                -0.05137945267507437,
+                0.08559204906666781,
+                0.07501867640499771,
+                0.034378642905079644,
+                0.05312433641578078,
+                0.1641234360332888,
+                0.0034639773049072132,
+            ],
+            [
+                0.00888245418117355,
+                -0.033013942372688856,
+                0.06273069087434123,
+                0.04956804406970293,
+                0.020753673797309358,
+                0.03714519532773165,
+                0.12906780928239653,
+                0.0028735546656712056,
+            ],
+            [
+                0.006245491921845249,
+                -0.02125449665863463,
+                0.04589461448981145,
+                0.032862340292144375,
+                0.012204103915685648,
+                0.025931436827722584,
+                0.10149982108331118,
+                0.0022539529656977683,
+            ],
+        ];
+        let relax = Relaxation::IqnIls {
+            omega0: 0.5,
+            reuse: 4,
+            filter: 1e-10,
+        };
+        let mut it = OuterIteration::new(x0.to_vec(), relax, 1e-12, 60);
+        for (w, bw) in b.iter().enumerate() {
+            while !it.done() {
+                let out = apply_map(&m, bw, it.input());
+                it.observe(&out);
+            }
+            assert!(
+                it.converged() && it.iters() <= 8,
+                "window {w}: {} iterations, residual {:e}",
+                it.iters(),
+                it.residual_norm()
+            );
             it.begin_window();
         }
     }
