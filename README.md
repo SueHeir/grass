@@ -171,6 +171,7 @@ Runnable examples and their acceptance criteria live together in the repository:
 | [`fallible_lifecycle`](examples/fallible_lifecycle/README.md) | Setup-error propagation, update short-circuiting, and cleanup |
 | [`observed_oscillator`](examples/observed_oscillator/README.md) | Configuration, clocks, terminal output, and dumps |
 | [`mapping_tour`](examples/mapping_tour/README.md) | Mapping between a fluid grid, a non-matching shield surface and particles, with conservation checks |
+| [`mock_icarus`](examples/mock_icarus/README.md) | Wrapping a Fortran ablator and a C aeroheating code as plugins, then coupling them explicitly, implicitly (IQN-ILS) and across MPI roles. Its own Cargo workspace; needs `gfortran` and a C compiler |
 
 The complete evidence index is [Example Validation](examples/VALIDATION.md).
 These checks validate framework behavior and the particular examples; they do
