@@ -1,0 +1,17 @@
+[package]
+name = "coupling_matrix"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test matrix for GRASS coupling: graph shapes, rank layouts, exchange kinds and schemes"
+
+# Its own workspace: this crate lives on a test branch, not in the library.
+[workspace]
+
+[dependencies]
+grass_app = { path = "../../crates/grass_app" }
+grass_scheduler = { path = "../../crates/grass_scheduler" }
+grass_multi = { path = "../../crates/grass_multi", features = ["mpi"] }
+grass_mpi = { path = "../../crates/grass_mpi", features = ["mpi_backend"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
