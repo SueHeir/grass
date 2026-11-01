@@ -47,7 +47,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use grass_mpi::{config_digest, Bootstrap, MpiRuntime, RoleTopology, TopologyConfig};
 use mpi::collective::{CommunicatorCollectives, Root, SystemOperation};
@@ -75,6 +75,13 @@ pub trait CouplingGroup: Send + Sync {
     fn broadcast(&self, root_role: usize, data: &[u8]) -> Vec<u8>;
     /// `true` on every rank if any rank passed `true`.
     fn any(&self, flag: bool) -> bool;
+    /// Every rank contributes `data`; rank 0 of `root_role` receives every
+    /// contribution in world order (role declaration order, then role rank)
+    /// and gets `Some`, everyone else `None`.
+    fn gather(&self, root_role: usize, data: &[u8]) -> Option<Vec<Vec<u8>>>;
+    /// Rank 0 of `root_role` passes one part per rank, in world order; every
+    /// rank receives its own part.
+    fn scatter(&self, root_role: usize, parts: Option<Vec<Vec<u8>>>) -> Vec<u8>;
 }
 
 /// Gather and scatter inside one role (between its ranks).
@@ -88,10 +95,54 @@ pub trait RoleCollective: Send + Sync {
     fn scatter_f64(&self, parts: Option<Vec<Vec<f64>>>) -> Vec<f64>;
 }
 
+/// A barrier that every waiter leaves with a panic once any participant has
+/// panicked, so a failure in one role thread cannot leave the others blocked.
+struct PoisonBarrier {
+    state: Mutex<(usize, u64, bool)>, // (arrived, generation, poisoned)
+    cv: Condvar,
+    n: usize,
+}
+
+impl PoisonBarrier {
+    fn new(n: usize) -> Self {
+        Self {
+            state: Mutex::new((0, 0, false)),
+            cv: Condvar::new(),
+            n,
+        }
+    }
+    fn wait(&self) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.2 {
+            panic!("a peer role panicked");
+        }
+        let generation = st.1;
+        st.0 += 1;
+        if st.0 == self.n {
+            st.0 = 0;
+            st.1 += 1;
+            self.cv.notify_all();
+            return;
+        }
+        while st.1 == generation && !st.2 {
+            st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+        if st.2 {
+            panic!("a peer role panicked");
+        }
+    }
+    fn poison(&self) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.2 = true;
+        self.cv.notify_all();
+    }
+}
+
 struct LocalGroupShared {
-    barrier: Barrier,
+    barrier: PoisonBarrier,
     slot: Mutex<Vec<u8>>,
     flags: Mutex<Vec<bool>>,
+    parts: Mutex<Vec<Vec<u8>>>,
 }
 
 /// Threads in one process, one per role.
@@ -104,9 +155,10 @@ struct LocalGroup {
 impl LocalGroup {
     fn create(roles: usize) -> Vec<Self> {
         let shared = Arc::new(LocalGroupShared {
-            barrier: Barrier::new(roles),
+            barrier: PoisonBarrier::new(roles),
             slot: Mutex::new(Vec::new()),
             flags: Mutex::new(vec![false; roles]),
+            parts: Mutex::new(vec![Vec::new(); roles]),
         });
         (0..roles)
             .map(|me| Self {
@@ -115,6 +167,9 @@ impl LocalGroup {
                 me,
             })
             .collect()
+    }
+    fn lock<'a, X>(m: &'a Mutex<X>) -> std::sync::MutexGuard<'a, X> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -128,19 +183,38 @@ impl CouplingGroup for LocalGroup {
     fn broadcast(&self, root_role: usize, data: &[u8]) -> Vec<u8> {
         self.shared.barrier.wait();
         if self.me == root_role {
-            *self.shared.slot.lock().unwrap() = data.to_vec();
+            *Self::lock(&self.shared.slot) = data.to_vec();
         }
         self.shared.barrier.wait();
-        let out = self.shared.slot.lock().unwrap().clone();
+        let out = Self::lock(&self.shared.slot).clone();
         self.shared.barrier.wait();
         out
     }
     fn any(&self, flag: bool) -> bool {
-        self.shared.flags.lock().unwrap()[self.me] = flag;
+        Self::lock(&self.shared.flags)[self.me] = flag;
         self.shared.barrier.wait();
-        let any = self.shared.flags.lock().unwrap().iter().any(|f| *f);
+        let any = Self::lock(&self.shared.flags).iter().any(|f| *f);
         self.shared.barrier.wait();
         any
+    }
+    fn gather(&self, root_role: usize, data: &[u8]) -> Option<Vec<Vec<u8>>> {
+        Self::lock(&self.shared.parts)[self.me] = data.to_vec();
+        self.shared.barrier.wait();
+        let out = (self.me == root_role).then(|| Self::lock(&self.shared.parts).clone());
+        self.shared.barrier.wait();
+        out
+    }
+    fn scatter(&self, root_role: usize, parts: Option<Vec<Vec<u8>>>) -> Vec<u8> {
+        self.shared.barrier.wait();
+        if self.me == root_role {
+            let parts = parts.expect("the scatter root must supply the parts");
+            assert_eq!(parts.len(), self.roles, "one scatter part per rank");
+            *Self::lock(&self.shared.parts) = parts;
+        }
+        self.shared.barrier.wait();
+        let out = Self::lock(&self.shared.parts)[self.me].clone();
+        self.shared.barrier.wait();
+        out
     }
 }
 
@@ -199,6 +273,40 @@ impl CouplingGroup for MpiGroup {
         self.comm
             .all_reduce_into(&local, &mut any, SystemOperation::max());
         any != 0
+    }
+    fn gather(&self, root_role: usize, data: &[u8]) -> Option<Vec<Vec<u8>>> {
+        let root = self.roots[root_role];
+        if self.comm.rank() != root {
+            self.comm.process_at_rank(root).send(data);
+            return None;
+        }
+        let mut out = Vec::with_capacity(self.comm.size() as usize);
+        for r in 0..self.comm.size() {
+            if r == root {
+                out.push(data.to_vec());
+            } else {
+                out.push(self.comm.process_at_rank(r).receive_vec::<u8>().0);
+            }
+        }
+        Some(out)
+    }
+    fn scatter(&self, root_role: usize, parts: Option<Vec<Vec<u8>>>) -> Vec<u8> {
+        let root = self.roots[root_role];
+        if self.comm.rank() != root {
+            return self.comm.process_at_rank(root).receive_vec::<u8>().0;
+        }
+        let mut parts = parts.expect("the scatter root must supply the parts");
+        assert_eq!(
+            parts.len(),
+            self.comm.size() as usize,
+            "one scatter part per rank"
+        );
+        for (r, part) in parts.iter().enumerate() {
+            if r as i32 != root {
+                self.comm.process_at_rank(r as i32).send(&part[..]);
+            }
+        }
+        std::mem::take(&mut parts[root as usize])
     }
 }
 
@@ -461,6 +569,7 @@ impl<T: Send + 'static> CoupledRunner<T> {
             }
         }
         let groups = LocalGroup::create(n);
+        let shared = groups[0].shared.clone();
         let mut handles = Vec::new();
         for ((name, chans), group) in self.declared.iter().zip(channels).zip(groups) {
             let ctx = RoleContext {
@@ -472,24 +581,47 @@ impl<T: Send + 'static> CoupledRunner<T> {
                 role_collective: Arc::new(SoloRole),
             };
             let f = self.roles.remove(name).unwrap();
+            let shared = shared.clone();
             handles.push((
                 name.clone(),
                 std::thread::Builder::new()
                     .name(name.clone())
-                    .spawn(move || f(ctx))
+                    .spawn(move || {
+                        // A panic here releases every other role from the
+                        // group's barrier; their exchange channels see this
+                        // thread's ends drop.
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ctx)));
+                        r.unwrap_or_else(|p| {
+                            shared.barrier.poison();
+                            std::panic::resume_unwind(p)
+                        })
+                    })
                     .expect("spawn role thread"),
             ));
         }
         let mut out = Vec::new();
-        let mut panicked = None;
+        let mut panicked: Option<(String, Box<dyn std::any::Any + Send>, bool)> = None;
         for (name, h) in handles {
             match h.join() {
                 Ok(r) => out.push((name, r)),
-                Err(p) => panicked = panicked.or(Some(p)),
+                // Keep the first role that panicked on its own, not the ones
+                // that only panicked because a peer went away.
+                Err(p) => {
+                    let secondary = p
+                        .downcast_ref::<&str>()
+                        .is_some_and(|m| m.contains("peer role panicked"))
+                        || p.downcast_ref::<String>()
+                            .is_some_and(|m| m.contains("peer role panicked"));
+                    match &panicked {
+                        None => panicked = Some((name, p, secondary)),
+                        Some((_, _, true)) if !secondary => panicked = Some((name, p, secondary)),
+                        _ => {}
+                    }
+                }
             }
         }
         grass_mpi::finalize_mpi();
-        if let Some(p) = panicked {
+        if let Some((_, p, _)) = panicked {
             std::panic::resume_unwind(p);
         }
         CoupledRun::Local(out)
@@ -563,11 +695,21 @@ impl<T: Send + 'static> CoupledRunner<T> {
         };
         let f = self.roles.remove(&me).unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ctx)));
-        drop(world);
-        runtime.finalize();
         match result {
-            Ok(result) => Ok(CoupledRun::Split { role: me, result }),
-            Err(p) => std::panic::resume_unwind(p),
+            Ok(result) => {
+                drop(world);
+                runtime.finalize();
+                Ok(CoupledRun::Split { role: me, result })
+            }
+            // The other ranks are blocked in collectives this rank will never
+            // join: finalizing would hang. Abort the whole job instead (the
+            // panic message has already been printed).
+            Err(_) => {
+                eprintln!(
+                    "grass: role `{me}` (world rank {world_rank}) panicked; aborting the MPI job"
+                );
+                world.abort(101)
+            }
         }
     }
 }
@@ -601,17 +743,20 @@ pub enum WindowAction {
 /// }
 /// ```
 ///
-/// One role (the *owner*) produces the interface output `x̃` the iteration
-/// converges, distributed over its ranks as shards. `end` gathers the shards
-/// to the owner's rank 0, applies the acceleration there, scatters the next
-/// iterate back, and broadcasts the decision (repeat or advance) to every
-/// rank of every role, so all roles roll back or move on together. The
-/// interface vector is assembled on one rank: fine for surface data up to
-/// millions of values.
+/// The *owner* roles produce the interface output `x̃` that the iteration
+/// converges, each distributed over its ranks as shards. With one owner this
+/// is a Gauss-Seidel style coupling (the other roles consume the owner's
+/// iterate); with every role as an owner it is a block-Jacobi coupling (all
+/// roles step at once on the previous iterate). `end` gathers the shards of
+/// every owner rank, in world order, to rank 0 of the first owner, applies
+/// the acceleration there, scatters the next iterate back, and broadcasts the
+/// decision (repeat or advance) to every rank of every role, so all roles roll
+/// back or move on together. The interface vector is assembled on one rank:
+/// fine for surface data up to millions of values.
 pub struct DistributedImplicit {
     group: Arc<dyn CouplingGroup>,
-    role: Arc<dyn RoleCollective>,
-    owner: usize,
+    /// Rank 0 of this role runs the acceleration.
+    root: usize,
     is_owner: bool,
     iter: Option<OuterIteration>,
     dt: f64,
@@ -633,18 +778,39 @@ impl DistributedImplicit {
         dt: f64,
         n_windows: u64,
     ) -> Self {
-        let owner_idx = ctx
-            .role_index(owner)
-            .unwrap_or_else(|| panic!("DistributedImplicit: unknown owner role `{owner}`"));
-        let is_owner = ctx.role() == owner;
-        let role = ctx.role_collective();
-        let iter = (is_owner && role.position().0 == 0).then_some(iter);
+        Self::with_owners(ctx, &[owner], iter, dt, n_windows)
+    }
+
+    /// Several roles together own the interface unknown: it is the
+    /// concatenation, in world order (role declaration order, then role rank),
+    /// of every owner rank's shard.
+    pub fn with_owners(
+        ctx: &RoleContext,
+        owners: &[&str],
+        iter: OuterIteration,
+        dt: f64,
+        n_windows: u64,
+    ) -> Self {
+        assert!(
+            !owners.is_empty(),
+            "DistributedImplicit needs an owner role"
+        );
+        let idx: Vec<usize> = owners
+            .iter()
+            .map(|o| {
+                ctx.role_index(o)
+                    .unwrap_or_else(|| panic!("DistributedImplicit: unknown owner role `{o}`"))
+            })
+            .collect();
+        let root = *idx.iter().min().unwrap();
+        let me = ctx.role_index(ctx.role()).unwrap();
+        let is_owner = idx.contains(&me);
+        let is_root = me == root && ctx.role_collective().position().0 == 0;
         Self {
             group: ctx.group(),
-            role,
-            owner: owner_idx,
+            root,
             is_owner,
-            iter,
+            iter: is_root.then_some(iter),
             dt,
             window: 0,
             n_windows,
@@ -667,44 +833,43 @@ impl DistributedImplicit {
         }
     }
 
-    /// Finish an iteration. Owner ranks pass `Some(local shard of x̃)`, every
-    /// other rank `None`. Returns the decision, and on owner ranks this rank's
-    /// shard of the next iterate (to use on the repeat, or as the first guess
-    /// of the next window).
+    /// Finish an iteration. Owner ranks pass `Some(local shard of x̃)` (it may
+    /// be empty), every other rank `None`. Returns the decision, and on owner
+    /// ranks this rank's shard of the next iterate (to use on the repeat, or
+    /// as the first guess of the next window).
     pub fn end(&mut self, x_tilde: Option<&[f64]>) -> (WindowStep, Option<Vec<f64>>) {
-        let mut decision = [0u8; 9];
-        let mut next_local = None;
-        if self.is_owner {
-            let local = x_tilde.expect("owner role must pass its interface output");
-            let gathered = self.role.gather_f64(local);
-            let parts = gathered.map(|shards| {
-                let lens: Vec<usize> = shards.iter().map(Vec::len).collect();
-                let flat: Vec<f64> = shards.concat();
-                let it = self.iter.as_mut().unwrap();
-                let next = it.observe(&flat).to_vec();
-                let done = it.done();
-                decision[0] = u8::from(done);
-                decision[1..5].copy_from_slice(&it.iters().to_le_bytes());
-                decision[5] = u8::from(it.converged());
-                if done {
-                    it.begin_window();
-                }
-                let mut out = Vec::with_capacity(lens.len());
-                let mut at = 0;
-                for l in lens {
-                    out.push(next[at..at + l].to_vec());
-                    at += l;
-                }
-                out
-            });
-            next_local = Some(self.role.scatter_f64(parts));
-        } else {
-            assert!(
-                x_tilde.is_none(),
-                "only the owner role passes an interface output"
-            );
-        }
-        let d = self.group.broadcast(self.owner, &decision);
+        let local: &[f64] = match (self.is_owner, x_tilde) {
+            (true, Some(x)) => x,
+            (true, None) => panic!("owner roles must pass their interface output"),
+            (false, None) => &[],
+            (false, Some(_)) => panic!("only owner roles pass an interface output"),
+        };
+        let gathered = self.group.gather(self.root, &to_bytes(local));
+        let mut decision = [0u8; 6];
+        let parts = gathered.map(|shards| {
+            let shards: Vec<Vec<f64>> = shards.iter().map(|b| from_bytes(b)).collect();
+            let flat: Vec<f64> = shards.concat();
+            let it = self.iter.as_mut().expect("acceleration lives on the root");
+            let next = it.observe(&flat).to_vec();
+            let done = it.done();
+            decision[0] = u8::from(done);
+            decision[1..5].copy_from_slice(&it.iters().to_le_bytes());
+            decision[5] = u8::from(it.converged());
+            if done {
+                it.begin_window();
+            }
+            let mut at = 0;
+            shards
+                .iter()
+                .map(|s| {
+                    let part = to_bytes(&next[at..at + s.len()]);
+                    at += s.len();
+                    part
+                })
+                .collect()
+        });
+        let mine = from_bytes(&self.group.scatter(self.root, parts));
+        let d = self.group.broadcast(self.root, &decision);
         let done = d[0] != 0;
         self.iters = u32::from_le_bytes(d[1..5].try_into().unwrap());
         let step = if done {
@@ -718,7 +883,7 @@ impl DistributedImplicit {
         } else {
             WindowStep::Repeat
         };
-        (step, next_local)
+        (step, self.is_owner.then_some(mine))
     }
 
     /// Whether every window has been accepted.
@@ -755,10 +920,20 @@ impl DistributedImplicit {
     }
 }
 
+fn to_bytes(v: &[f64]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+fn from_bytes(b: &[u8]) -> Vec<f64> {
+    b.chunks_exact(8)
+        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .collect()
+}
+
 impl fmt::Debug for DistributedImplicit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DistributedImplicit")
-            .field("owner", &self.owner)
+            .field("root", &self.root)
             .field("window", &self.window)
             .field("n_windows", &self.n_windows)
             .finish()
