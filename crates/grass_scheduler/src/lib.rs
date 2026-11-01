@@ -124,7 +124,6 @@
 #![warn(missing_docs)]
 // ANCHOR: All
 pub mod coherence;
-pub mod iterative;
 pub mod log;
 pub mod manager;
 pub mod param;
@@ -132,10 +131,6 @@ pub mod schedule;
 pub mod snapshot;
 
 pub use coherence::{CoherenceRegistry, MirrorBridge, MirrorState};
-pub use iterative::{
-    conjugate_gradient, picard_iteration, ConvergenceState, IterationError, IterationReport,
-    LinearOperator,
-};
 pub use manager::*;
 pub use param::*;
 pub use schedule::{BranchBuilder, OnMax, Schedule, ScheduleBuilder, ScheduleNode, ScheduleSeam};
@@ -154,26 +149,20 @@ pub mod prelude {
         apply_state_transitions,
         check_stage_advance,
         // Simulation states
-        conjugate_gradient,
         first_stage_only,
         in_stage,
         in_state,
         on_enter_stage,
         on_enter_state,
-        picard_iteration,
         // Resource access kind (read/write) surfaced to coherence mediation
         AccessKind,
         // Host<->device coherence mediation
         CoherenceRegistry,
         ConditionalSystem,
-        ConvergenceState,
         CurrentState,
         IntoScheduledSystem,
         // System labels (typed keys, function handles, or migration strings)
         IntoSystemLabel,
-        IterationError,
-        IterationReport,
-        LinearOperator,
         Local,
         MirrorBridge,
         MirrorState,
