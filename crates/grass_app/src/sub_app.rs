@@ -76,21 +76,13 @@ impl SubApp {
     /// `add_scheduler_manager` → `organize_systems` → `setup`. After this you
     /// can call [`run`](Self::run) repeatedly until [`is_done`](Self::is_done).
     pub fn prepare(&mut self) {
-        use grass_scheduler::{SchedulerManager, SchedulerState};
         self.scheduler.add_scheduler_manager();
         self.scheduler.organize_systems();
+        let stage_before = self.scheduler.stage_index();
         self.scheduler.setup();
         // Move SchedulerManager into the Run state so systems that gate on it
         // (e.g. `system_check_done`) behave the same as under `start()`.
-        if let Some(cell) = self
-            .scheduler
-            .get_mut_resource(std::any::TypeId::of::<SchedulerManager>())
-        {
-            let mut br = cell.borrow_mut();
-            if let Some(sm) = br.downcast_mut::<SchedulerManager>() {
-                sm.state = SchedulerState::Run;
-            }
-        }
+        self.scheduler.enter_run_after_setup(stage_before);
     }
 
     /// Adds the scheduler manager needed by a manually driven lifecycle.
@@ -98,18 +90,15 @@ impl SubApp {
         self.scheduler.add_scheduler_manager();
     }
 
-    /// Marks a prepared scheduler ready to execute update systems.
-    pub(crate) fn set_running(&mut self) {
-        use grass_scheduler::{SchedulerManager, SchedulerState};
-        if let Some(cell) = self
-            .scheduler
-            .get_mut_resource(TypeId::of::<SchedulerManager>())
-        {
-            let mut br = cell.borrow_mut();
-            if let Some(sm) = br.downcast_mut::<SchedulerManager>() {
-                sm.state = SchedulerState::Run;
-            }
-        }
+    /// The current stage index, read before a setup pass for [`set_running`](Self::set_running).
+    pub(crate) fn stage_index(&self) -> usize {
+        self.scheduler.stage_index()
+    }
+
+    /// Marks a prepared scheduler ready to execute update systems, unless a
+    /// setup system ended the run or advanced the stage during setup.
+    pub(crate) fn set_running(&mut self, stage_before_setup: usize) {
+        self.scheduler.enter_run_after_setup(stage_before_setup);
     }
 
     /// Returns `true` if a system has signalled simulation end via

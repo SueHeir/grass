@@ -80,13 +80,24 @@ pub struct StageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Number of timesteps to run in this stage.
+    ///
+    /// `0` works like LAMMPS `run 0`: every setup system runs (so the
+    /// stage's state is built, validated, and available to cleanup/output
+    /// hooks), but no update system runs and [`SimClock`] does not advance.
+    /// Use it to inspect or write the initial state without integrating.
+    /// Plugins that want step-0 diagnostics (forces, thermo) should compute
+    /// them in setup rather than rely on an update step.
     #[serde(default = "default_steps")]
     pub steps: u32,
     /// Per-stage timestep size (0.0 = use whatever the user/integrator
     /// already set).
     #[serde(default)]
     pub dt: f64,
-    /// Skip this stage entirely (advance immediately on entry).
+    /// Skip this stage's update steps (advance immediately on entry).
+    ///
+    /// The stage's setup systems still run, exactly as with `steps = 0`;
+    /// `skip` keeps the configured `steps` so a stage can be toggled off
+    /// without editing its length.
     #[serde(default)]
     pub skip: bool,
     /// Codebase-defined "write final dump/restart at stage end" hint.
@@ -438,6 +449,9 @@ impl Plugin for RunPlugin {
 
         app.add_setup_system(set_stage_name, ScheduleSetupSet::PreSetup);
         app.add_setup_system(run_read_input, ScheduleSetupSet::Setup);
+        // RunSchedule lives in RUN_NAMESPACE, so this runs after every other
+        // setup system of the stage.
+        app.add_setup_system(advance_past_skipped_stage, RunSchedule::Cycle);
 
         if !app.has_update_system(advance_step) {
             app.add_update_system(advance_step, RunSchedule::Cycle);
@@ -545,6 +559,35 @@ pub fn run_read_input(
     run_state.cycle_remaining.push(stage.steps);
 }
 
+/// Setup system: leaves a `skip = true` or `steps = 0` stage before any
+/// update step runs.
+///
+/// Runs last in the stage's setup pass (in [`RunSchedule::Cycle`], namespace
+/// [`RUN_NAMESPACE`]) so the other setup systems still see the skipped stage's
+/// index. It advances the stage index and requests the next stage's setup (or
+/// `End` after the last stage); the lifecycle then skips the update loop for
+/// this stage instead of running one step of it.
+pub fn advance_past_skipped_stage(
+    run_config: Res<RunConfig>,
+    mut scheduler_manager: ResMut<SchedulerManager>,
+) {
+    let index = scheduler_manager.index;
+    if index >= run_config.num_stages() {
+        return;
+    }
+    let stage = run_config.current_stage(index);
+    if !stage.skip && stage.steps > 0 {
+        return;
+    }
+    scheduler_manager.advance_requested = false;
+    scheduler_manager.index += 1;
+    scheduler_manager.state = if scheduler_manager.index >= run_config.num_stages() {
+        SchedulerState::End
+    } else {
+        SchedulerState::Setup
+    };
+}
+
 /// Update system: increment cycle counters, advance to the next stage
 /// when steps are exhausted (or [`SchedulerManager::advance_requested`]
 /// is set), and end the App after the final stage completes.
@@ -556,9 +599,10 @@ pub fn update_cycle(
     let index = scheduler_manager.index;
     let remaining = run_state.cycle_remaining[index];
 
-    // Skipped stage (remaining == 0): advance immediately without
-    // running physics. Clear advance_requested in case another system
-    // set it during the ghost iteration that runs first.
+    // Zero-step or skipped stage. `advance_past_skipped_stage` normally
+    // leaves these during setup, so this only fires when something drove an
+    // update step anyway (e.g. an external loop after `prepare`). Advance
+    // without counting a cycle, and clear any advance request.
     if remaining == 0 {
         scheduler_manager.advance_requested = false;
         scheduler_manager.index += 1;
@@ -696,6 +740,98 @@ mod tests {
         let state = app.get_resource_ref::<RunState>().expect("RunState");
         assert_eq!(state.total_cycle, 2);
         assert_eq!(state.cycle_count, vec![1, 1]);
+    }
+
+    #[derive(Debug, Clone, Copy, ScheduleSet)]
+    enum Physics {
+        Step,
+    }
+
+    #[derive(Default)]
+    struct StepLog(Vec<usize>);
+
+    fn log_stage_step(mut log: ResMut<StepLog>, sm: Res<SchedulerManager>) {
+        log.0.push(sm.index);
+    }
+
+    fn app_with_skipped_stages(fallible: bool) -> App {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "first"
+            steps = 2
+            skip = true
+
+            [[run]]
+            name = "second"
+            steps = 3
+
+            [[run]]
+            name = "third"
+            steps = 4
+            skip = true
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        if fallible {
+            app.add_fallible_setup_system(
+                "fallible-input",
+                |_app: &mut App| Ok(()),
+                ScheduleSetupSet::PreSetup,
+            );
+        }
+        app
+    }
+
+    fn assert_skipped_stages_never_step(app: &App) {
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![1, 1, 1], "only the unskipped stage may step");
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.total_cycle, 3);
+        assert_eq!(state.cycle_count, vec![0, 3, 0]);
+        assert_eq!(app.get_resource_ref::<SimClock>().expect("clock").step, 3);
+    }
+
+    #[test]
+    fn zero_step_stage_runs_setup_but_no_update_step() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "inspect"
+            steps = 0
+
+            [[run]]
+            name = "go"
+            steps = 2
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        app.start();
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![1, 1]);
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.cycle_count, vec![0, 2]);
+        assert_eq!(app.get_resource_ref::<SimClock>().expect("clock").step, 2);
+    }
+
+    #[test]
+    fn skipped_stages_run_no_update_step() {
+        let mut app = app_with_skipped_stages(false);
+        app.start();
+        assert_skipped_stages_never_step(&app);
+    }
+
+    #[test]
+    fn skipped_stages_run_no_update_step_with_fallible_setup() {
+        let mut app = app_with_skipped_stages(true);
+        app.try_start().expect("fallible lifecycle");
+        assert_skipped_stages_never_step(&app);
     }
 
     #[derive(Debug, Default, Deserialize, PartialEq)]
