@@ -128,3 +128,37 @@ fn keep_limits_the_files_on_disk() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn resources_registered_before_the_plugin_are_still_checkpointed() {
+    let dir = std::env::temp_dir().join(format!("grass_order_{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    let mut app = App::new();
+    app.add_resource(Config::from_str(
+        "[run]\nsteps = 10\n[checkpoint]\nevery = 10\nkeep = 0\n",
+    ));
+    app.add_resource(Input {
+        filename: String::new(),
+        output_dir: Some(dir.display().to_string()),
+    });
+    app.add_resource(State {
+        x: vec![0.5],
+        rng: 1,
+    });
+    // Registered before CheckpointPlugin adds its own Collect system.
+    app.checkpoint::<State>("state");
+    app.add_plugins(CheckpointPlugin);
+    app.add_update_system(step, Phase::Step);
+    app.add_plugins(RunPlugin);
+    app.start();
+    let written = app
+        .get_resource_ref::<Checkpoints>()
+        .unwrap()
+        .written
+        .clone();
+    assert_eq!(written.len(), 1);
+    let c = Checkpoint::read(&written[0]).unwrap();
+    let saved: State = c.get("state").expect("state entry present");
+    assert_eq!(&saved, &*app.get_resource_ref::<State>().unwrap());
+    std::fs::remove_dir_all(&dir).ok();
+}
