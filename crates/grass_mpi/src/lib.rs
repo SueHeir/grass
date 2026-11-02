@@ -71,6 +71,9 @@
 
 use std::ops::{Deref, DerefMut};
 
+mod plugin;
+pub use plugin::{default_comm, MpiPlugin};
+
 mod runtime;
 pub use runtime::{
     config_digest, BootstrapError, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
@@ -117,7 +120,7 @@ pub use runtime::{Bootstrap, MpiRuntime, MpiRuntimeError};
 /// ```
 pub mod prelude {
     pub use crate::{
-        config_digest, CommResource, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
+        config_digest, CommResource, MpiPlugin, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
         SingleProcessComm, TopologyConfig, TopologyMode, TopologyPlan,
     };
     #[cfg(feature = "mpi_backend")]

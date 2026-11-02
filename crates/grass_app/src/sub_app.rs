@@ -35,6 +35,9 @@ pub struct SubApp {
     pub(crate) plugin_dependencies: BTreeMap<String, Vec<crate::PluginDependency>>,
     /// Declarative contract metadata retained for generated documentation.
     pub(crate) plugin_metadata: BTreeMap<String, crate::PluginMetadata>,
+    /// Resource types installed with [`App::init_shared_resource`](crate::App::init_shared_resource).
+    /// A plain `add_resource` of one of these types, after it exists, is a bug.
+    pub(crate) shared_resources: HashSet<TypeId>,
 }
 
 impl SubApp {

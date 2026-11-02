@@ -549,8 +549,51 @@ impl App {
 
     /// Inserts a resource into the app's resource store.
     ///
-    /// If a resource of the same type already exists, it is replaced.
+    /// If a resource of the same type already exists, it is replaced, except
+    /// for a *shared* resource (see [`init_shared_resource`](Self::init_shared_resource)):
+    /// replacing one of those silently would cut every plugin already using it
+    /// off from it, so this panics. Use
+    /// [`replace_resource`](Self::replace_resource) to replace one on purpose.
     pub fn add_resource<R: 'static>(&mut self, res: R) -> &mut Self {
+        let type_id = TypeId::of::<R>();
+        if self.sub_apps.main.shared_resources.contains(&type_id) && self.has_resource::<R>() {
+            panic!(
+                "add_resource::<{}>() would replace a shared resource another plugin \
+                 already installed and may be using. Use init_shared_resource to reuse \
+                 it, or replace_resource to replace it on purpose.",
+                std::any::type_name::<R>()
+            );
+        }
+        self.sub_apps.main.add_resource(res);
+        self
+    }
+
+    /// Returns `true` if a resource of type `R` has been added.
+    pub fn has_resource<R: 'static>(&self) -> bool {
+        self.resource_cell(TypeId::of::<R>()).is_some()
+    }
+
+    /// Installs a resource that several plugins share, such as the MPI
+    /// communicator. The first plugin to ask creates it with `make`; every
+    /// later caller reuses that one and `make` is not called. An application
+    /// that wants its own instance (for example a split communicator) adds it
+    /// with this method before the plugins that use it.
+    ///
+    /// Once installed, a plain [`add_resource`](Self::add_resource) of the
+    /// same type panics instead of silently replacing it.
+    pub fn init_shared_resource<R: 'static>(&mut self, make: impl FnOnce() -> R) -> &mut Self {
+        if !self.has_resource::<R>() {
+            self.sub_apps.main.add_resource(make());
+        }
+        self.sub_apps
+            .main
+            .shared_resources
+            .insert(TypeId::of::<R>());
+        self
+    }
+
+    /// Replaces a resource on purpose, including a shared one.
+    pub fn replace_resource<R: 'static>(&mut self, res: R) -> &mut Self {
         self.sub_apps.main.add_resource(res);
         self
     }
@@ -1988,5 +2031,36 @@ mod tests {
             .name
             .as_deref()
             .is_some_and(|name| name.contains("DependencyMiddle")));
+    }
+
+    #[test]
+    fn shared_resource_is_created_once_and_guarded() {
+        let mut app = App::new();
+        let mut calls = 0;
+        app.init_shared_resource(|| {
+            calls += 1;
+            41_u32
+        });
+        app.init_shared_resource(|| {
+            calls += 1;
+            0_u32
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(*app.get_resource_ref::<u32>().unwrap(), 41);
+
+        app.replace_resource(42_u32);
+        assert_eq!(*app.get_resource_ref::<u32>().unwrap(), 42);
+
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            app.add_resource(0_u32);
+        }));
+        assert!(
+            refused.is_err(),
+            "add_resource must not overwrite a shared resource"
+        );
+
+        // Ordinary resources still replace as before.
+        app.add_resource(1_i64).add_resource(2_i64);
+        assert_eq!(*app.get_resource_ref::<i64>().unwrap(), 2);
     }
 }
