@@ -215,7 +215,7 @@ fn print_term_out(mut term_out: ResMut<TermOut>, comm: Option<Res<CommResource>>
             .map(|c| format!("{:>w$}", c, w = width))
             .collect::<Vec<_>>()
             .join(" ");
-        println!("{}", header);
+        grass_app::say!("{}", header);
         term_out.header_printed = true;
     }
     let line = term_out
@@ -227,7 +227,7 @@ fn print_term_out(mut term_out: ResMut<TermOut>, comm: Option<Res<CommResource>>
         })
         .collect::<Vec<_>>()
         .join(" ");
-    println!("{}", line);
+    grass_app::say!("{}", line);
 }
 
 fn format_value(col: &str, v: f64, width: usize) -> String {

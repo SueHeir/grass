@@ -399,7 +399,8 @@ fn load_restart(
 /// Registers resources for checkpointing.
 pub trait CheckpointAppExt {
     /// Save resource `T` under `name` in every checkpoint, and restore it on
-    /// restart. Requires [`CheckpointPlugin`].
+    /// restart. Periodic checkpoints and `[checkpoint] restart` need
+    /// [`CheckpointPlugin`]; [`save_app`] and [`save_coupled`] work without it.
     fn checkpoint<T: Serialize + DeserializeOwned + 'static>(
         &mut self,
         name: &'static str,
@@ -411,17 +412,54 @@ impl CheckpointAppExt for App {
         &mut self,
         name: &'static str,
     ) -> &mut Self {
+        // On-demand save/restore (`save_app` / `restore_app`, and coupled
+        // runs through `save_coupled`) goes through this registry.
+        if !self.has_resource::<CheckpointRegistry>() {
+            self.add_resource(CheckpointRegistry::default());
+        }
+        {
+            let cell = self
+                .resource_cell(std::any::TypeId::of::<CheckpointRegistry>())
+                .expect("CheckpointRegistry");
+            let mut any = cell.borrow_mut();
+            let registry = any
+                .downcast_mut::<CheckpointRegistry>()
+                .expect("CheckpointRegistry type");
+            registry.entries.push(RegisteredEntry {
+                name,
+                save: Box::new(move |app: &App, c: &mut Checkpoint| {
+                    let t = app.get_resource_ref::<T>().unwrap_or_else(|| {
+                        panic!("checkpoint `{name}`: resource is not in the App")
+                    });
+                    c.put(name, &*t);
+                }),
+                load: Box::new(move |app: &App, c: &Checkpoint| {
+                    let value: T = c.get(name)?;
+                    let cell = app
+                        .resource_cell(std::any::TypeId::of::<T>())
+                        .ok_or_else(|| CheckpointError::Missing(name.to_string()))?;
+                    *cell
+                        .borrow_mut()
+                        .downcast_mut::<T>()
+                        .expect("checkpoint resource type") = value;
+                    Ok(())
+                }),
+            });
+        }
+
         // Ordered after `begin_checkpoint`, which opens the pending checkpoint,
         // so this works whether it is registered before or after the plugin.
-        let collect = move |t: Res<T>, mut ck: ResMut<Checkpoints>| {
-            if let Some(c) = ck.pending.as_mut() {
-                c.put(name, &*t);
+        let collect = move |t: Res<T>, ck: Option<ResMut<Checkpoints>>| {
+            if let Some(mut ck) = ck {
+                if let Some(c) = ck.pending.as_mut() {
+                    c.put(name, &*t);
+                }
             }
         };
         self.add_update_system(collect.after(begin_checkpoint), CheckpointSchedule::Collect);
         self.add_setup_system(
-            move |mut t: ResMut<T>, ck: Res<Checkpoints>| {
-                if let Some(c) = ck.restart.as_ref() {
+            move |mut t: ResMut<T>, ck: Option<Res<Checkpoints>>| {
+                if let Some(c) = ck.as_ref().and_then(|ck| ck.restart.as_ref()) {
                     *t = c
                         .get(name)
                         .unwrap_or_else(|e| panic!("grass_io: restart: {e}"));
@@ -430,6 +468,137 @@ impl CheckpointAppExt for App {
             RestartSchedule::Apply,
         )
     }
+}
+
+// ─── On-demand save and restore (single App and coupled runs) ───────────────
+
+type SaveFn = Box<dyn Fn(&App, &mut Checkpoint)>;
+type LoadFn = Box<dyn Fn(&App, &Checkpoint) -> Result<(), CheckpointError>>;
+
+struct RegisteredEntry {
+    name: &'static str,
+    save: SaveFn,
+    load: LoadFn,
+}
+
+/// Every resource registered with [`CheckpointAppExt::checkpoint`], so the
+/// App's state can be saved and restored at any time, not only from its own
+/// schedule.
+#[derive(Default)]
+pub struct CheckpointRegistry {
+    entries: Vec<RegisteredEntry>,
+}
+
+impl CheckpointRegistry {
+    /// Names of the registered entries, in registration order.
+    pub fn names(&self) -> Vec<&'static str> {
+        self.entries.iter().map(|e| e.name).collect()
+    }
+}
+
+const RUN_STATE_ENTRY: &str = "grass.run_state";
+
+/// Capture `app`'s registered state now: every resource registered with
+/// [`CheckpointAppExt::checkpoint`], its [`SimClock`] (in the header) and
+/// how far it is through its `[[run]]` stages.
+pub fn save_app(app: &App) -> Checkpoint {
+    let (step, time) = app
+        .get_resource_ref::<SimClock>()
+        .map_or((0, 0.0), |c| (c.step, c.time));
+    let prov = app.get_resource_ref::<Provenance>().map(|p| p.clone());
+    let mut c = Checkpoint::new(step, time, prov);
+    if let Some(run) = app.get_resource_ref::<crate::RunState>() {
+        let state = (
+            run.total_cycle as u64,
+            run.cycle_count.clone(),
+            run.cycle_remaining.clone(),
+        );
+        c.put(RUN_STATE_ENTRY, &state);
+    }
+    if let Some(registry) = app.get_resource_ref::<CheckpointRegistry>() {
+        for entry in &registry.entries {
+            (entry.save)(app, &mut c);
+        }
+    }
+    c
+}
+
+/// Put `app` back in the state captured by [`save_app`]. Call after the
+/// App is prepared, so every registered resource exists.
+pub fn restore_app(app: &App, c: &Checkpoint) -> Result<(), CheckpointError> {
+    if let Some(mut clock) = app.get_resource_ref::<SimClock>().map(|c| *c) {
+        clock.step = c.header.step;
+        clock.time = c.header.time;
+        set_resource(app, clock);
+    }
+    if app.has_resource::<crate::RunState>() {
+        let (total, count, remaining): (u64, Vec<u32>, Vec<u32>) = c.get(RUN_STATE_ENTRY)?;
+        let cell = app
+            .resource_cell(std::any::TypeId::of::<crate::RunState>())
+            .expect("RunState");
+        let mut any = cell.borrow_mut();
+        let run = any
+            .downcast_mut::<crate::RunState>()
+            .expect("RunState type");
+        run.total_cycle = total as usize;
+        run.cycle_count = count;
+        run.cycle_remaining = remaining;
+    }
+    if let Some(registry) = app.get_resource_ref::<CheckpointRegistry>() {
+        for entry in &registry.entries {
+            (entry.load)(app, c)?;
+        }
+    }
+    Ok(())
+}
+
+fn set_resource<T: 'static>(app: &App, value: T) {
+    let cell = app
+        .resource_cell(std::any::TypeId::of::<T>())
+        .expect("resource present");
+    *cell
+        .borrow_mut()
+        .downcast_mut::<T>()
+        .expect("resource type") = value;
+}
+
+/// File name used for one participant of a coupled checkpoint.
+fn coupled_file(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.grass"))
+}
+
+/// Save a coupled run: the parent App (its own registered resources, which
+/// is where coupler state belongs) as `parent.grass`, and every local
+/// sub-App as `<name>.grass`, all in `dir`. Call between outer steps.
+pub fn save_coupled(parent: &App, dir: &Path) -> Result<(), CheckpointError> {
+    save_app(parent).write(&coupled_file(dir, "parent"))?;
+    if let Some(subs) = parent.get_resource_ref::<grass_multi::SubApps>() {
+        let names: Vec<String> = subs.participants().map(str::to_string).collect();
+        for name in names {
+            let physics = subs.find(&name).expect("listed participant");
+            if let Some(app) = physics.local_app() {
+                save_app(app).write(&coupled_file(dir, &name))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Restore a coupled run saved by [`save_coupled`]. The parent and every
+/// sub-App must already be built and prepared the same way as the run that
+/// saved it.
+pub fn restore_coupled(parent: &App, dir: &Path) -> Result<(), CheckpointError> {
+    restore_app(parent, &Checkpoint::read(&coupled_file(dir, "parent"))?)?;
+    if let Some(subs) = parent.get_resource_ref::<grass_multi::SubApps>() {
+        let names: Vec<String> = subs.participants().map(str::to_string).collect();
+        for name in names {
+            let physics = subs.find(&name).expect("listed participant");
+            if let Some(app) = physics.local_app() {
+                restore_app(app, &Checkpoint::read(&coupled_file(dir, &name))?)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

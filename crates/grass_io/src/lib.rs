@@ -71,9 +71,9 @@ mod run;
 mod term_out;
 
 pub use checkpoint::{
-    Checkpoint, CheckpointAppExt, CheckpointConfig, CheckpointEntry, CheckpointError,
-    CheckpointHeader, CheckpointPlugin, CheckpointSchedule, Checkpoints, RestartSchedule,
-    CHECKPOINT_NAMESPACE,
+    restore_app, restore_coupled, save_app, save_coupled, Checkpoint, CheckpointAppExt,
+    CheckpointConfig, CheckpointEntry, CheckpointError, CheckpointHeader, CheckpointPlugin,
+    CheckpointRegistry, CheckpointSchedule, Checkpoints, RestartSchedule, CHECKPOINT_NAMESPACE,
 };
 pub use clock::{advance_step, every_n_steps, ClockConfig, SimClock, SimClockPlugin};
 pub use config::{

@@ -164,6 +164,12 @@ impl SubApp {
         self.scheduler.set_schedule(schedule);
     }
 
+    /// Export a seam right after `phase`, keeping every other phase in its
+    /// usual order. See [`Scheduler::add_seam_after`].
+    pub fn add_seam_after<P: ScheduleSet + 'static>(&mut self, phase: P, id: &'static str) {
+        self.scheduler.add_seam_after(phase, id);
+    }
+
     /// Inserts a resource into this sub-app's resource store.
     pub fn add_resource<R: 'static>(&mut self, res: R) {
         self.scheduler.add_resource(res);

@@ -126,6 +126,7 @@
 pub mod coherence;
 pub mod log;
 pub mod manager;
+pub mod output;
 pub mod param;
 pub mod schedule;
 pub mod snapshot;

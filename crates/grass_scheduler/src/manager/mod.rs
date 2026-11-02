@@ -555,8 +555,19 @@ pub struct Scheduler {
     /// `None` (the default) makes the per-system coherence hooks a no-op, so
     /// CPU-only runs pay nothing. Resolved in [`organize_systems`](Self::organize_systems).
     pub(crate) coherence_index: Option<usize>,
+    /// Seams requested with [`add_seam_after`](Self::add_seam_after), lowered
+    /// into a schedule when systems are organized.
+    seam_requests: Vec<SeamRequest>,
 }
 // ANCHOR_END: Scheduler
+
+/// A seam to export right after one phase of the default order.
+struct SeamRequest {
+    type_id: TypeId,
+    index: u32,
+    phase_name: &'static str,
+    id: &'static str,
+}
 
 // Scheduler::default() is manually implemented because it appears in the book's ANCHOR blocks.
 #[allow(clippy::derivable_impls)]
@@ -578,6 +589,7 @@ impl Default for Scheduler {
             schedule: None,
             schedule_execution: ExecutionState::NotStarted,
             coherence_index: None,
+            seam_requests: Vec::new(),
         }
     }
 }
@@ -599,6 +611,7 @@ impl Scheduler {
     /// - If a `requires_label` constraint references a label not present in its [`ScheduleSet`].
     /// - If a cycle is detected in `before`/`after` ordering constraints.
     pub fn organize_systems(&mut self) {
+        self.lower_seam_requests();
         self.setup_systems
             .sort_by_key(|(_, phase)| phase.sort_key());
         self.update_systems
@@ -1123,6 +1136,78 @@ impl Scheduler {
         }
     }
 
+    /// Export a seam right after `phase` in this scheduler's normal order.
+    ///
+    /// This is how a coupler opens another code's timestep without knowing
+    /// its full phase list: the code keeps running every phase it registered,
+    /// in its usual order, and [`resume`](Self::resume) yields at `id` after
+    /// `phase`'s systems. The request is applied when systems are organized,
+    /// so systems added later are still included. Several seams may be added.
+    ///
+    /// # Panics
+    ///
+    /// When systems are organized, if no update system is registered under
+    /// `phase`, or if a hand-built schedule was also installed with
+    /// [`set_schedule`](Self::set_schedule) (put the seam in that schedule).
+    pub fn add_seam_after<P: ScheduleSet + 'static>(&mut self, phase: P, id: &'static str) {
+        self.seam_requests.push(SeamRequest {
+            type_id: TypeId::of::<P>(),
+            index: phase.to_index(),
+            phase_name: phase.name(),
+            id,
+        });
+    }
+
+    /// Build the default-order schedule with the requested seams.
+    fn lower_seam_requests(&mut self) {
+        if self.seam_requests.is_empty() {
+            return;
+        }
+        assert!(
+            self.schedule.is_none(),
+            "add_seam_after cannot be combined with a hand-built Schedule; \
+             add `.export_seam(..)` to that Schedule instead"
+        );
+        let requests = std::mem::take(&mut self.seam_requests);
+        // Distinct phases in the order the flat run would execute them.
+        let mut phases: Vec<&StoredPhase> = self.update_systems.iter().map(|(_, p)| p).collect();
+        phases.sort_by_key(|p| p.sort_key());
+        let mut order: Vec<(TypeId, u32, &'static str)> = Vec::new();
+        for p in phases {
+            let key = (p.schedule_type_id, p.index, p.phase_name());
+            if !order.iter().any(|o| o.0 == key.0 && o.1 == key.1) {
+                order.push(key);
+            }
+        }
+        for r in &requests {
+            assert!(
+                order.iter().any(|o| o.0 == r.type_id && o.1 == r.index),
+                "add_seam_after: no update system is registered under phase `{}`, \
+                 so seam `{}` has nowhere to go",
+                r.phase_name,
+                r.id
+            );
+        }
+        let mut nodes = Vec::new();
+        for (type_id, index, name) in order {
+            nodes.push(ScheduleNode::Phase {
+                type_name: name,
+                type_id,
+                variant: Some(index),
+                namespace: 0,
+            });
+            for r in requests
+                .iter()
+                .filter(|r| r.type_id == type_id && r.index == index)
+            {
+                nodes.push(ScheduleNode::ExportedSeam(schedule::ScheduleSeam::new(
+                    r.id,
+                )));
+            }
+        }
+        self.set_schedule(Schedule::from_node(ScheduleNode::Sequence(nodes)));
+    }
+
     /// Install a hierarchical [`Schedule`] for this scheduler.
     ///
     /// Lowering happens here:
@@ -1211,7 +1296,32 @@ impl Scheduler {
             }
         }
 
-        // 5. Prepare conditions so `evaluate` can find its resources.
+        // 5. Update systems whose phase is not in the tree never run. Give
+        //    them a namespace no tree node uses (their old one could collide
+        //    with a tree namespace and run them at the wrong point), and say
+        //    so: a dropped phase is almost always a mistake.
+        let mut dropped: Vec<&'static str> = Vec::new();
+        for (_, phase) in &mut self.update_systems {
+            let listed = assignments.iter().any(|a| {
+                phase.schedule_type_id == a.type_id && a.variant.is_none_or(|v| phase.index == v)
+            });
+            if !listed {
+                phase.namespace = u32::MAX;
+                if !dropped.contains(&phase.phase_name()) {
+                    dropped.push(phase.phase_name());
+                }
+            }
+        }
+        if !dropped.is_empty() && !self.suppress_warnings {
+            eprintln!(
+                "warning: the installed Schedule leaves out phase(s) {}; their update \
+                 systems will not run. List them in the Schedule, or use \
+                 `add_seam_after` to keep the default order.",
+                dropped.join(", ")
+            );
+        }
+
+        // 6. Prepare conditions so `evaluate` can find its resources.
         let errors = schedule::prepare_conditions(&mut schedule.root, &self.resource_index);
         if !errors.is_empty() {
             panic!(
@@ -1277,12 +1387,12 @@ impl Scheduler {
                 .map(|((entry, _), &time)| (&entry.name, time, entry.system.group_info()))
                 .collect::<Vec<_>>();
             sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            println!("\n--- Per-system timing ({} steps) ---", self.timing_steps);
-            println!("{:<50} {:>10} {:>8}", "System", "Time(s)", "%");
-            println!("{}", "-".repeat(70));
+            crate::say!("\n--- Per-system timing ({} steps) ---", self.timing_steps);
+            crate::say!("{:<50} {:>10} {:>8}", "System", "Time(s)", "%");
+            crate::say!("{}", "-".repeat(70));
             for (name, time, group_info) in &sorted {
                 let pct = *time / total * 100.0;
-                println!("{:<50} {:>10.4} {:>7.1}%", name, time, pct);
+                crate::say!("{:<50} {:>10.4} {:>7.1}%", name, time, pct);
                 if let Some(info) = group_info {
                     for (j, ((sys_name, phase_name), inner_time)) in info
                         .inner_systems
@@ -1293,12 +1403,12 @@ impl Scheduler {
                         let _ = j;
                         let inner_pct = *inner_time / total * 100.0;
                         let label = format!("  {}: {}", phase_name, sys_name);
-                        println!("{:<50} {:>10.4} {:>7.1}%", label, inner_time, inner_pct);
+                        crate::say!("{:<50} {:>10.4} {:>7.1}%", label, inner_time, inner_pct);
                     }
                 }
             }
-            println!("{}", "-".repeat(70));
-            println!("{:<50} {:>10.4} {:>7.1}%", "TOTAL", total, 100.0);
+            crate::say!("{}", "-".repeat(70));
+            crate::say!("{:<50} {:>10.4} {:>7.1}%", "TOTAL", total, 100.0);
         }
     }
 
