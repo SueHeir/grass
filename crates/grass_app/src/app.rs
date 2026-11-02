@@ -626,6 +626,16 @@ impl App {
         self.sub_apps.main.get_resource_ref::<R>()
     }
 
+    /// Mutably borrows a resource of type `R` through a shared `&App`, or
+    /// `None` if it has not been added. Panics if `R` is already borrowed.
+    pub fn get_resource_mut<R: 'static>(&self) -> Option<std::cell::RefMut<'_, R>> {
+        let cell = self.resource_cell(TypeId::of::<R>())?;
+        Some(std::cell::RefMut::map(cell.borrow_mut(), |any| {
+            any.downcast_mut::<R>()
+                .expect("resource type matches its TypeId")
+        }))
+    }
+
     /// Same as [`get_mut_resource`](Self::get_mut_resource) but with shared
     /// (`&self`) receiver. Lets external orchestrators (`grass_multi`) hold
     /// references to multiple resources at once for couplers that read several

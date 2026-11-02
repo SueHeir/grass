@@ -40,7 +40,10 @@ fn code(x0: f64) -> App {
     let mut app = App::new();
     app.add_resource(Config::from_str("[[run]]\nsteps = 100\n"));
     app.add_plugins(RunPlugin);
-    app.add_resource(State { x: x0, forcing: 0.0 });
+    app.add_resource(State {
+        x: x0,
+        forcing: 0.0,
+    });
     app.checkpoint::<State>("state");
     app.add_update_system(step, Phase::Step);
     app
@@ -54,7 +57,12 @@ fn with<T: 'static, R>(app: &App, f: impl FnOnce(&mut T) -> R) -> R {
 }
 
 fn exchange(subs: Res<SubApps>, mut coupler: ResMut<Coupler>) {
-    let x = |name: &str| with(subs.find(name).unwrap().local_app().unwrap(), |s: &mut State| s.x);
+    let x = |name: &str| {
+        with(
+            subs.find(name).unwrap().local_app().unwrap(),
+            |s: &mut State| s.x,
+        )
+    };
     let (a, b) = (x("a"), x("b"));
     // The coupler feeds back what it saw one exchange ago: state that only
     // the parent holds.
@@ -62,7 +70,10 @@ fn exchange(subs: Res<SubApps>, mut coupler: ResMut<Coupler>) {
     coupler.exchanges += 1;
     coupler.last = a - b;
     for (name, f) in [("a", last), ("b", -last)] {
-        with(subs.find(name).unwrap().local_app().unwrap(), |s: &mut State| s.forcing = f);
+        with(
+            subs.find(name).unwrap().local_app().unwrap(),
+            |s: &mut State| s.forcing = f,
+        );
     }
 }
 
