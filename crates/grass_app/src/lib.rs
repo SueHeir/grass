@@ -80,9 +80,33 @@ mod setup;
 mod sub_app;
 
 pub use app::*;
+pub use grass_scheduler::output::{self, Output};
+pub use grass_scheduler::say;
 pub use plugin::*;
 pub use setup::ScheduleSetupSet;
 pub use sub_app::*;
+
+/// Whether the App's last `run()` finished a whole physical time step.
+///
+/// Most codes advance one full step per `run()` and never need this. A code
+/// whose `run()` is a fraction of a step (one Runge–Kutta stage, one
+/// sub-cycle) adds this resource and sets `completed_full_step` from its
+/// update system, so a coupler can advance it by whole steps without knowing
+/// its integrator (`grass_multi::SubApps::advance_step`). Absent means every
+/// `run()` is a full step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepBoundary {
+    /// `true` when the last `run()` ended on a full-step boundary.
+    pub completed_full_step: bool,
+}
+
+impl Default for StepBoundary {
+    fn default() -> Self {
+        Self {
+            completed_full_step: true,
+        }
+    }
+}
 
 /// The `grass_app` prelude.
 ///
@@ -95,6 +119,6 @@ pub mod prelude {
         app::MissingPluginDependency, app::PluginContract, app::PluginContracts,
         app::PluginDependency, setup::ScheduleSetupSet, sub_app::SubApp, CapabilityId,
         FallibleSetupSystem, Plugin, PluginGroup, PluginGroupBuilder, StageAdvancePlugin,
-        StageNames, StatesPlugin,
+        StageNames, StatesPlugin, StepBoundary,
     };
 }

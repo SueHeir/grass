@@ -54,9 +54,11 @@
 //!      the **raw `MPI_COMM_WORLD`**, so MPMD couplers can address peers in
 //!      *other* binaries by absolute world rank (this is what
 //!      `grass_multi`'s transport uses).
-//! 3. **`finalize_mpi()` after every `CommResource` has dropped** (i.e. after
-//!    the last `App` is finished). It calls `MPI_Finalize`; using any comm
-//!    afterward is undefined.
+//! 3. **Finalization is automatic.** When GRASS starts MPI, it finalizes it
+//!    at process exit, so any number of Apps, in sequence or as coupled
+//!    sub-Apps, can share one MPI session. Call `finalize_mpi()` yourself only
+//!    to end MPI early, after every `CommResource` has dropped; MPI cannot be
+//!    started again afterwards.
 //!
 //! ## The `unsafe impl Send/Sync` promise
 //!
@@ -444,8 +446,15 @@ fn world_from_universe_or_external_init(
     guard: &mut Option<mpi::environment::Universe>,
 ) -> mpi::topology::SimpleCommunicator {
     if guard.is_none() {
+        assert!(
+            !mpi_is_finalized(),
+            "MPI was already finalized in this process and cannot be started again. \
+             Leave finalization to GRASS (it finalizes at process exit) instead of \
+             calling `finalize_mpi` between Apps."
+        );
         if let Some(universe) = mpi::initialize() {
             *guard = Some(universe);
+            register_finalize_at_exit();
         } else {
             // MPI was initialized outside rsmpi (for example by a C library such
             // as p4est). In that case rsmpi cannot own a `Universe`, but it can
@@ -454,6 +463,42 @@ fn world_from_universe_or_external_init(
         }
     }
     guard.as_ref().unwrap().world()
+}
+
+/// Finalize MPI when the process exits, once, if GRASS started it.
+///
+/// Tying `MPI_Finalize` to one App's cleanup broke every program that runs
+/// more than one App: coupled sub-Apps (the first to finish took MPI down
+/// under the others) and several Apps in sequence (MPI cannot start again).
+/// The process owns MPI instead; Apps only borrow communicators.
+#[cfg(feature = "mpi_backend")]
+fn register_finalize_at_exit() {
+    extern "C" fn finalize_at_exit() {
+        // A poisoned lock means a panic already took the process down; skip.
+        if let Ok(mut lifecycle) = MPI_LIFECYCLE.lock() {
+            *lifecycle = MpiLifecycle::default();
+        }
+        if let Ok(mut guard) = MPI_UNIVERSE.lock() {
+            *guard = None;
+        }
+    }
+    extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::os::raw::c_int;
+    }
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        // SAFETY: registers a plain `extern "C"` function with the C runtime.
+        unsafe { atexit(finalize_at_exit) };
+    });
+}
+
+/// Whether `MPI_Finalize` has already run in this process.
+#[cfg(feature = "mpi_backend")]
+pub fn mpi_is_finalized() -> bool {
+    let mut flag: std::os::raw::c_int = 0;
+    // SAFETY: MPI_Finalized may be called at any time.
+    unsafe { mpi::ffi::MPI_Finalized(&mut flag) };
+    flag != 0
 }
 
 /// Returns this app's communicator: the intra-comm registered by

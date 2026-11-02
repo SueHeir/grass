@@ -561,14 +561,16 @@ pub fn run_read_input(
         return;
     }
     if stage.skip {
-        println!("Skipping stage {} [{}]", index, stage_label);
+        grass_app::say!("Skipping stage {} [{}]", index, stage_label);
     } else if config.num_stages() > 1 {
-        println!(
+        grass_app::say!(
             "Run stage {} [{}]: {} steps",
-            index, stage_label, stage.steps
+            index,
+            stage_label,
+            stage.steps
         );
     } else {
-        println!("Run: {} steps", stage.steps);
+        grass_app::say!("Run: {} steps", stage.steps);
     }
 }
 
@@ -615,7 +617,12 @@ pub fn update_cycle(
     run_config: Res<RunConfig>,
 ) {
     let index = scheduler_manager.index;
-    let remaining = run_state.cycle_remaining[index];
+    // Every stage is already finished (an outer loop ran the App once more
+    // after it ended). Stay ended instead of indexing past the stages.
+    let Some(&remaining) = run_state.cycle_remaining.get(index) else {
+        scheduler_manager.state = SchedulerState::End;
+        return;
+    };
 
     // Zero-step or skipped stage. `advance_past_skipped_stage` normally
     // leaves these during setup, so this only fires when something drove an
@@ -758,6 +765,24 @@ mod tests {
         let state = app.get_resource_ref::<RunState>().expect("RunState");
         assert_eq!(state.total_cycle, 2);
         assert_eq!(state.cycle_count, vec![1, 1]);
+    }
+
+    #[test]
+    fn running_past_the_last_stage_stays_ended() {
+        // A coupling parent may tick a sub-App once more after its `[run]`
+        // ends. That must not index past the stages.
+        let mut app = App::new();
+        app.add_resource(Config::from_str("[[run]]\nsteps = 2\n"));
+        app.add_plugins(RunPlugin);
+        app.prepare();
+        while !app.is_done() {
+            app.run();
+        }
+        app.run();
+        app.run();
+        assert!(app.is_done());
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.total_cycle, 2);
     }
 
     #[derive(Debug, Clone, Copy, ScheduleSet)]
