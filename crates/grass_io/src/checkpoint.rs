@@ -405,26 +405,59 @@ pub trait CheckpointAppExt {
         &mut self,
         name: &'static str,
     ) -> &mut Self;
+
+    /// Save state that is not one serializable resource, such as a particle
+    /// store spread over several resources or a type that holds caches,
+    /// under `name`. `save` builds a serializable snapshot `S` from the App;
+    /// `load` puts a snapshot back.
+    ///
+    /// Covered by [`save_app`] / [`restore_app`] and so by [`save_coupled`] /
+    /// [`restore_coupled`]. The periodic files [`CheckpointPlugin`] writes
+    /// from inside the schedule hold only resources registered with
+    /// [`checkpoint`](Self::checkpoint).
+    fn checkpoint_with<S, Save, Load>(
+        &mut self,
+        name: &'static str,
+        save: Save,
+        load: Load,
+    ) -> &mut Self
+    where
+        S: Serialize + DeserializeOwned + 'static,
+        Save: Fn(&App) -> S + 'static,
+        Load: Fn(&App, S) + 'static;
 }
 
 impl CheckpointAppExt for App {
+    fn checkpoint_with<S, Save, Load>(
+        &mut self,
+        name: &'static str,
+        save: Save,
+        load: Load,
+    ) -> &mut Self
+    where
+        S: Serialize + DeserializeOwned + 'static,
+        Save: Fn(&App) -> S + 'static,
+        Load: Fn(&App, S) + 'static,
+    {
+        registry_mut(self).entries.push(RegisteredEntry {
+            name,
+            save: Box::new(move |app: &App, c: &mut Checkpoint| c.put(name, &save(app))),
+            load: Box::new(move |app: &App, c: &Checkpoint| {
+                load(app, c.get(name)?);
+                Ok(())
+            }),
+        });
+        self
+    }
+
     fn checkpoint<T: Serialize + DeserializeOwned + 'static>(
         &mut self,
         name: &'static str,
     ) -> &mut Self {
         // On-demand save/restore (`save_app` / `restore_app`, and coupled
         // runs through `save_coupled`) goes through this registry.
-        if !self.has_resource::<CheckpointRegistry>() {
-            self.add_resource(CheckpointRegistry::default());
-        }
         {
-            let cell = self
-                .resource_cell(std::any::TypeId::of::<CheckpointRegistry>())
-                .expect("CheckpointRegistry");
-            let mut any = cell.borrow_mut();
-            let registry = any
-                .downcast_mut::<CheckpointRegistry>()
-                .expect("CheckpointRegistry type");
+            let mut registry = registry_mut(self);
             registry.entries.push(RegisteredEntry {
                 name,
                 save: Box::new(move |app: &App, c: &mut Checkpoint| {
@@ -468,6 +501,20 @@ impl CheckpointAppExt for App {
             RestartSchedule::Apply,
         )
     }
+}
+
+/// The App's [`CheckpointRegistry`], added on first use.
+fn registry_mut(app: &mut App) -> std::cell::RefMut<'_, CheckpointRegistry> {
+    if !app.has_resource::<CheckpointRegistry>() {
+        app.add_resource(CheckpointRegistry::default());
+    }
+    let cell = app
+        .resource_cell(std::any::TypeId::of::<CheckpointRegistry>())
+        .expect("CheckpointRegistry");
+    std::cell::RefMut::map(cell.borrow_mut(), |any| {
+        any.downcast_mut::<CheckpointRegistry>()
+            .expect("CheckpointRegistry type")
+    })
 }
 
 // ─── On-demand save and restore (single App and coupled runs) ───────────────
@@ -630,5 +677,46 @@ mod tests {
         std::fs::write(&path, b"nope").unwrap();
         assert!(Checkpoint::read(&path).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// State spread over two resources, neither serializable, saved through
+    /// one snapshot and put back.
+    #[test]
+    fn checkpoint_with_saves_state_that_is_not_one_resource() {
+        struct Positions(Vec<f64>);
+        struct Count(usize);
+        let build = || {
+            let mut app = App::new();
+            app.add_resource(Positions(Vec::new()));
+            app.add_resource(Count(0));
+            app.checkpoint_with(
+                "pair",
+                |app: &App| {
+                    let p = app.get_resource_ref::<Positions>().unwrap().0.clone();
+                    (p, app.get_resource_ref::<Count>().unwrap().0)
+                },
+                |app: &App, (p, n): (Vec<f64>, usize)| {
+                    app.get_resource_mut::<Positions>().unwrap().0 = p;
+                    app.get_resource_mut::<Count>().unwrap().0 = n;
+                },
+            );
+            app
+        };
+        let a = build();
+        a.get_resource_mut::<Positions>().unwrap().0 = vec![0.5, -1.25];
+        a.get_resource_mut::<Count>().unwrap().0 = 7;
+        let saved = save_app(&a);
+
+        let b = build();
+        restore_app(&b, &saved).unwrap();
+        assert_eq!(
+            b.get_resource_ref::<Positions>().unwrap().0,
+            vec![0.5, -1.25]
+        );
+        assert_eq!(b.get_resource_ref::<Count>().unwrap().0, 7);
+        assert_eq!(
+            b.get_resource_ref::<CheckpointRegistry>().unwrap().names(),
+            vec!["pair"]
+        );
     }
 }
