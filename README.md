@@ -236,6 +236,7 @@ Start with the runnable [`hello_app`](examples/hello_app/README.md) and
 | [`grass_derive`](crates/grass_derive/README.md) | Derives for schedules, stages, namespaces, and configuration metadata |
 | [`grass_io`](crates/grass_io/README.md) | TOML configuration, clocks, run control, terminal output, and dumps |
 | [`grass_mpi`](crates/grass_mpi/README.md) | Single-process and MPI communication backends and topology bootstrap |
+| [`grass_gpu`](crates/grass_gpu/README.md) | Optional shared GPU device, per-column CPU/GPU copies, and per-rank or per-sub-App device choice |
 | [`grass_linalg`](crates/grass_linalg/README.md) | Shared matrix-free solvers (CG, preconditioned CG, Picard) with inner products all-reduced over `grass_mpi` |
 | [`grass_multi`](crates/grass_multi/README.md) | Optional sub-apps, namespaced access, and local or distributed orchestration |
 | [`grass_precice`](crates/grass_precice/README.md) | Run a grass App as a preCICE participant (meshes, data, implicit checkpoints, time-step control) |

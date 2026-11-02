@@ -1,0 +1,29 @@
+[package]
+name = "grass_gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPU layer for GRASS: the shared wgpu device, per-column CPU/GPU copies, and the rules for which copy is current"
+keywords = ["gpu", "wgpu", "simulation"]
+categories = ["simulation", "science"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_mpi = { workspace = true }
+grass_scheduler = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+wgpu = "29"
+
+[dev-dependencies]
+grass_derive = { workspace = true }
+
+[features]
+default = []
+# Binds GPUs by each rank's position on its node, through real MPI.
+mpi_backend = ["grass_mpi/mpi_backend"]
+
+[[example]]
+name = "which_gpu"
+required-features = ["mpi_backend"]
