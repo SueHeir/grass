@@ -9,7 +9,7 @@
 //!
 //! # What it provides
 //!
-//! - [`GpuDevice`]: a device and queue, one per adapter per process.
+//! - [`GpuDevice`]: a CubeCL device and client, shared by a process.
 //! - [`GpuPlugin`]: installs the device on an App, once, like `MpiPlugin`.
 //! - [`DeviceSelection`]: which adapter this rank or sub-App uses.
 //! - [`DualBuffer`]: one column with a CPU copy and a GPU copy, tracking which is
@@ -41,11 +41,12 @@
 //! this crate should assume `f32` unless [`GpuDevice::supports_f64`] says otherwise.
 //! Compare results against a CPU run within the `f32` band, not to `f64` accuracy.
 //!
-//! # CPU and GPU kernels are separate code
+//! # Kernels
 //!
-//! Nothing here tries to run one kernel on both. The fast CPU path and the fast GPU
-//! path end up written differently in every large code that has tried otherwise, so
-//! a library keeps its CPU systems and adds GPU systems beside them.
+//! Kernels are CubeCL `#[cube]` functions, generic over the float type, so one source
+//! runs `f32` on Metal for debugging and `f64` on CUDA for production. CPU kernels stay
+//! separate: the fast CPU path and the fast GPU path end up written differently in every
+//! large code that has tried otherwise.
 
 #![warn(missing_docs)]
 
@@ -59,5 +60,4 @@ pub use counts::{TransferCounts, TransferSnapshot};
 pub use device::{DeviceSelection, GpuDevice, GpuError, DEVICE_ENV_VAR};
 pub use plugin::GpuPlugin;
 
-pub use bytemuck;
-pub use wgpu;
+pub use cubecl;

@@ -12,15 +12,17 @@ categories = ["simulation", "science"]
 grass_app = { workspace = true }
 grass_mpi = { workspace = true }
 grass_scheduler = { workspace = true }
-bytemuck = { version = "1", features = ["derive"] }
-pollster = "0.4"
-wgpu = "29"
+# 0.x and self-described alpha: minor versions break, so a bump is its own change.
+cubecl = { version = "=0.11.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 grass_derive = { workspace = true }
 
 [features]
-default = []
+# wgpu runs Metal on the laptop. CUDA is for clusters, and is where f64 is available.
+default = ["wgpu"]
+wgpu = ["cubecl/wgpu"]
+cuda = ["cubecl/cuda"]
 # Binds GPUs by each rank's position on its node, through real MPI.
 mpi_backend = ["grass_mpi/mpi_backend"]
 

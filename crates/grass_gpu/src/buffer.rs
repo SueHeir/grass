@@ -1,6 +1,8 @@
 //! [`DualBuffer`]: one column with a CPU copy and a GPU copy.
 
-use bytemuck::Pod;
+use cubecl::bytes::Bytes;
+use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 use crate::device::GpuDevice;
 
@@ -22,82 +24,38 @@ pub enum Current {
 /// data cannot be lost by writing both sides between syncs. A chain of kernels makes
 /// no transfers. A CPU reader downloads this column once, and no other column.
 ///
-/// # Kernels and bind groups
+/// # Kernels
 ///
-/// Building a bind group from [`raw`](Self::raw) touches no state. Say what each kernel
-/// does just before launching it: [`gpu_read`](Self::gpu_read),
-/// [`gpu_write`](Self::gpu_write), or [`gpu_overwrite`](Self::gpu_overwrite).
-/// [`resize`](Self::resize) replaces the buffer when it grows, and bumps
-/// [`generation`](Self::generation), so hold on to the generation to know when a
-/// bind group must be rebuilt.
-pub struct DualBuffer<T: Pod> {
+/// Say what each kernel does just before launching it, with [`gpu_read`](Self::gpu_read),
+/// [`gpu_write`](Self::gpu_write), or [`gpu_overwrite`](Self::gpu_overwrite). Each returns
+/// the argument to pass to the kernel's launch.
+pub struct DualBuffer<T: CubeElement + Copy> {
     device: GpuDevice,
-    usage: wgpu::BufferUsages,
-    label: &'static str,
     host: Vec<T>,
-    gpu: wgpu::Buffer,
-    staging: Option<wgpu::Buffer>,
+    gpu: Handle,
     current: Current,
-    generation: u64,
 }
 
-fn byte_len<T>(n: usize) -> u64 {
-    // A zero-sized binding is an error, so an empty column still owns one element.
-    (n.max(1) * std::mem::size_of::<T>()) as u64
+fn byte_len<T>(n: usize) -> usize {
+    // A kernel argument cannot be empty, so an empty column still owns one element.
+    n.max(1) * std::mem::size_of::<T>()
 }
 
-impl<T: Pod> DualBuffer<T> {
-    /// A column holding `host` on the CPU, not yet uploaded. `usage` is added to the
-    /// copy usages; use `STORAGE` for a kernel column.
-    pub fn new(
-        device: &GpuDevice,
-        label: &'static str,
-        usage: wgpu::BufferUsages,
-        host: Vec<T>,
-    ) -> Self {
-        assert!(
-            std::mem::size_of::<T>().is_multiple_of(4),
-            "grass_gpu: GPU copies move in 4-byte units, so a column element must be too"
-        );
-        let usage = usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
-        let gpu = Self::allocate(device, label, usage, host.len());
+impl<T: CubeElement + Copy> DualBuffer<T> {
+    /// A column holding `host` on the CPU, not yet uploaded.
+    pub fn new(device: &GpuDevice, host: Vec<T>) -> Self {
+        let gpu = device.client.empty(byte_len::<T>(host.len()));
         Self {
             device: device.clone(),
-            usage,
-            label,
             host,
             gpu,
-            staging: None,
             current: Current::Cpu,
-            generation: 0,
         }
     }
 
-    /// A zeroed storage column of `n` elements, with both copies agreeing.
-    pub fn zeroed(device: &GpuDevice, label: &'static str, n: usize) -> Self {
-        let mut column = Self::new(
-            device,
-            label,
-            wgpu::BufferUsages::STORAGE,
-            vec![T::zeroed(); n],
-        );
-        // wgpu zero-initializes buffers, so there is nothing to upload.
-        column.current = Current::Both;
-        column
-    }
-
-    fn allocate(
-        device: &GpuDevice,
-        label: &str,
-        usage: wgpu::BufferUsages,
-        n: usize,
-    ) -> wgpu::Buffer {
-        device.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: byte_len::<T>(n),
-            usage,
-            mapped_at_creation: false,
-        })
+    /// A column of `n` copies of `value`, not yet uploaded.
+    pub fn filled(device: &GpuDevice, n: usize, value: T) -> Self {
+        Self::new(device, vec![value; n])
     }
 
     /// Number of elements.
@@ -115,35 +73,30 @@ impl<T: Pod> DualBuffer<T> {
         self.current
     }
 
-    /// Bumped whenever the GPU buffer is replaced, which invalidates bind groups.
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// The GPU buffer, for building bind groups. Touches no state.
-    pub fn raw(&self) -> &wgpu::Buffer {
-        &self.gpu
+    fn arg(&self) -> BufferArg {
+        // SAFETY: the handle was allocated for this many elements of this type.
+        unsafe { BufferArg::from_raw_parts(self.gpu.clone(), self.host.len().max(1)) }
     }
 
     /// A kernel is about to read this column: uploads if the CPU copy is newer.
-    pub fn gpu_read(&mut self) -> &wgpu::Buffer {
+    pub fn gpu_read(&mut self) -> BufferArg {
         self.sync_to_gpu();
-        &self.gpu
+        self.arg()
     }
 
     /// A kernel is about to read and write this column: uploads if the CPU copy is
     /// newer, then marks the GPU copy as the current one.
-    pub fn gpu_write(&mut self) -> &wgpu::Buffer {
+    pub fn gpu_write(&mut self) -> BufferArg {
         self.sync_to_gpu();
         self.current = Current::Gpu;
-        &self.gpu
+        self.arg()
     }
 
     /// A kernel is about to replace every element without reading any: skips the
     /// upload, discards pending CPU writes, and marks the GPU copy as current.
-    pub fn gpu_overwrite(&mut self) -> &wgpu::Buffer {
+    pub fn gpu_overwrite(&mut self) -> BufferArg {
         self.current = Current::Gpu;
-        &self.gpu
+        self.arg()
     }
 
     /// The CPU copy for reading: downloads if the GPU copy is newer.
@@ -176,66 +129,22 @@ impl<T: Pod> DualBuffer<T> {
     /// Makes both copies agree by uploading, if the CPU copy is newer.
     pub fn sync_to_gpu(&mut self) {
         if self.current == Current::Cpu {
-            self.device
-                .queue
-                .write_buffer(&self.gpu, 0, bytemuck::cast_slice(&self.host));
-            self.device
-                .counts()
-                .record_upload(std::mem::size_of_val(self.host.as_slice()) as u64);
+            if !self.host.is_empty() {
+                let bytes = T::as_bytes(&self.host);
+                self.device
+                    .client
+                    .write(&self.gpu, Bytes::from_bytes_vec(bytes.to_vec()));
+                self.device.counts().record_upload(bytes.len() as u64);
+            }
             self.current = Current::Both;
         }
     }
 
     /// Makes both copies agree by downloading, if the GPU copy is newer. Blocks until
-    /// every kernel already submitted has finished.
+    /// every kernel already launched has finished.
     pub fn sync_to_host(&mut self) {
         if self.current == Current::Gpu {
-            self.download();
-            self.current = Current::Both;
-        }
-    }
-
-    /// Uploads only `start..start + values.len()`, for a part of the column that the
-    /// CPU owns while the rest stays on the GPU (ghosts after a halo exchange). The CPU
-    /// copy of that range is updated too, and the rest of the column is left as it is.
-    pub fn upload_range(&mut self, start: usize, values: &[T]) {
-        self.host[start..start + values.len()].copy_from_slice(values);
-        self.device.queue.write_buffer(
-            &self.gpu,
-            (start * std::mem::size_of::<T>()) as u64,
-            bytemuck::cast_slice(values),
-        );
-        self.device
-            .counts()
-            .record_upload(std::mem::size_of_val(values) as u64);
-    }
-
-    /// Changes the length, keeping the first elements of the current copy and filling
-    /// new ones with zeros. The GPU copy is stale afterward. A larger column gets a new
-    /// buffer, at least double the old one so that repeated growth stays cheap.
-    pub fn resize(&mut self, n: usize) {
-        self.sync_to_host();
-        self.host.resize(n, T::zeroed());
-        self.current = Current::Cpu;
-        if byte_len::<T>(n) > self.gpu.size() {
-            let doubled = self.gpu.size() as usize / std::mem::size_of::<T>() * 2;
-            self.gpu = Self::allocate(&self.device, self.label, self.usage, n.max(doubled));
-            self.staging = None;
-            self.generation += 1;
-        }
-    }
-
-    /// Changes the length for a column about to be replaced: no download, and the CPU
-    /// copy becomes current. Keeps the same buffer while `n` fits, and otherwise replaces
-    /// it as [`resize`](Self::resize) does.
-    pub fn resize_overwrite(&mut self, n: usize) {
-        self.current = Current::Cpu;
-        self.resize(n);
-    }
-
-    fn download(&mut self) {
-        if !self.host.is_empty() {
-            Self::download_together(&mut [self]);
+            Self::sync_all_to_host(&mut [self]);
         }
     }
 
@@ -249,9 +158,21 @@ impl<T: Pod> DualBuffer<T> {
             .map(|c| &mut **c)
             .collect();
         if let Some(first) = stale.first() {
-            first.device.counts().record_batch();
+            let device = first.device.clone();
+            device.counts().record_batch();
+            let handles = stale.iter().map(|c| c.gpu.clone()).collect();
+            let data = device
+                .client
+                .read(handles)
+                .expect("grass_gpu: could not read a column");
+            for (column, bytes) in stale.iter_mut().zip(&data) {
+                let n = column.host.len();
+                column.host.copy_from_slice(&T::from_bytes(bytes)[..n]);
+                device
+                    .counts()
+                    .record_download(std::mem::size_of_val(column.host.as_slice()) as u64);
+            }
         }
-        Self::download_together(&mut stale);
         for column in columns.iter_mut() {
             if column.current == Current::Gpu {
                 column.current = Current::Both;
@@ -259,51 +180,41 @@ impl<T: Pod> DualBuffer<T> {
         }
     }
 
-    fn download_together(columns: &mut [&mut Self]) {
-        let Some(first) = columns.first() else { return };
-        let device = first.device.clone();
-        let mut encoder = device
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("download"),
-            });
-        for column in columns.iter_mut() {
-            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
-            let (size, label) = (column.gpu.size(), column.label);
-            // Staging is allocated on first use: a column no CPU system reads never pays
-            // for a second copy of itself in device memory.
-            let staging = column.staging.get_or_insert_with(|| {
-                device.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            });
-            encoder.copy_buffer_to_buffer(&column.gpu, 0, staging, 0, bytes);
+    /// Uploads only `start..start + values.len()`, for a part of the column that the
+    /// CPU owns while the rest stays on the GPU (ghosts after a halo exchange). The CPU
+    /// copy of that range is updated too, and the rest of the column is left as it is.
+    pub fn upload_range(&mut self, start: usize, values: &[T]) {
+        if values.is_empty() {
+            return;
         }
-        device.queue.submit(Some(encoder.finish()));
-        for column in columns.iter() {
-            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
-            let staging = column.staging.as_ref().expect("allocated above");
-            staging
-                .slice(0..bytes)
-                .map_async(wgpu::MapMode::Read, |result| {
-                    result.expect("grass_gpu: could not map a staging buffer");
-                });
-        }
-        device
-            .device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("grass_gpu: device lost during a download");
-        for column in columns.iter_mut() {
-            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
-            let staging = column.staging.as_ref().expect("allocated above");
-            column.host.copy_from_slice(bytemuck::cast_slice(
-                &staging.slice(0..bytes).get_mapped_range(),
-            ));
-            staging.unmap();
-            device.counts().record_download(bytes);
-        }
+        self.host[start..start + values.len()].copy_from_slice(values);
+        let size = std::mem::size_of::<T>();
+        let total = self.gpu.size_in_used();
+        let bytes = T::as_bytes(values);
+        let range = self
+            .gpu
+            .clone()
+            .offset_start((start * size) as u64)
+            .offset_end(total - ((start * size) as u64 + bytes.len() as u64));
+        self.device
+            .client
+            .write(&range, Bytes::from_bytes_vec(bytes.to_vec()));
+        self.device.counts().record_upload(bytes.len() as u64);
+    }
+
+    /// Changes the length, keeping the first elements of the current copy and filling
+    /// new ones with `fill`. The GPU copy is stale afterward.
+    pub fn resize(&mut self, n: usize, fill: T) {
+        self.sync_to_host();
+        self.host.resize(n, fill);
+        self.current = Current::Cpu;
+        self.gpu = self.device.client.empty(byte_len::<T>(n));
+    }
+
+    /// Changes the length for a column about to be replaced: no download, and the CPU
+    /// copy becomes current.
+    pub fn resize_overwrite(&mut self, n: usize, fill: T) {
+        self.current = Current::Cpu;
+        self.resize(n, fill);
     }
 }

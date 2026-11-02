@@ -9,18 +9,18 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use grass_app::prelude::*;
-use grass_gpu::{wgpu, Current, DualBuffer, GpuDevice, GpuPlugin};
+use grass_gpu::cubecl::{self, prelude::*};
+use grass_gpu::{Current, DualBuffer, GpuDevice, GpuPlugin};
 use grass_scheduler::prelude::*;
 use grass_scheduler::{CoherenceRegistry, MirrorBridge};
 
-/// `out[i] = 2 * data[i]`, in place.
-const DOUBLE: &str = r#"
-@group(0) @binding(0) var<storage, read_write> data: array<f32>;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < arrayLength(&data)) { data[id.x] = data[id.x] * 2.0; }
+/// `data[i] *= 2`, in place.
+#[cube(launch)]
+fn double(data: &mut [f32]) {
+    if ABSOLUTE_POS < data.len() {
+        data[ABSOLUTE_POS] *= 2.0f32;
+    }
 }
-"#;
 
 /// The device is shared by the whole process, and so are its transfer counts, so these
 /// tests take turns. The guard goes with the device.
@@ -37,22 +37,14 @@ fn gpu_or_skip() -> Option<(GpuDevice, MutexGuard<'static, ()>)> {
 }
 
 fn run_double(gpu: &GpuDevice, column: &mut DualBuffer<f32>) {
-    let pipeline = gpu.compute_pipeline("double", DOUBLE, "main");
-    let buffer = column.gpu_write();
-    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    });
+    let arg = column.gpu_write();
     let groups = (column.len() as u32).div_ceil(64);
-    gpu.submit_compute("double", |pass| {
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(groups, 1, 1);
-    });
+    double::launch(
+        &gpu.client,
+        CubeCount::Static(groups, 1, 1),
+        CubeDim::new_1d(64),
+        arg,
+    );
 }
 
 #[test]
@@ -62,7 +54,7 @@ fn kernel_matches_the_cpu_loop() {
     };
     let input: Vec<f32> = (0..1000).map(|i| i as f32 * 0.25 - 40.0).collect();
     let cpu: Vec<f32> = input.iter().map(|x| x * 2.0).collect();
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, input);
+    let mut column = DualBuffer::new(&gpu, input);
     run_double(&gpu, &mut column);
     // Doubling a float is exact, so the two paths must agree bit for bit.
     assert_eq!(column.host(), cpu.as_slice());
@@ -73,7 +65,7 @@ fn a_chain_of_kernels_transfers_only_at_the_ends() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 128]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 128]);
     let start = gpu.counts().snapshot();
     for _ in 0..4 {
         run_double(&gpu, &mut column);
@@ -93,7 +85,7 @@ fn writing_one_side_first_brings_it_up_to_date() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 64]);
     run_double(&gpu, &mut column);
     // A CPU write on stale data would lose the kernel's result in the other elements.
     column.host_mut()[0] = 10.0;
@@ -109,7 +101,7 @@ fn overwriting_discards_the_side_it_replaces() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 64]);
     let start = gpu.counts().snapshot();
     run_double(&gpu, &mut column);
     column.host_overwrite().fill(5.0);
@@ -122,25 +114,14 @@ fn overwriting_discards_the_side_it_replaces() {
 }
 
 #[test]
-fn resize_keeps_data_and_says_when_to_rebind() {
+fn resize_keeps_data() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 64]);
     run_double(&gpu, &mut column);
-    let generation = column.generation();
-
-    column.resize(32);
-    assert_eq!(
-        column.generation(),
-        generation,
-        "shrinking keeps the buffer"
-    );
-    column.resize(1000);
-    assert!(
-        column.generation() > generation,
-        "growing replaces the buffer"
-    );
+    column.resize(32, 0.0);
+    column.resize(1000, 0.0);
 
     run_double(&gpu, &mut column);
     let host = column.host();
@@ -153,8 +134,8 @@ fn columns_download_together() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut a = DualBuffer::new(&gpu, "a", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
-    let mut b = DualBuffer::new(&gpu, "b", wgpu::BufferUsages::STORAGE, vec![3.0f32; 32]);
+    let mut a = DualBuffer::new(&gpu, vec![1.0f32; 64]);
+    let mut b = DualBuffer::new(&gpu, vec![3.0f32; 32]);
     run_double(&gpu, &mut a);
     run_double(&gpu, &mut b);
     let start = gpu.counts().snapshot();
@@ -170,10 +151,10 @@ fn resize_overwrite_downloads_nothing() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 64]);
     run_double(&gpu, &mut column);
     let start = gpu.counts().snapshot();
-    column.resize_overwrite(32);
+    column.resize_overwrite(32, 0.0);
     column.host_overwrite().fill(7.0);
     assert_eq!(column.host().len(), 32);
     assert_eq!(gpu.counts().snapshot().since(&start).downloads, 0);
@@ -184,7 +165,7 @@ fn upload_range_touches_only_that_range() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    let mut column = DualBuffer::new(&gpu, vec![1.0f32; 64]);
     column.sync_to_gpu();
     column.upload_range(60, &[3.0; 4]);
     run_double(&gpu, &mut column);
@@ -197,7 +178,7 @@ fn empty_column_is_legal() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;
     };
-    let mut column = DualBuffer::<f32>::zeroed(&gpu, "x", 0);
+    let mut column = DualBuffer::<f32>::new(&gpu, Vec::new());
     assert!(column.is_empty());
     let _ = column.gpu_write();
     assert!(column.host().is_empty());
@@ -218,8 +199,8 @@ fn separate_apps_on_one_adapter_share_one_device() {
     let solid = solid.get_resource_ref::<GpuDevice>().unwrap().clone();
 
     // A buffer from one App binds into a pipeline from the other, the case a coupled
-    // transfer needs. On separate wgpu devices this would be a validation error.
-    let mut column = DualBuffer::new(&solid, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 8]);
+    // transfer needs.
+    let mut column = DualBuffer::new(&solid, vec![1.0f32; 8]);
     run_double(&fluid, &mut column);
     assert_eq!(column.host()[0], 2.0);
 }
@@ -246,8 +227,8 @@ fn libraries_reuse_the_first_device_and_a_custom_one_is_respected() {
     app.add_plugins(LibA).add_plugins(LibB);
     assert!(app.has_resource::<CoherenceRegistry>());
     assert_eq!(
-        app.get_resource_ref::<GpuDevice>().unwrap().device,
-        gpu.device
+        app.get_resource_ref::<GpuDevice>().unwrap().adapter_index(),
+        gpu.adapter_index()
     );
 }
 
@@ -324,12 +305,7 @@ fn scheduler_downloads_before_a_cpu_system_reads() {
     let mut app = App::new();
     app.add_plugins(GpuPlugin::default());
     app.add_resource(Particles { x: vec![1.0; 64] });
-    app.add_resource(GpuColumn(DualBuffer::new(
-        &gpu,
-        "x",
-        wgpu::BufferUsages::STORAGE,
-        vec![1.0; 64],
-    )));
+    app.add_resource(GpuColumn(DualBuffer::new(&gpu, vec![1.0; 64])));
     app.add_resource(Seen(Vec::new()));
     {
         let mut coh = app

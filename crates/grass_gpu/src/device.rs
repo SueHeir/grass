@@ -1,8 +1,11 @@
-//! [`GpuDevice`]: a device and queue, one per adapter per process.
+//! [`GpuDevice`]: a CubeCL device and its client, shared by a process.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
+
+use cubecl::client::Client;
+use cubecl::ir::{ElemType, FloatKind};
+use cubecl::{Device, RuntimeId};
 
 use crate::counts::TransferCounts;
 
@@ -12,9 +15,9 @@ pub const DEVICE_ENV_VAR: &str = "GRASS_GPU_DEVICE";
 
 /// Which adapter a rank or sub-App uses.
 ///
-/// Sub-Apps that select the same adapter share one [`GpuDevice`], so their buffers
-/// can go in the same kernel. Sub-Apps that select different adapters run on
-/// different GPUs. GRASS assumes neither layout.
+/// Sub-Apps that select the same adapter share one device, so their buffers can go in
+/// the same kernel. Sub-Apps that select different adapters run on different GPUs.
+/// GRASS assumes neither layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DeviceSelection {
     /// One GPU per rank: [`DEVICE_ENV_VAR`] if set, otherwise this rank's position
@@ -57,7 +60,7 @@ impl DeviceSelection {
     }
 }
 
-/// Why a device could not be created.
+/// Why a device could not be chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GpuError {
     /// This machine exposes no usable adapter.
@@ -71,8 +74,6 @@ pub enum GpuError {
     },
     /// [`DEVICE_ENV_VAR`] is set to something that is not an adapter index.
     BadEnvVar(String),
-    /// The adapter refused to create a device.
-    RequestDevice(String),
 }
 
 impl fmt::Display for GpuError {
@@ -88,29 +89,21 @@ impl fmt::Display for GpuError {
             GpuError::BadEnvVar(value) => {
                 write!(f, "{DEVICE_ENV_VAR}={value:?} is not an adapter index")
             }
-            GpuError::RequestDevice(why) => write!(f, "could not create GPU device: {why}"),
         }
     }
 }
 
 impl std::error::Error for GpuError {}
 
-/// A GPU device and queue, shared by everything in the process that picks the same
-/// adapter. `Clone` is cheap.
-///
-/// Buffers belong to the device that made them. Two `wgpu::Device`s on one physical
-/// GPU cannot bind each other's buffers, so devices are cached per adapter: asking
-/// for adapter 0 twice returns the same device, and a SOIL column and a FIELD column
-/// made in different sub-Apps can still go in one kernel.
+/// A GPU device and its CubeCL client, shared by everything in the process that picks
+/// the same adapter. `Clone` is cheap, and CubeCL hands out one server per device, so
+/// a SOIL column and a FIELD column made in different sub-Apps can go in one kernel.
 #[derive(Clone)]
 pub struct GpuDevice {
-    /// The wgpu device.
-    pub device: wgpu::Device,
-    /// The wgpu queue.
-    pub queue: wgpu::Queue,
+    /// The CubeCL client. Kernels launch on this.
+    pub client: Client,
     adapter_index: usize,
     adapter_name: String,
-    supports_f64: bool,
     counts: Arc<TransferCounts>,
 }
 
@@ -123,51 +116,53 @@ impl fmt::Debug for GpuDevice {
     }
 }
 
-/// Adapters of the first backend that has any hardware, software adapters last.
-///
-/// One backend only, because a GPU exposed through both Vulkan and GL would otherwise
-/// count twice and `rank % n` would put two ranks on it. The stable sort keeps
-/// enumeration order within a device type, so every rank on a node sees one numbering.
-fn adapters() -> Vec<wgpu::Adapter> {
-    let instance = wgpu::Instance::default();
-    for backend in [
-        wgpu::Backends::METAL,
-        wgpu::Backends::VULKAN,
-        wgpu::Backends::DX12,
-    ] {
-        let mut found = pollster::block_on(instance.enumerate_adapters(backend));
+/// GPU adapters this build can reach, CUDA first. One runtime only, because a GPU
+/// reachable through two would count twice and `rank % n` would put two ranks on it.
+fn adapters() -> Vec<Device> {
+    let all = Device::enumerate_all();
+    for runtime in [RuntimeId::Cuda, RuntimeId::Wgpu] {
+        let found: Vec<Device> = all
+            .iter()
+            .filter(|d| d.runtime() == runtime)
+            .cloned()
+            .collect();
         if !found.is_empty() {
-            found.sort_by_key(|a| a.get_info().device_type == wgpu::DeviceType::Cpu);
             return found;
         }
     }
     Vec::new()
 }
 
-fn cache() -> &'static Mutex<HashMap<usize, GpuDevice>> {
-    static CACHE: OnceLock<Mutex<HashMap<usize, GpuDevice>>> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+fn counts_for(index: usize) -> Arc<TransferCounts> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static COUNTS: OnceLock<Mutex<HashMap<usize, Arc<TransferCounts>>>> = OnceLock::new();
+    COUNTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(index)
+        .or_default()
+        .clone()
 }
 
 impl GpuDevice {
     /// The names of this machine's adapters, in index order.
     pub fn adapter_names() -> Vec<String> {
-        adapters().iter().map(|a| a.get_info().name).collect()
+        adapters().iter().map(|d| format!("{d:?}")).collect()
     }
 
-    /// The device for `selection`, where `node_rank` is this rank's position on its
-    /// node. Creates it the first time and returns the same device after that.
+    /// The device for `selection`, where `node_rank` is this rank's position on its node.
     pub fn select(selection: DeviceSelection, node_rank: usize) -> Result<Self, GpuError> {
         let found = adapters();
         let env = std::env::var(DEVICE_ENV_VAR).ok();
         let index = selection.resolve(node_rank, found.len(), env.as_deref())?;
-        let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(device) = cache.get(&index) {
-            return Ok(device.clone());
-        }
-        let device = Self::create(&found[index], index)?;
-        cache.insert(index, device.clone());
-        Ok(device)
+        Ok(Self {
+            client: found[index].client(),
+            adapter_index: index,
+            adapter_name: format!("{:?}", found[index]),
+            counts: counts_for(index),
+        })
     }
 
     /// The device on the default adapter, for tests and single-rank programs.
@@ -175,45 +170,21 @@ impl GpuDevice {
         Self::select(DeviceSelection::Auto, 0)
     }
 
-    fn create(adapter: &wgpu::Adapter, adapter_index: usize) -> Result<Self, GpuError> {
-        let info = adapter.get_info();
-        let supports_f64 = adapter.features().contains(wgpu::Features::SHADER_F64);
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("grass_gpu device"),
-            required_features: if supports_f64 {
-                wgpu::Features::SHADER_F64
-            } else {
-                wgpu::Features::empty()
-            },
-            // Particle kernels bind many storage buffers at once, well past the
-            // conservative default limit of 8.
-            required_limits: adapter.limits(),
-            ..Default::default()
-        }))
-        .map_err(|e| GpuError::RequestDevice(e.to_string()))?;
-        Ok(Self {
-            device,
-            queue,
-            adapter_index,
-            adapter_name: format!("{} ({:?})", info.name, info.backend),
-            supports_f64,
-            counts: Arc::default(),
-        })
-    }
-
     /// This adapter's index in [`adapter_names`](Self::adapter_names).
     pub fn adapter_index(&self) -> usize {
         self.adapter_index
     }
 
-    /// The adapter's name and backend, for logs.
+    /// The adapter's name and runtime, for logs.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
     }
 
     /// Whether kernels on this device may use `f64`.
     pub fn supports_f64(&self) -> bool {
-        self.supports_f64
+        self.client
+            .properties()
+            .supports_type(ElemType::Float(FloatKind::F64))
     }
 
     /// Every transfer made through this device so far, shared by all its users.
@@ -221,88 +192,11 @@ impl GpuDevice {
         &self.counts
     }
 
-    /// Compiles a compute pipeline from WGSL, with its layout taken from the shader.
-    /// A layout made this way belongs to this one pipeline, so each pipeline needs its
-    /// own bind group from `pipeline.get_bind_group_layout`.
-    pub fn compute_pipeline(
-        &self,
-        label: &str,
-        wgsl: &str,
-        entry_point: &str,
-    ) -> wgpu::ComputePipeline {
-        let module = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-            });
-        self.device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: None,
-                module: &module,
-                entry_point: Some(entry_point),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-    }
-
-    /// Records one compute pass with `record` and submits it, without waiting.
-    pub fn submit_compute(&self, label: &str, record: impl FnOnce(&mut wgpu::ComputePass<'_>)) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(label),
-                timestamp_writes: None,
-            });
-            record(&mut pass);
-        }
-        self.queue.submit(Some(encoder.finish()));
-    }
-
-    /// Copies a device-side buffer's first `bytes` bytes back, waiting for kernels already
-    /// submitted. For occasional reads of state that is not worth a [`DualBuffer`](crate::DualBuffer),
-    /// since each call makes a temporary staging buffer. The source
-    /// needs `COPY_SRC`.
-    pub fn read_buffer(&self, source: &wgpu::Buffer, bytes: u64) -> Vec<u8> {
-        if bytes == 0 {
-            return Vec::new();
-        }
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("read_buffer"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("read_buffer"),
-            });
-        encoder.copy_buffer_to_buffer(source, 0, &staging, 0, bytes);
-        self.queue.submit(Some(encoder.finish()));
-        let slice = staging.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |result| {
-            result.expect("grass_gpu: could not map a staging buffer");
-        });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("grass_gpu: device lost during a read");
-        self.counts.record_download(bytes);
-        let data = slice.get_mapped_range().to_vec();
-        staging.unmap();
-        data
-    }
-
     /// Blocks until everything submitted so far has finished. Counted, because a wait
     /// inside a timestep is usually the thing a profile is looking for.
     pub fn wait(&self) {
         self.counts.record_wait();
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("grass_gpu: device lost while waiting for the queue");
+        cubecl::future::block_on(self.client.sync()).expect("grass_gpu: the device failed");
     }
 }
 

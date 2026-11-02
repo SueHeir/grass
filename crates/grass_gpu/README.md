@@ -13,7 +13,7 @@ depends on this crate unless it asks to.
 
 | item | what it does |
 |---|---|
-| [`GpuDevice`](src/device.rs) | a wgpu device and queue, cached per adapter per process, so everything on one adapter can share buffers |
+| [`GpuDevice`](src/device.rs) | a CubeCL device and client; everything in a process on one adapter shares a server, and so its buffers |
 | [`GpuPlugin`](src/plugin.rs) | installs the device once per App, and the `CoherenceRegistry`. Addable repeatedly, like `MpiPlugin` |
 | [`DeviceSelection`](src/device.rs) | which adapter a rank or sub-App uses |
 | [`DualBuffer`](src/buffer.rs) | one column with a CPU copy and a GPU copy; transfers only when the other side is newer |
@@ -69,10 +69,12 @@ is left alone. `tests/end_to_end.rs` has a complete example.
 
 ## What this does not do yet
 
-- **f64 on Apple GPUs.** They have none, and it is optional elsewhere. Assume `f32` unless
-  `GpuDevice::supports_f64` says otherwise, and compare to CPU runs within the `f32` band.
-- **CUDA and HIP.** wgpu is the laptop and development backend. Cluster compute nodes
-  often have no Vulkan drivers, so those will need their own backend.
+- **f64 on Apple GPUs.** They have none, so the Mac is for debugging in `f32`.
+  `GpuDevice::supports_f64` reports what a device can do.
+- **CUDA is compiled but not yet run.** Kernels are CubeCL `#[cube]` functions, generic over
+  the float type, and the `cuda` feature selects that backend. So far they have only run on
+  Metal and Mesa's software Vulkan. f64 on CUDA is what CubeCL's source registers, and still
+  needs a run on an NVIDIA card.
 - **GPU-aware MPI.** `CommBackend` takes CPU slices, so a halo downloads the boundary,
   exchanges, and uploads the ghosts with `DualBuffer::upload_range`.
 - **Mapping on the GPU.** `grass_map` and `Transport` work in CPU memory. Coupling two
@@ -81,7 +83,8 @@ is left alone. `tests/end_to_end.rs` has a complete example.
 ## Build
 
 ```sh
-cargo test -p grass_gpu
+cargo test -p grass_gpu                 # wgpu: Metal on the Mac
+cargo check -p grass_gpu --no-default-features --features cuda
 cargo run -p grass_gpu --features mpi_backend --example which_gpu   # or under mpirun
 ```
 
