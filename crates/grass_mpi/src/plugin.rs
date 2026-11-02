@@ -50,10 +50,15 @@ pub fn default_comm() -> CommResource {
 
 impl Plugin for MpiPlugin {
     fn build(&self, app: &mut App) {
-        let created = !app.has_resource::<CommResource>();
+        // Whoever initializes MPI finalizes it. When this plugin is the one
+        // that brings MPI up (a standalone run), the App's cleanup finalizes.
+        // When MPI was already up (a role runtime, a coupling runner, or a
+        // program that called `get_mpi_world` itself), that owner finalizes
+        // after its own communicators are dropped; finalizing here would free
+        // those communicators after `MPI_Finalize` and abort the job.
+        let owns_mpi = !app.has_resource::<CommResource>() && !crate::mpi_is_initialized();
         app.init_shared_resource(default_comm);
-        if created {
-            // MPI_Finalize once, after the App (and so the communicator) is done.
+        if owns_mpi {
             app.add_cleanup(crate::finalize_mpi);
         }
     }

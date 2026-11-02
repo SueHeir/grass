@@ -551,6 +551,27 @@ pub fn init_app_color(color: i32) {
     try_init_app_color(color).expect("init_app_color lifecycle violation");
 }
 
+/// Whether MPI is already initialized in this process (by GRASS, by a role
+/// runtime, or by a C library). [`MpiPlugin`] uses it to decide who owns
+/// `MPI_Finalize`: whoever initializes MPI finalizes it.
+#[cfg(feature = "mpi_backend")]
+pub fn mpi_is_initialized() -> bool {
+    if MPI_UNIVERSE.lock().unwrap().is_some() {
+        return true;
+    }
+    let mut flag: std::os::raw::c_int = 0;
+    // SAFETY: MPI_Initialized may be called at any time, even before MPI_Init.
+    unsafe { mpi::ffi::MPI_Initialized(&mut flag) };
+    flag != 0
+}
+
+/// Whether MPI is already initialized in this process. Always `false`
+/// without the `mpi_backend` feature.
+#[cfg(not(feature = "mpi_backend"))]
+pub fn mpi_is_initialized() -> bool {
+    false
+}
+
 /// Drop the MPI universe, calling MPI_Finalize. Must be called after all
 /// `Comm` resources have been dropped (i.e. after the last `App` is done).
 #[cfg(feature = "mpi_backend")]
