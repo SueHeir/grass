@@ -181,8 +181,8 @@ pub use grass_mpi::OwnerMap;
 pub use implicit::{checkpoint_window, converge_window, ImplicitCoupling, WindowStep};
 pub use mapped_port::{consume_on, expose_on, MappedPort, Mesh, Published, Quantity};
 pub use multi::{
-    advance_to_seam, complete_subapp_step, tick_n_times, tick_subapp, Multi, MultiAppExt,
-    MultiContext, MultiMut, MultiRef, Namespace, RemoteSubAppBuilder, SubApps,
+    advance_subapp, advance_to_seam, complete_subapp_step, tick_n_times, tick_subapp, Multi,
+    MultiAppExt, MultiContext, MultiMut, MultiRef, Namespace, RemoteSubAppBuilder, SubApps,
 };
 pub use outer_iter::{check_done_outer_iter, NIters, OuterIter, OuterIterStopPlugin};
 pub use physics::{AppPhysics, Physics, PhysicsProgress, StepResult};

@@ -547,6 +547,22 @@ impl App {
         self
     }
 
+    /// Export a seam right after `phase` in this App's normal phase order.
+    ///
+    /// Every phase the App's plugins registered keeps running, in the same
+    /// order; [`resume`](Self::resume) additionally yields at `id` once
+    /// `phase`'s systems have run. Use this to open another code's timestep
+    /// for coupling (for example, exchange contact forces after the particle
+    /// code's pre-force phase) without rebuilding its schedule by hand.
+    pub fn add_seam_after<P: ScheduleSet + 'static>(
+        &mut self,
+        phase: P,
+        id: &'static str,
+    ) -> &mut Self {
+        self.sub_apps.main.add_seam_after(phase, id);
+        self
+    }
+
     /// Inserts a resource into the app's resource store.
     ///
     /// If a resource of the same type already exists, it is replaced, except
