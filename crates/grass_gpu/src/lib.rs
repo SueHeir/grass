@@ -61,3 +61,10 @@ pub use device::{DeviceSelection, GpuDevice, GpuError, DEVICE_ENV_VAR};
 pub use plugin::GpuPlugin;
 
 pub use cubecl;
+
+/// The float kernels use: `f64` with the `f64` feature, which `cuda` turns on, else `f32`.
+#[cfg(feature = "f64")]
+pub type GpuReal = f64;
+/// The float kernels use: `f64` with the `f64` feature, which `cuda` turns on, else `f32`.
+#[cfg(not(feature = "f64"))]
+pub type GpuReal = f32;

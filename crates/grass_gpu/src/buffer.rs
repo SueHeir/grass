@@ -73,7 +73,9 @@ impl<T: CubeElement + Copy> DualBuffer<T> {
         self.current
     }
 
-    fn arg(&self) -> BufferArg {
+    /// The kernel argument for this column, changing no state. For a kernel whose reads
+    /// and writes are declared elsewhere, as a step loop does once per window.
+    pub fn arg(&self) -> BufferArg {
         // SAFETY: the handle was allocated for this many elements of this type.
         unsafe { BufferArg::from_raw_parts(self.gpu.clone(), self.host.len().max(1)) }
     }

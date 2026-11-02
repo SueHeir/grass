@@ -22,7 +22,9 @@ grass_derive = { workspace = true }
 # wgpu runs Metal on the laptop. CUDA is for clusters, and is where f64 is available.
 default = ["wgpu"]
 wgpu = ["cubecl/wgpu"]
-cuda = ["cubecl/cuda"]
+cuda = ["cubecl/cuda", "f64"]
+# Kernels in f64. Apple GPUs have none, so a Mac build refuses it at the first kernel.
+f64 = []
 # Binds GPUs by each rank's position on its node, through real MPI.
 mpi_backend = ["grass_mpi/mpi_backend"]
 
