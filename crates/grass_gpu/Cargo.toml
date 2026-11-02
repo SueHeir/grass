@@ -1,0 +1,35 @@
+[package]
+name = "grass_gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPU layer for GRASS: the shared wgpu device, per-column CPU/GPU copies, and the rules for which copy is current"
+keywords = ["gpu", "wgpu", "simulation"]
+categories = ["simulation", "science"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_mpi = { workspace = true }
+grass_scheduler = { workspace = true }
+# 0.x and self-described alpha: minor versions break, so a bump is its own change.
+cubecl = { version = "=0.11.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+grass_derive = { workspace = true }
+
+[features]
+# wgpu runs Metal on the laptop. CUDA is for clusters, and is where f64 is available.
+default = ["wgpu"]
+wgpu = ["cubecl/wgpu"]
+cuda = ["cubecl/cuda", "f64"]
+# Kernels on CubeCL's CPU runtime, in f64: how a Mac can check the f64 path, slowly.
+cpu-f64 = ["cubecl/cpu", "f64"]
+# Kernels in f64. Apple GPUs have none, so a Mac build refuses it at the first kernel.
+f64 = []
+# Binds GPUs by each rank's position on its node, through real MPI.
+mpi_backend = ["grass_mpi/mpi_backend"]
+
+[[example]]
+name = "which_gpu"
+required-features = ["mpi_backend"]

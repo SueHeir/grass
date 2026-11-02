@@ -186,6 +186,13 @@ pub trait CommBackend: Send + Sync + 'static {
     fn rank(&self) -> i32;
     /// Number of ranks in the communicator (`1` for serial).
     fn size(&self) -> i32;
+    /// This process's rank among the ranks that share its node (`0` for serial), for
+    /// binding one GPU per rank. Backends that cannot tell fall back to
+    /// [`rank`](Self::rank), which spreads ranks the same way when every node holds a
+    /// multiple of its GPU count. May be collective, so call it from setup on every rank.
+    fn node_rank(&self) -> i32 {
+        self.rank()
+    }
     /// Cartesian process-grid dimensions `[nx, ny, nz]` of the rank decomposition.
     fn processor_decomposition(&self) -> [i32; 3];
     /// This rank's `[ix, iy, iz]` coordinate within the process grid.
@@ -711,6 +718,9 @@ impl CommBackend for MpiCommBackend {
     }
     fn size(&self) -> i32 {
         self.size
+    }
+    fn node_rank(&self) -> i32 {
+        self.world.split_shared(self.rank).rank()
     }
     fn processor_decomposition(&self) -> [i32; 3] {
         self.processor_decomposition
