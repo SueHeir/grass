@@ -67,10 +67,10 @@ impl Output {
     fn write_line(&self, line: &str) {
         match &mut *self.0.borrow_mut() {
             Sink::Stdout { prefix } => {
-                let stdout = std::io::stdout();
-                let mut out = stdout.lock();
+                // `println!` (not a raw stdout handle) so test harnesses
+                // still capture it.
                 for part in line.split('\n') {
-                    let _ = writeln!(out, "{prefix}{part}");
+                    println!("{prefix}{part}");
                 }
             }
             Sink::Quiet => {}
