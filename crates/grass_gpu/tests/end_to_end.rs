@@ -150,7 +150,9 @@ fn resize_keeps_data_and_says_when_to_rebind() {
 
 #[test]
 fn columns_download_together() {
-    let Some((gpu, _turn)) = gpu_or_skip() else { return };
+    let Some((gpu, _turn)) = gpu_or_skip() else {
+        return;
+    };
     let mut a = DualBuffer::new(&gpu, "a", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
     let mut b = DualBuffer::new(&gpu, "b", wgpu::BufferUsages::STORAGE, vec![3.0f32; 32]);
     run_double(&gpu, &mut a);
@@ -165,7 +167,9 @@ fn columns_download_together() {
 
 #[test]
 fn resize_overwrite_downloads_nothing() {
-    let Some((gpu, _turn)) = gpu_or_skip() else { return };
+    let Some((gpu, _turn)) = gpu_or_skip() else {
+        return;
+    };
     let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
     run_double(&gpu, &mut column);
     let start = gpu.counts().snapshot();

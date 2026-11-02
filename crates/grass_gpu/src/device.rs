@@ -262,6 +262,40 @@ impl GpuDevice {
         self.queue.submit(Some(encoder.finish()));
     }
 
+    /// Copies a device-side buffer's first `bytes` bytes back, waiting for kernels already
+    /// submitted. For occasional reads of state that is not worth a [`DualBuffer`](crate::DualBuffer),
+    /// since each call makes a temporary staging buffer. The source
+    /// needs `COPY_SRC`.
+    pub fn read_buffer(&self, source: &wgpu::Buffer, bytes: u64) -> Vec<u8> {
+        if bytes == 0 {
+            return Vec::new();
+        }
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("read_buffer"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("read_buffer"),
+            });
+        encoder.copy_buffer_to_buffer(source, 0, &staging, 0, bytes);
+        self.queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |result| {
+            result.expect("grass_gpu: could not map a staging buffer");
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("grass_gpu: device lost during a read");
+        self.counts.record_download(bytes);
+        let data = slice.get_mapped_range().to_vec();
+        staging.unmap();
+        data
+    }
+
     /// Blocks until everything submitted so far has finished. Counted, because a wait
     /// inside a timestep is usually the thing a profile is looking for.
     pub fn wait(&self) {

@@ -264,7 +264,9 @@ impl<T: Pod> DualBuffer<T> {
         let device = first.device.clone();
         let mut encoder = device
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("download") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("download"),
+            });
         for column in columns.iter_mut() {
             let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
             let (size, label) = (column.gpu.size(), column.label);
@@ -284,9 +286,11 @@ impl<T: Pod> DualBuffer<T> {
         for column in columns.iter() {
             let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
             let staging = column.staging.as_ref().expect("allocated above");
-            staging.slice(0..bytes).map_async(wgpu::MapMode::Read, |result| {
-                result.expect("grass_gpu: could not map a staging buffer");
-            });
+            staging
+                .slice(0..bytes)
+                .map_async(wgpu::MapMode::Read, |result| {
+                    result.expect("grass_gpu: could not map a staging buffer");
+                });
         }
         device
             .device
@@ -295,9 +299,9 @@ impl<T: Pod> DualBuffer<T> {
         for column in columns.iter_mut() {
             let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
             let staging = column.staging.as_ref().expect("allocated above");
-            column
-                .host
-                .copy_from_slice(bytemuck::cast_slice(&staging.slice(0..bytes).get_mapped_range()));
+            column.host.copy_from_slice(bytemuck::cast_slice(
+                &staging.slice(0..bytes).get_mapped_range(),
+            ));
             staging.unmap();
             device.counts().record_download(bytes);
         }
