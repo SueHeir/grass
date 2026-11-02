@@ -71,6 +71,9 @@
 
 use std::ops::{Deref, DerefMut};
 
+mod owner;
+pub use owner::OwnerMap;
+
 mod plugin;
 pub use plugin::{default_comm, MpiPlugin};
 
