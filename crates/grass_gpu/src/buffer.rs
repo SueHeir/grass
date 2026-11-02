@@ -167,6 +167,12 @@ impl<T: Pod> DualBuffer<T> {
         &mut self.host
     }
 
+    /// The CPU copy, or `None` if the GPU copy is newer. For code that holds only a
+    /// shared reference and syncs earlier, such as a halo pack.
+    pub fn host_if_current(&self) -> Option<&[T]> {
+        (self.current != Current::Gpu).then_some(self.host.as_slice())
+    }
+
     /// Makes both copies agree by uploading, if the CPU copy is newer.
     pub fn sync_to_gpu(&mut self) {
         if self.current == Current::Cpu {
