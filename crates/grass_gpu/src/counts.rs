@@ -13,6 +13,7 @@ pub struct TransferCounts {
     downloads: AtomicU64,
     download_bytes: AtomicU64,
     waits: AtomicU64,
+    batches: AtomicU64,
 }
 
 /// A plain, comparable copy of [`TransferCounts`] at one instant.
@@ -28,6 +29,8 @@ pub struct TransferSnapshot {
     pub download_bytes: u64,
     /// Blocking waits for the queue to drain, downloads excluded.
     pub waits: u64,
+    /// Groups of downloads that shared one wait.
+    pub batches: u64,
 }
 
 impl TransferSnapshot {
@@ -39,6 +42,7 @@ impl TransferSnapshot {
             downloads: self.downloads - earlier.downloads,
             download_bytes: self.download_bytes - earlier.download_bytes,
             waits: self.waits - earlier.waits,
+            batches: self.batches - earlier.batches,
         }
     }
 }
@@ -61,6 +65,11 @@ impl TransferCounts {
         self.waits.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records one group of downloads sharing a single wait.
+    pub fn record_batch(&self) {
+        self.batches.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Takes a comparable copy of the current tallies.
     pub fn snapshot(&self) -> TransferSnapshot {
         TransferSnapshot {
@@ -69,6 +78,7 @@ impl TransferCounts {
             downloads: self.downloads.load(Ordering::Relaxed),
             download_bytes: self.download_bytes.load(Ordering::Relaxed),
             waits: self.waits.load(Ordering::Relaxed),
+            batches: self.batches.load(Ordering::Relaxed),
         }
     }
 }
@@ -93,6 +103,7 @@ mod tests {
                 downloads: 1,
                 download_bytes: 4,
                 waits: 1,
+                batches: 0,
             }
         );
     }

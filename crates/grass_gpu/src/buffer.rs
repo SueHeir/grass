@@ -234,39 +234,72 @@ impl<T: Pod> DualBuffer<T> {
     }
 
     fn download(&mut self) {
-        let bytes = std::mem::size_of_val(self.host.as_slice()) as u64;
-        if bytes == 0 {
-            return;
+        if !self.host.is_empty() {
+            Self::download_together(&mut [self]);
         }
-        let size = self.gpu.size();
-        let label = self.label;
-        let device = &self.device;
-        // Staging is allocated on first use: a column no CPU system reads never pays
-        // for a second copy of itself in device memory.
-        let staging = self.staging.get_or_insert_with(|| {
-            device.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        });
+    }
+
+    /// Makes both copies agree by downloading, for every column whose GPU copy is newer,
+    /// with one wait for the lot. Each separate download is a full round trip to the GPU,
+    /// so columns needed at the same point should come down together.
+    pub fn sync_all_to_host(columns: &mut [&mut Self]) {
+        let mut stale: Vec<&mut Self> = columns
+            .iter_mut()
+            .filter(|c| c.current == Current::Gpu && !c.host.is_empty())
+            .map(|c| &mut **c)
+            .collect();
+        if let Some(first) = stale.first() {
+            first.device.counts().record_batch();
+        }
+        Self::download_together(&mut stale);
+        for column in columns.iter_mut() {
+            if column.current == Current::Gpu {
+                column.current = Current::Both;
+            }
+        }
+    }
+
+    fn download_together(columns: &mut [&mut Self]) {
+        let Some(first) = columns.first() else { return };
+        let device = first.device.clone();
         let mut encoder = device
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-        encoder.copy_buffer_to_buffer(&self.gpu, 0, staging, 0, bytes);
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("download") });
+        for column in columns.iter_mut() {
+            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
+            let (size, label) = (column.gpu.size(), column.label);
+            // Staging is allocated on first use: a column no CPU system reads never pays
+            // for a second copy of itself in device memory.
+            let staging = column.staging.get_or_insert_with(|| {
+                device.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            encoder.copy_buffer_to_buffer(&column.gpu, 0, staging, 0, bytes);
+        }
         device.queue.submit(Some(encoder.finish()));
-        let slice = staging.slice(0..bytes);
-        slice.map_async(wgpu::MapMode::Read, |result| {
-            result.expect("grass_gpu: could not map a staging buffer");
-        });
+        for column in columns.iter() {
+            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
+            let staging = column.staging.as_ref().expect("allocated above");
+            staging.slice(0..bytes).map_async(wgpu::MapMode::Read, |result| {
+                result.expect("grass_gpu: could not map a staging buffer");
+            });
+        }
         device
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("grass_gpu: device lost during a download");
-        self.host
-            .copy_from_slice(bytemuck::cast_slice(&slice.get_mapped_range()));
-        staging.unmap();
-        device.counts().record_download(bytes);
+        for column in columns.iter_mut() {
+            let bytes = std::mem::size_of_val(column.host.as_slice()) as u64;
+            let staging = column.staging.as_ref().expect("allocated above");
+            column
+                .host
+                .copy_from_slice(bytemuck::cast_slice(&staging.slice(0..bytes).get_mapped_range()));
+            staging.unmap();
+            device.counts().record_download(bytes);
+        }
     }
 }
