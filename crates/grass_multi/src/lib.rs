@@ -174,6 +174,10 @@ pub use coupled::{
 #[cfg(feature = "mpi")]
 pub use ensemble::gather_outputs;
 pub use ensemble::{partition, Ensemble, Member, Summary};
+/// The receiving code's "which rank owns this point" map, for addressing
+/// [`RoutedPayload`]s. Re-exported so couplers need only `grass_multi`.
+#[cfg(feature = "mpi")]
+pub use grass_mpi::OwnerMap;
 pub use implicit::{checkpoint_window, converge_window, ImplicitCoupling, WindowStep};
 pub use mapped_port::{consume_on, expose_on, MappedPort, Mesh, Published, Quantity};
 pub use multi::{
