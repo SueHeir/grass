@@ -120,7 +120,11 @@ impl fmt::Debug for GpuDevice {
 /// reachable through two would count twice and `rank % n` would put two ranks on it.
 fn adapters() -> Vec<Device> {
     let all = Device::enumerate_all();
-    for runtime in [RuntimeId::Cuda, RuntimeId::Wgpu] {
+    #[cfg(feature = "cpu-f64")]
+    let runtimes = [RuntimeId::Cpu];
+    #[cfg(not(feature = "cpu-f64"))]
+    let runtimes = [RuntimeId::Cuda, RuntimeId::Wgpu];
+    for runtime in runtimes {
         let found: Vec<Device> = all
             .iter()
             .filter(|d| d.runtime() == runtime)

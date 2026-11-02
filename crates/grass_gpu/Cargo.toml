@@ -23,6 +23,8 @@ grass_derive = { workspace = true }
 default = ["wgpu"]
 wgpu = ["cubecl/wgpu"]
 cuda = ["cubecl/cuda", "f64"]
+# Kernels on CubeCL's CPU runtime, in f64: how a Mac can check the f64 path, slowly.
+cpu-f64 = ["cubecl/cpu", "f64"]
 # Kernels in f64. Apple GPUs have none, so a Mac build refuses it at the first kernel.
 f64 = []
 # Binds GPUs by each rank's position on its node, through real MPI.

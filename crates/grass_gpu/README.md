@@ -72,11 +72,12 @@ is left alone. `tests/end_to_end.rs` has a complete example.
 - **f64 on Apple GPUs.** They have none, so the Mac is for debugging in `f32`.
   `GpuDevice::supports_f64` reports what a device can do.
 - **CUDA is compiled but not yet run.** Kernels are CubeCL `#[cube]` functions, generic over
-  the float type, and the `cuda` feature selects that backend. So far they have only run on
-  Metal and Mesa's software Vulkan. f64 on CUDA is what CubeCL's source registers, and still
-  needs a run on an NVIDIA card.
+  the float type, and the `cuda` feature selects that backend with `f64`. So far they have run
+  on Metal and Mesa's software Vulkan in `f32`, and on CubeCL's CPU runtime in `f64` (the
+  `cpu-f64` feature). CUDA itself still needs a run on an NVIDIA card.
 - **GPU-aware MPI.** `CommBackend` takes CPU slices, so a halo downloads the boundary,
-  exchanges, and uploads the ghosts with `DualBuffer::upload_range`.
+  exchanges, and uploads the ghosts with `DualBuffer::upload_range`. CubeCL can send directly
+  between GPUs through NCCL, but only within one process, so it does not replace MPI here.
 - **Mapping on the GPU.** `grass_map` and `Transport` work in CPU memory. Coupling two
   sub-Apps through `grass_multi` works unchanged, with one transfer per exchange.
 
