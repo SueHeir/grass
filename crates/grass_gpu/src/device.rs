@@ -222,6 +222,8 @@ impl GpuDevice {
     }
 
     /// Compiles a compute pipeline from WGSL, with its layout taken from the shader.
+    /// A layout made this way belongs to this one pipeline, so each pipeline needs its
+    /// own bind group from `pipeline.get_bind_group_layout`.
     pub fn compute_pipeline(
         &self,
         label: &str,
