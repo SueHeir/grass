@@ -149,6 +149,18 @@ fn resize_keeps_data_and_says_when_to_rebind() {
 }
 
 #[test]
+fn resize_overwrite_downloads_nothing() {
+    let Some((gpu, _turn)) = gpu_or_skip() else { return };
+    let mut column = DualBuffer::new(&gpu, "x", wgpu::BufferUsages::STORAGE, vec![1.0f32; 64]);
+    run_double(&gpu, &mut column);
+    let start = gpu.counts().snapshot();
+    column.resize_overwrite(32);
+    column.host_overwrite().fill(7.0);
+    assert_eq!(column.host().len(), 32);
+    assert_eq!(gpu.counts().snapshot().since(&start).downloads, 0);
+}
+
+#[test]
 fn upload_range_touches_only_that_range() {
     let Some((gpu, _turn)) = gpu_or_skip() else {
         return;

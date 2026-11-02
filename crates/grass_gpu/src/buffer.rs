@@ -225,6 +225,14 @@ impl<T: Pod> DualBuffer<T> {
         }
     }
 
+    /// Changes the length for a column about to be replaced: no download, and the CPU
+    /// copy becomes current. Keeps the same buffer while `n` fits, and otherwise replaces
+    /// it as [`resize`](Self::resize) does.
+    pub fn resize_overwrite(&mut self, n: usize) {
+        self.current = Current::Cpu;
+        self.resize(n);
+    }
+
     fn download(&mut self) {
         let bytes = std::mem::size_of_val(self.host.as_slice()) as u64;
         if bytes == 0 {
