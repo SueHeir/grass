@@ -1,0 +1,46 @@
+# micarus (the legacy MPI Fortran code) coupled two-way to the aeroheating
+# code down a Stardust-like lunar-return entry.
+#
+#   mpirun -np 3 target/release/entry3d entry3d.toml     # flow 1 rank + tps 2 ranks
+#
+# The tps ranks are micarus's own MPI ranks: it decomposes its mesh over
+# the role communicator GRASS gives it. Change [[topology.role]] ranks to
+# change the split.
+
+[topology]
+mode = "auto"
+[[topology.role]]
+name = "flow"
+ranks = 1
+[[topology.role]]
+name = "tps"
+ranks = 2
+
+[coupling]
+scheme = "implicit"     # or "explicit"
+window = 0.5            # s
+final_time = 80.0       # s
+acceleration = "iqn"    # implicit only: iqn | aitken | picard
+tol = 1e-5              # kg/m2/s, on the face blowing-rate residual
+max_iters = 30
+
+[output]
+dir = "out/entry3d"
+
+# ---- the flow code ----
+[flow.aero]
+stations_deg = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+nose_radius = 0.22              # m
+ballistic_coefficient = 60.0    # kg/m2
+entry_velocity = 11500.0        # m/s
+entry_angle_deg = -8.0
+entry_altitude = 125000.0       # m
+
+# ---- micarus: its own deck, with a few namelist values overridden ----
+[tps.icarus]
+deck = "cases/oneway.nml"
+[tps.icarus.set.control]
+case_name = "entry3d"
+[tps.icarus.set.boundary]
+bc_source = "external"          # environment from GRASS, not the table
+blowing_correction = false      # the flow code applies it

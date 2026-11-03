@@ -1,0 +1,7 @@
+# The one-way stand-alone deck, run through GRASS.
+[icarus]
+deck = "cases/oneway.nml"   # the code's own namelist input, unchanged
+own_output = true           # the code writes its own files, into [output] dir
+
+[output]
+dir = "out/replay"
