@@ -247,22 +247,67 @@ composition details live in the crate READMEs and Rust documentation.
 
 ## Ecosystem
 
-The three core repositories form a one-way dependency stack:
+GRASS is the base of a family of repositories. Two substrate libraries sit on
+it: SOIL for particles and FIELD for meshes. Physics codes sit on a substrate,
+and coupling repositories join codes from both sides without changing them.
 
 ```text
 GRASS   scientific application framework
-  └── SOIL   distributed particle infrastructure
-        └── DIRT   discrete-element-method physics and applications
+  ├── SOIL    distributed particle infrastructure
+  │     ├── DIRT            discrete element method (DEM)
+  │     ├── dev_soil_sph    granular SPH
+  │     ├── dev_soil_peri   bond-based peridynamics
+  │     ├── dev_soil_dsmc   direct simulation Monte Carlo        (private)
+  │     ├── dev_soil_mpm    material point method, uses FIELD    (private)
+  │     └── dev_soil_pic    particle-in-cell, uses FIELD         (private)
+  ├── FIELD   mesh substrate
+  │     ├── dev_field_efvm  explicit finite-volume CFD
+  │     ├── dev_field_lbm   lattice Boltzmann                    (private)
+  │     └── dev_field_fem   Q1 finite elements                   (private)
+  └── couplings
+        ├── dev_couple_dem_cfd   DEM ↔ CFD
+        ├── dev_couple_sph_cfd   SPH ↔ CFD
+        └── dev_couple_matrix    pairwise coupling test bench    (private)
 ```
 
-- [SOIL](https://github.com/SueHeir/soil) adds particle storage, spatial
-  algorithms, and distributed-memory communication.
-- [DIRT](https://github.com/SueHeir/dirt) adds granular and bonded-particle DEM
-  physics with an explicit validation ledger.
+Repositories prefixed `dev_` are experimental method demonstrations outside the
+author's domain expertise (see the disclaimer above). Repositories marked
+**(private)** are not yet available. They are currently only a few hundred lines
+of test code, each testing a single simulation type (or, for
+`dev_couple_matrix`, pairings of the existing codes).
 
-Because the layers expose typed state and scheduled behavior, they can also be
-used in larger composed applications. Those application-specific exchanges and
-their scientific validation belong outside the core responsibilities above.
+### Core
+
+| Repository | What it can do today |
+|---|---|
+| [SOIL](https://github.com/SueHeir/soil) | Particle substrate: extensible structure-of-arrays particle storage, fixed/periodic/shrink-wrapped/triclinic boxes, MPI domain decomposition with migration and ghost exchange, binned neighbor search, groups and regions, and optional velocity-Verlet, thermo output, dumps and restart. Owns no physics. |
+| [DIRT](https://github.com/SueHeir/dirt) | DEM code on SOIL: granular contact mechanics, walls, bonded particles, rigid multisphere clumps, fibers, particle insertion and loading, and MPI runs, with a validation ledger of analytical, cross-code and empirical checks. |
+| [FIELD](https://github.com/SueHeir/field) | Mesh substrate: a finite-volume mesh trait family with a structured `UniformMesh`, per-cell field storage and registry, MPI decomposition with face and corner halo exchange, periodic axes, particle↔grid transfer shape functions, and a partition directory for coupled runs. Owns no equations. |
+
+### Method demonstrations
+
+| Repository | What it can do today |
+|---|---|
+| [dev_field_efvm](https://github.com/SueHeir/dev_field_efvm) | Compressible Euler/Navier–Stokes finite volume on FIELD: ideal-gas EOS, Rusanov and HLLC fluxes with MUSCL reconstruction, explicit Euler and SSP-RK3 stepping, viscous terms, boundary conditions, and a sharp-interface immersed boundary for analytic bodies. |
+| [dev_soil_sph](https://github.com/SueHeir/dev_soil_sph) | Granular SPH on SOIL with an elasto-viscoplastic μ(I) Drucker–Prager stress update. Passes μ(I) recovery, rest/hydrostatic stability and footpad sinkage gates; the column-collapse sweep misses the reference run-out for some aspect ratios. |
+| [dev_soil_peri](https://github.com/SueHeir/dev_soil_peri) | Bond-based peridynamics on SOIL: constant-micromodulus bonds, critical-stretch breakage and damage, with bar-tension and pre-notched plate mode-I fracture examples. Single-process only. |
+| dev_soil_dsmc (private) | DSMC for rarefied gases on SOIL: NTC collisions with VHS/hard-sphere cross sections, diffuse and specular walls, moment and wall-flux sampling. Collision-rate, Couette and Fourier test cases; about 540 new lines. |
+| dev_soil_mpm (private) | Explicit material point method using SOIL for material points and FIELD for the grid: P2G, grid update, MUSL G2P with FLIP/PIC, linear elasticity. Validated on the 1-D vibrating bar (second-order period convergence); about 470 new lines. |
+| dev_soil_pic (private) | Electrostatic particle-in-cell on SOIL and FIELD: cloud-in-cell deposit and gather, conjugate-gradient Poisson solve via `grass_linalg`, leapfrog push. Validated on Langmuir oscillation and two-stream instability growth; about 560 new lines. |
+| dev_field_lbm (private) | Lattice Boltzmann on FIELD: D2Q9 and D3Q19, BGK and TRT collisions, forcing, bounce-back walls, MPI. Validated on lid-driven cavity, Taylor–Green decay and Poiseuille flow; about 550 new lines. |
+| dev_field_fem (private) | Matrix-free Q1 finite elements on FIELD for scalar Poisson on a box with Dirichlet data, solved with CG over MPI. Passes patch test and manufactured-solution second-order convergence; no preconditioner, elasticity or time dependence yet. |
+
+### Couplings
+
+| Repository | What it can do today |
+|---|---|
+| [dev_couple_dem_cfd](https://github.com/SueHeir/dev_couple_dem_cfd) | Couples SOIL/DIRT grains to dev_field_efvm through `grass_multi` with Wen–Yu/Gidaspow drag and an equal-and-opposite momentum sink. Fluidized-bed minimum fluidization velocity is within 4.5% of Wen & Yu; includes a routed 3 DEM + 2 CFD rank MPI test. |
+| [dev_couple_sph_cfd](https://github.com/SueHeir/dev_couple_sph_cfd) | Couples dev_soil_sph to dev_field_efvm: a packed-bed drag/pressure-gradient seam against an imposed gas velocity, with a Wen–Yu comparator. It does not advance a CFD solution. |
+| dev_couple_matrix (private) | Runs the codes above together, unmodified, as `grass_multi` sub-Apps and tests each pair against a known answer: particle–particle contact (DEM, SPH, peridynamics), dusty-box drag for five particle codes in an efvm gas, particles and FVM sources into FEM gravity, a 2:1 FVM–FVM interface, coupled restart, and split MPI. |
+
+Because the layers expose typed state and scheduled behavior, they can be
+composed into larger applications. Those application-specific exchanges and
+their scientific validation belong outside GRASS itself.
 
 ## License
 
