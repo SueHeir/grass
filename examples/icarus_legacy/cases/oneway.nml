@@ -1,0 +1,30 @@
+! micarus input deck: the classic one-way workflow.
+! The environment comes from a table produced by the flow code with no
+! blowing; micarus applies the blowing correction itself.
+&control
+  case_name = 'oneway'
+  env_file = 'env.dat'
+  bprime_file = 'bprime.dat'
+  output_dir = 'out'
+  t_start = 0.0, t_end = 80.0
+  dt_init = 1.0e-3, dt_max = 0.05
+  output_interval = 0.5
+  log_every = 400
+/
+&mesh
+  n_theta = 16, n_phi = 4, n_depth = 40
+  nose_radius = 0.22, thickness = 0.04
+  theta_max_deg = 60.0, phi_span_deg = 90.0
+  stretch = 1.06
+/
+&boundary
+  bc_source = 'table'
+  blowing_correction = .true.
+  t_init = 300.0, p_init = 50.0
+/
+&probes
+  n_tc = 4
+  tc_theta_deg = 1.0, 1.0, 1.0, 40.0
+  tc_phi_deg   = 1.0, 1.0, 1.0, 1.0
+  tc_depth     = 0.004, 0.010, 0.020, 0.004
+/
