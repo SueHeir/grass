@@ -35,6 +35,9 @@ pub struct SubApp {
     pub(crate) plugin_dependencies: BTreeMap<String, Vec<crate::PluginDependency>>,
     /// Declarative contract metadata retained for generated documentation.
     pub(crate) plugin_metadata: BTreeMap<String, crate::PluginMetadata>,
+    /// Resource types installed with [`App::init_shared_resource`](crate::App::init_shared_resource).
+    /// A plain `add_resource` of one of these types, after it exists, is a bug.
+    pub(crate) shared_resources: HashSet<TypeId>,
 }
 
 impl SubApp {
@@ -76,21 +79,13 @@ impl SubApp {
     /// `add_scheduler_manager` → `organize_systems` → `setup`. After this you
     /// can call [`run`](Self::run) repeatedly until [`is_done`](Self::is_done).
     pub fn prepare(&mut self) {
-        use grass_scheduler::{SchedulerManager, SchedulerState};
         self.scheduler.add_scheduler_manager();
         self.scheduler.organize_systems();
+        let stage_before = self.scheduler.stage_index();
         self.scheduler.setup();
         // Move SchedulerManager into the Run state so systems that gate on it
         // (e.g. `system_check_done`) behave the same as under `start()`.
-        if let Some(cell) = self
-            .scheduler
-            .get_mut_resource(std::any::TypeId::of::<SchedulerManager>())
-        {
-            let mut br = cell.borrow_mut();
-            if let Some(sm) = br.downcast_mut::<SchedulerManager>() {
-                sm.state = SchedulerState::Run;
-            }
-        }
+        self.scheduler.enter_run_after_setup(stage_before);
     }
 
     /// Adds the scheduler manager needed by a manually driven lifecycle.
@@ -98,18 +93,20 @@ impl SubApp {
         self.scheduler.add_scheduler_manager();
     }
 
-    /// Marks a prepared scheduler ready to execute update systems.
-    pub(crate) fn set_running(&mut self) {
-        use grass_scheduler::{SchedulerManager, SchedulerState};
-        if let Some(cell) = self
-            .scheduler
-            .get_mut_resource(TypeId::of::<SchedulerManager>())
-        {
-            let mut br = cell.borrow_mut();
-            if let Some(sm) = br.downcast_mut::<SchedulerManager>() {
-                sm.state = SchedulerState::Run;
-            }
-        }
+    /// Prints the scheduler's per-system timing breakdown.
+    pub(crate) fn print_timing_report(&self) {
+        self.scheduler.print_timing_report();
+    }
+
+    /// The current stage index, read before a setup pass for [`set_running`](Self::set_running).
+    pub(crate) fn stage_index(&self) -> usize {
+        self.scheduler.stage_index()
+    }
+
+    /// Marks a prepared scheduler ready to execute update systems, unless a
+    /// setup system ended the run or advanced the stage during setup.
+    pub(crate) fn set_running(&mut self, stage_before_setup: usize) {
+        self.scheduler.enter_run_after_setup(stage_before_setup);
     }
 
     /// Returns `true` if a system has signalled simulation end via
@@ -165,6 +162,12 @@ impl SubApp {
     /// for lowering details.
     pub fn set_schedule(&mut self, schedule: grass_scheduler::Schedule) {
         self.scheduler.set_schedule(schedule);
+    }
+
+    /// Export a seam right after `phase`, keeping every other phase in its
+    /// usual order. See [`Scheduler::add_seam_after`].
+    pub fn add_seam_after<P: ScheduleSet + 'static>(&mut self, phase: P, id: &'static str) {
+        self.scheduler.add_seam_after(phase, id);
     }
 
     /// Inserts a resource into this sub-app's resource store.

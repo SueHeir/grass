@@ -26,6 +26,7 @@ use std::fmt;
 
 use grass_app::{App, ConfigDescription, Plugin, ScheduleSetupSet, StageNames};
 use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_mpi::CommResource;
 use grass_scheduler::{
     first_stage_only, prelude::*, Res, ResMut, SchedulerManager, SchedulerState, SystemKey,
     SystemLabel,
@@ -80,13 +81,24 @@ pub struct StageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Number of timesteps to run in this stage.
+    ///
+    /// `0` works like LAMMPS `run 0`: every setup system runs (so the
+    /// stage's state is built, validated, and available to cleanup/output
+    /// hooks), but no update system runs and [`SimClock`] does not advance.
+    /// Use it to inspect or write the initial state without integrating.
+    /// Plugins that want step-0 diagnostics (forces, thermo) should compute
+    /// them in setup rather than rely on an update step.
     #[serde(default = "default_steps")]
     pub steps: u32,
     /// Per-stage timestep size (0.0 = use whatever the user/integrator
     /// already set).
     #[serde(default)]
     pub dt: f64,
-    /// Skip this stage entirely (advance immediately on entry).
+    /// Skip this stage's update steps (advance immediately on entry).
+    ///
+    /// The stage's setup systems still run, exactly as with `steps = 0`;
+    /// `skip` keeps the configured `steps` so a stage can be toggled off
+    /// without editing its length.
     #[serde(default)]
     pub skip: bool,
     /// Codebase-defined "write final dump/restart at stage end" hint.
@@ -438,6 +450,9 @@ impl Plugin for RunPlugin {
 
         app.add_setup_system(set_stage_name, ScheduleSetupSet::PreSetup);
         app.add_setup_system(run_read_input, ScheduleSetupSet::Setup);
+        // RunSchedule lives in RUN_NAMESPACE, so this runs after every other
+        // setup system of the stage.
+        app.add_setup_system(advance_past_skipped_stage, RunSchedule::Cycle);
 
         if !app.has_update_system(advance_step) {
             app.add_update_system(advance_step, RunSchedule::Cycle);
@@ -517,32 +532,80 @@ pub fn run_read_input(
     config: Res<RunConfig>,
     scheduler_manager: Res<SchedulerManager>,
     mut run_state: ResMut<RunState>,
+    comm: Option<Res<CommResource>>,
 ) {
     let index = scheduler_manager.index;
     if index >= config.num_stages() {
         return;
     }
 
-    let stage = config.current_stage(index);
-    let stage_label = stage.name.as_deref().unwrap_or("(unnamed)");
-
-    if stage.skip {
-        println!("Skipping stage {} [{}]", index, stage_label);
-        run_state.cycle_count.push(0);
-        run_state.cycle_remaining.push(0);
+    // `RunState` holds one entry per stage, indexed by stage. A second setup
+    // pass for the same stage (a system set `SchedulerState::Setup` without
+    // advancing) keeps that stage's counters instead of appending a new entry,
+    // which would shift every later stage onto the wrong counters.
+    if run_state.cycle_count.len() > index {
         return;
     }
 
-    if config.num_stages() > 1 {
-        println!(
+    let stage = config.current_stage(index);
+    let stage_label = stage.name.as_deref().unwrap_or("(unnamed)");
+    let steps = if stage.skip { 0 } else { stage.steps };
+    // Earlier stages always have entries (stages only advance one at a time),
+    // but pad defensively so `cycle_count[index]` is this stage's slot.
+    run_state.cycle_count.resize(index, 0);
+    run_state.cycle_remaining.resize(index, 0);
+    run_state.cycle_count.push(0);
+    run_state.cycle_remaining.push(steps);
+
+    if !is_root_rank(comm.as_deref()) {
+        return;
+    }
+    if stage.skip {
+        grass_app::say!("Skipping stage {} [{}]", index, stage_label);
+    } else if config.num_stages() > 1 {
+        grass_app::say!(
             "Run stage {} [{}]: {} steps",
-            index, stage_label, stage.steps
+            index,
+            stage_label,
+            stage.steps
         );
     } else {
-        println!("Run: {} steps", stage.steps);
+        grass_app::say!("Run: {} steps", stage.steps);
     }
-    run_state.cycle_count.push(0);
-    run_state.cycle_remaining.push(stage.steps);
+}
+
+/// True on rank 0, or when no [`CommResource`] is installed (serial run).
+pub(crate) fn is_root_rank(comm: Option<&CommResource>) -> bool {
+    comm.is_none_or(|c| c.rank() == 0)
+}
+
+/// Setup system: leaves a `skip = true` or `steps = 0` stage before any
+/// update step runs.
+///
+/// Runs last in the stage's setup pass (in [`RunSchedule::Cycle`], namespace
+/// [`RUN_NAMESPACE`]) so the other setup systems still see the skipped stage's
+/// index. It advances the stage index and requests the next stage's setup (or
+/// `End` after the last stage); the lifecycle then skips the update loop for
+/// this stage instead of running one step of it.
+pub fn advance_past_skipped_stage(
+    run_config: Res<RunConfig>,
+    mut scheduler_manager: ResMut<SchedulerManager>,
+) {
+    let index = scheduler_manager.index;
+    if index >= run_config.num_stages() {
+        return;
+    }
+    let stage = run_config.current_stage(index);
+    if !stage.skip && stage.steps > 0 {
+        return;
+    }
+    scheduler_manager.advance_requested = false;
+    scheduler_manager.index += 1;
+    scheduler_manager.state = if scheduler_manager.index >= run_config.num_stages() {
+        SchedulerState::End
+    } else {
+        SchedulerState::Setup
+    };
 }
 
 /// Update system: increment cycle counters, advance to the next stage
@@ -554,11 +617,17 @@ pub fn update_cycle(
     run_config: Res<RunConfig>,
 ) {
     let index = scheduler_manager.index;
-    let remaining = run_state.cycle_remaining[index];
+    // Every stage is already finished (an outer loop ran the App once more
+    // after it ended). Stay ended instead of indexing past the stages.
+    let Some(&remaining) = run_state.cycle_remaining.get(index) else {
+        scheduler_manager.state = SchedulerState::End;
+        return;
+    };
 
-    // Skipped stage (remaining == 0): advance immediately without
-    // running physics. Clear advance_requested in case another system
-    // set it during the ghost iteration that runs first.
+    // Zero-step or skipped stage. `advance_past_skipped_stage` normally
+    // leaves these during setup, so this only fires when something drove an
+    // update step anyway (e.g. an external loop after `prepare`). Advance
+    // without counting a cycle, and clear any advance request.
     if remaining == 0 {
         scheduler_manager.advance_requested = false;
         scheduler_manager.index += 1;
@@ -696,6 +765,155 @@ mod tests {
         let state = app.get_resource_ref::<RunState>().expect("RunState");
         assert_eq!(state.total_cycle, 2);
         assert_eq!(state.cycle_count, vec![1, 1]);
+    }
+
+    #[test]
+    fn running_past_the_last_stage_stays_ended() {
+        // A coupling parent may tick a sub-App once more after its `[run]`
+        // ends. That must not index past the stages.
+        let mut app = App::new();
+        app.add_resource(Config::from_str("[[run]]\nsteps = 2\n"));
+        app.add_plugins(RunPlugin);
+        app.prepare();
+        while !app.is_done() {
+            app.run();
+        }
+        app.run();
+        app.run();
+        assert!(app.is_done());
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.total_cycle, 2);
+    }
+
+    #[derive(Debug, Clone, Copy, ScheduleSet)]
+    enum Physics {
+        Step,
+    }
+
+    #[derive(Default)]
+    struct StepLog(Vec<usize>);
+
+    fn log_stage_step(mut log: ResMut<StepLog>, sm: Res<SchedulerManager>) {
+        log.0.push(sm.index);
+    }
+
+    fn app_with_skipped_stages(fallible: bool) -> App {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "first"
+            steps = 2
+            skip = true
+
+            [[run]]
+            name = "second"
+            steps = 3
+
+            [[run]]
+            name = "third"
+            steps = 4
+            skip = true
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        if fallible {
+            app.add_fallible_setup_system(
+                "fallible-input",
+                |_app: &mut App| Ok(()),
+                ScheduleSetupSet::PreSetup,
+            );
+        }
+        app
+    }
+
+    fn assert_skipped_stages_never_step(app: &App) {
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![1, 1, 1], "only the unskipped stage may step");
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.total_cycle, 3);
+        assert_eq!(state.cycle_count, vec![0, 3, 0]);
+        assert_eq!(app.get_resource_ref::<SimClock>().expect("clock").step, 3);
+    }
+
+    fn resetup_once_mid_stage(
+        mut sm: ResMut<SchedulerManager>,
+        state: Res<RunState>,
+        mut done: Local<bool>,
+    ) {
+        // Ask for a second setup pass of the current stage (e.g. a rebuild),
+        // without advancing the stage.
+        if !*done && sm.index == 0 && state.cycle_count[0] == 1 {
+            sm.state = SchedulerState::Setup;
+            *done = true;
+        }
+    }
+
+    #[test]
+    fn same_stage_resetup_keeps_one_runstate_entry_per_stage() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "first"
+            steps = 3
+
+            [[run]]
+            name = "second"
+            steps = 2
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        app.add_update_system(resetup_once_mid_stage, Physics::Step);
+        app.start();
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![0, 0, 0, 1, 1]);
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.cycle_count, vec![3, 2]);
+        assert_eq!(state.cycle_remaining, vec![3, 2]);
+    }
+
+    #[test]
+    fn zero_step_stage_runs_setup_but_no_update_step() {
+        let mut app = App::new();
+        app.add_resource(Config::from_str(
+            r#"
+            [[run]]
+            name = "inspect"
+            steps = 0
+
+            [[run]]
+            name = "go"
+            steps = 2
+            "#,
+        ));
+        app.add_plugins(RunPlugin);
+        app.add_resource(StepLog::default());
+        app.add_update_system(log_stage_step, Physics::Step);
+        app.start();
+        let log = app.get_resource_ref::<StepLog>().expect("StepLog");
+        assert_eq!(log.0, vec![1, 1]);
+        let state = app.get_resource_ref::<RunState>().expect("RunState");
+        assert_eq!(state.cycle_count, vec![0, 2]);
+        assert_eq!(app.get_resource_ref::<SimClock>().expect("clock").step, 2);
+    }
+
+    #[test]
+    fn skipped_stages_run_no_update_step() {
+        let mut app = app_with_skipped_stages(false);
+        app.start();
+        assert_skipped_stages_never_step(&app);
+    }
+
+    #[test]
+    fn skipped_stages_run_no_update_step_with_fallible_setup() {
+        let mut app = app_with_skipped_stages(true);
+        app.try_start().expect("fallible lifecycle");
+        assert_skipped_stages_never_step(&app);
     }
 
     #[derive(Debug, Default, Deserialize, PartialEq)]

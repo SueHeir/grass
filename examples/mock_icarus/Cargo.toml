@@ -1,0 +1,29 @@
+[package]
+name = "mock_icarus"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A mock Fortran material-response code and a mock C aeroheating code, driven and coupled by GRASS"
+
+# Kept out of the main workspace so building GRASS never needs gfortran.
+[workspace]
+
+[dependencies]
+grass_app = { path = "../../crates/grass_app" }
+grass_io = { path = "../../crates/grass_io" }
+grass_derive = { path = "../../crates/grass_derive" }
+grass_multi = { path = "../../crates/grass_multi" }
+grass_scheduler = { path = "../../crates/grass_scheduler" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[features]
+# Builds `entry_mpi` (needs an MPI installation and mpicc).
+mpi = ["grass_multi/mpi"]
+
+[[bin]]
+name = "entry_mpi"
+required-features = ["mpi"]
+
+[profile.release]
+debug = 1

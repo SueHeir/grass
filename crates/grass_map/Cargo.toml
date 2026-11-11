@@ -1,0 +1,11 @@
+[package]
+name = "grass_map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Geometry-agnostic data mapping for the grass simulation framework: one sparse operator per pair of discretizations, used forwards for intensive fields and transposed for extensive ones"
+keywords = ["coupling", "interpolation", "mapping", "simulation", "multiphysics"]
+categories = ["simulation", "science"]
+
+[dependencies]

@@ -74,7 +74,18 @@ pub trait Physics: 'static {
     /// Advance one internal substep. Whoever drives the parent schedule
     /// decides how many times per outer iter this is called — typically
     /// once per [`tick_subapp(name, n)`](crate::tick_subapp) registration.
+    /// A finished subsystem must not advance; it returns a full-step result.
     fn step(&mut self) -> StepResult;
+
+    /// Advance one whole physical time step: [`step`](Self::step) until a
+    /// step reports `completed_full_step`, or the subsystem is done.
+    fn advance_step(&mut self) {
+        while !self.is_done() {
+            if self.step().completed_full_step {
+                break;
+            }
+        }
+    }
 
     /// Advance to the next exported seam or finish one timestep. Physics
     /// implementations without seam support remain atomic by default.
@@ -116,6 +127,16 @@ pub trait Physics: 'static {
         None
     }
 
+    /// Shared access to the underlying local [`App`], when there is one
+    /// (used to save and restore coupled checkpoints).
+    fn local_app(&self) -> Option<&App> {
+        None
+    }
+
+    /// Send this subsystem's terminal output ([`grass_app::say!`]) to
+    /// `output`. Default: ignored (remote physics print on their own rank).
+    fn set_output(&mut self, _output: grass_app::Output) {}
+
     /// Current physical time of this subsystem (seconds), if it tracks
     /// one. Default: `None` — subsystem doesn't expose a clock.
     ///
@@ -146,16 +167,22 @@ pub struct AppPhysics {
     name: String,
     app: App,
     prepared: bool,
+    output: grass_app::Output,
 }
 
 impl AppPhysics {
     /// Wrap an existing App. Plugins must already be added; the orchestrator
     /// will call [`prepare`](Physics::prepare) before the first step.
+    /// Its terminal output is labeled `[name] ` until
+    /// [`set_output`](Physics::set_output) says otherwise.
     pub fn new(name: impl Into<String>, app: App) -> Self {
+        let name = name.into();
+        let output = grass_app::Output::prefixed(format!("[{name}] "));
         Self {
-            name: name.into(),
+            name,
             app,
             prepared: false,
+            output,
         }
     }
 
@@ -180,24 +207,42 @@ impl Physics for AppPhysics {
 
     fn prepare(&mut self) {
         if !self.prepared {
-            self.app.prepare();
+            let app = &mut self.app;
+            self.output.scope(|| {
+                app.prepare();
+            });
             self.prepared = true;
         }
     }
 
     fn step(&mut self) -> StepResult {
-        // SchedulerManager state-driven full-step detection is integrator-
-        // specific; without that hook we conservatively return true (every
-        // call is the boundary). Callers that care about RK substeps can
-        // peek at SolverState directly through `Multi` / `MultiRes`.
-        self.app.run();
+        // A finished App is not run again: its `[run]` stages are used up,
+        // and stepping it further would index past them. Report a boundary
+        // so callers that loop to a full step stop.
+        if self.app.is_done() {
+            return StepResult {
+                completed_full_step: true,
+            };
+        }
+        let app = &mut self.app;
+        self.output.scope(|| {
+            app.run();
+        });
+        let completed_full_step = self
+            .app
+            .get_resource_ref::<grass_app::StepBoundary>()
+            .is_none_or(|boundary| boundary.completed_full_step);
         StepResult {
-            completed_full_step: true,
+            completed_full_step,
         }
     }
 
     fn resume(&mut self) -> PhysicsProgress {
-        match self.app.resume() {
+        if self.app.is_done() {
+            return PhysicsProgress::Complete;
+        }
+        let app = &mut self.app;
+        match self.output.scope(|| app.resume()) {
             grass_scheduler::ScheduleProgress::Yielded(seam) => PhysicsProgress::Yielded(seam),
             grass_scheduler::ScheduleProgress::Complete => PhysicsProgress::Complete,
         }
@@ -208,7 +253,12 @@ impl Physics for AppPhysics {
     }
 
     fn cleanup(&mut self) {
-        self.app.run_cleanup();
+        let app = &mut self.app;
+        self.output.scope(|| app.run_cleanup());
+    }
+
+    fn set_output(&mut self, output: grass_app::Output) {
+        self.output = output;
     }
 
     fn resource_cell(&self, ty: TypeId) -> Option<&RefCell<Box<dyn Any>>> {
@@ -217,5 +267,9 @@ impl Physics for AppPhysics {
 
     fn local_app_mut(&mut self) -> Option<&mut App> {
         Some(&mut self.app)
+    }
+
+    fn local_app(&self) -> Option<&App> {
+        Some(&self.app)
     }
 }

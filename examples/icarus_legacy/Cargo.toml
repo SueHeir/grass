@@ -1,0 +1,22 @@
+[package]
+name = "icarus_legacy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A legacy-style MPI Fortran material-response code (mock Icarus) adapted into GRASS and coupled to an aeroheating code"
+
+# Kept out of the main workspace so building GRASS never needs gfortran or MPI.
+[workspace]
+
+[dependencies]
+grass_app = { path = "../../crates/grass_app" }
+grass_io = { path = "../../crates/grass_io" }
+grass_derive = { path = "../../crates/grass_derive" }
+grass_mpi = { path = "../../crates/grass_mpi", features = ["mpi_backend"] }
+grass_multi = { path = "../../crates/grass_multi", features = ["mpi"] }
+grass_scheduler = { path = "../../crates/grass_scheduler" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+debug = 1

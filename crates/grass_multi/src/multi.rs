@@ -220,6 +220,25 @@ impl SubApps {
         self.physics[idx].borrow_mut().step();
     }
 
+    /// Send a participant's terminal output somewhere else: a different
+    /// prefix, a file, or nowhere. Each local sub-App prints with a
+    /// `[name] ` prefix by default.
+    pub fn set_output(&mut self, ns: &str, output: grass_app::Output) {
+        let idx = self
+            .idx_of(ns)
+            .unwrap_or_else(|| panic!("set_output: no sub-App named `{ns}`"));
+        self.physics[idx].borrow_mut().set_output(output);
+    }
+
+    /// Advance a named participant by one whole physical time step, however
+    /// many internal substeps that takes (see [`grass_app::StepBoundary`]).
+    /// A participant that is already done is left alone.
+    pub fn advance_step(&mut self, ns: &str) {
+        self.prepare(ns);
+        let idx = self.idx_of(ns).expect("known sub-App after preparation");
+        self.physics[idx].borrow_mut().advance_step();
+    }
+
     /// Advance a named participant to its next exported seam or timestep
     /// completion. Preparation is enforced exactly as for [`tick`](Self::tick).
     pub fn resume(&mut self, ns: &str) -> PhysicsProgress {
@@ -471,6 +490,18 @@ pub fn tick_subapp(name: &str, n: usize) -> impl FnMut(ResMut<SubApps>) {
     }
 }
 
+/// Parent-system constructor that advances a sub-App by `n` whole physical
+/// time steps, whatever its integrator does per `run()`. Prefer this over
+/// [`tick_subapp`] when coupling codes with different substep counts.
+pub fn advance_subapp(name: &str, n: usize) -> impl FnMut(ResMut<SubApps>) {
+    let name = name.to_string();
+    move |mut subs: ResMut<SubApps>| {
+        for _ in 0..n {
+            subs.advance_step(&name);
+        }
+    }
+}
+
 /// Typed counterpart of [`tick_subapp`]. The sub-App is identified by a
 /// [`Namespace`] marker type instead of a string. Equivalent to
 /// `tick_subapp(NS::NAME, n)` but typo-safe at compile time.
@@ -555,6 +586,16 @@ pub trait MultiAppExt {
     /// ```
     fn add_port<T: 'static>(&mut self) -> &mut Self;
 
+    /// Register a [`MappedPort<Q>`](crate::MappedPort) on the parent App: a
+    /// port whose field is mapped onto each consumer's own discretization
+    /// with `method`. See [`expose_on`](crate::expose_on) and
+    /// [`consume_on`](crate::consume_on).
+    ///
+    /// ```rust,ignore
+    /// parent.add_mapped_port::<WallTemperature>(grass_map::Method::Native);
+    /// ```
+    fn add_mapped_port<Q: crate::Quantity>(&mut self, method: grass_map::Method) -> &mut Self;
+
     /// Register a remote (cross-process) sub-App backed by a [`Transport`].
     /// Returns a [`RemoteSubAppBuilder`] for declaring which resource types
     /// cross the wire, in which direction, and at what cadence:
@@ -619,6 +660,11 @@ impl MultiAppExt for App {
 
     fn add_port<T: 'static>(&mut self) -> &mut Self {
         self.add_resource(crate::port::Port::<T>::default());
+        self
+    }
+
+    fn add_mapped_port<Q: crate::Quantity>(&mut self, method: grass_map::Method) -> &mut Self {
+        self.add_resource(crate::mapped_port::MappedPort::<Q>::new(method));
         self
     }
 

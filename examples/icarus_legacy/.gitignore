@@ -1,0 +1,6 @@
+target/
+out/
+cases/out/
+*.mod
+*.o
+fortran/micarus

@@ -1,0 +1,10 @@
+one-way table, stand-alone micarus on 2 ranks: stagnation recession 3.737 mm, peak Tw 3056 K, wall 13.6 s
+explicit window 0.5 s, micarus on 2 ranks: stagnation recession 3.743 mm, 1.00 iterations/window, wall 10.0 s
+explicit window 2.0 s, micarus on 2 ranks: stagnation recession 3.761 mm, 1.00 iterations/window, wall 10.1 s
+implicit window 0.5 s, micarus on 2 ranks: stagnation recession 3.743 mm, 3.04 iterations/window, wall 28.3 s
+implicit window 2.0 s, micarus on 2 ranks: stagnation recession 3.756 mm, 4.92 iterations/window, wall 42.9 s
+
+implicit, 0.5 s window, by micarus rank count (fingerprint of every face's final state):
+  1 rank(s): recession 3.743 mm, fingerprint 9e6d96487c84d5c6, wall 44.1 s
+  2 rank(s): recession 3.743 mm, fingerprint e13d39318ff62152, wall 28.3 s
+  3 rank(s): recession 3.743 mm, fingerprint f04aa50addc68b3b, wall 22.8 s

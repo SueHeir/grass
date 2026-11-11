@@ -97,6 +97,25 @@ impl MpiRoleExchange {
     }
 }
 
+impl MpiRoleExchange {
+    /// Build over explicit communicators: `role` is this role's solver
+    /// communicator and `coupling` spans exactly the two coupled roles, with
+    /// the peer role at ranks `peer_root..peer_root + peer_size`.
+    pub(crate) fn on_comms(
+        role: SimpleCommunicator,
+        coupling: SimpleCommunicator,
+        peer_root: i32,
+        peer_size: i32,
+    ) -> Self {
+        Self {
+            role,
+            coupling,
+            peer_root,
+            peer_size,
+        }
+    }
+}
+
 impl RoleExchange for MpiRoleExchange {
     fn role_position(&self) -> (i32, i32) {
         (self.role.rank(), self.role.size())

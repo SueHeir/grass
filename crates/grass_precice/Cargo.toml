@@ -1,0 +1,21 @@
+[package]
+name = "grass_precice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Run a grass App as a preCICE participant: meshes, data exchange, implicit-coupling checkpoints and time-step control as a plugin"
+keywords = ["precice", "coupling", "multiphysics", "simulation"]
+categories = ["simulation", "science"]
+
+[features]
+default = []
+# Links the real preCICE library (v3.2, found with pkg-config) through the
+# official Rust bindings. Off by default so the workspace builds without it.
+precice = ["dep:precice"]
+
+[dependencies]
+grass_app = { workspace = true }
+grass_scheduler = { workspace = true }
+precice = { version = "~3.2", optional = true }

@@ -1,8 +1,9 @@
 # matrix_free_poisson_cg
 
-Matrix-free implicit Poisson solve hosted by `grass_scheduler`. The example keeps
-the Poisson stencil and manufactured-solution data local to the example; the
-core crate only provides the generic iterative-solver traits.
+Matrix-free implicit Poisson solve hosted by `grass_scheduler` and solved by the
+shared CG in `grass_linalg`. The example keeps the Poisson stencil and
+manufactured-solution data local to the example; `grass_linalg` only provides
+the generic solver.
 
 ## Validation
 

@@ -37,6 +37,7 @@ use std::collections::HashMap;
 
 use grass_app::{App, ConfigDescription, Plugin};
 use grass_derive::ConfigDescription as DeriveConfigDescription;
+use grass_mpi::CommResource;
 use grass_scheduler::{prelude::*, Res, ResMut};
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +78,13 @@ impl TermOut {
     /// between, not `—`. If you need a column to read as "no data this step",
     /// set it explicitly each step (e.g. to `f64::NAN` or `0.0`).
     pub fn set(&mut self, name: &str, value: f64) {
-        self.values.insert(name.to_string(), value);
+        // Overwrite in place so the per-step call does not allocate a key.
+        match self.values.get_mut(name) {
+            Some(slot) => *slot = value,
+            None => {
+                self.values.insert(name.to_string(), value);
+            }
+        }
     }
 }
 
@@ -195,7 +202,11 @@ fn populate_builtin_columns(clock: Res<SimClock>, mut term_out: ResMut<TermOut>)
     term_out.set("time", clock.time);
 }
 
-fn print_term_out(mut term_out: ResMut<TermOut>) {
+fn print_term_out(mut term_out: ResMut<TermOut>, comm: Option<Res<CommResource>>) {
+    // One log line per run, not one per MPI rank.
+    if !crate::run::is_root_rank(comm.as_deref()) {
+        return;
+    }
     let width = term_out.width;
     if !term_out.header_printed {
         let header = term_out
@@ -204,7 +215,7 @@ fn print_term_out(mut term_out: ResMut<TermOut>) {
             .map(|c| format!("{:>w$}", c, w = width))
             .collect::<Vec<_>>()
             .join(" ");
-        println!("{}", header);
+        grass_app::say!("{}", header);
         term_out.header_printed = true;
     }
     let line = term_out
@@ -216,7 +227,7 @@ fn print_term_out(mut term_out: ResMut<TermOut>) {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    println!("{}", line);
+    grass_app::say!("{}", line);
 }
 
 fn format_value(col: &str, v: f64, width: usize) -> String {

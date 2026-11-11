@@ -54,9 +54,11 @@
 //!      the **raw `MPI_COMM_WORLD`**, so MPMD couplers can address peers in
 //!      *other* binaries by absolute world rank (this is what
 //!      `grass_multi`'s transport uses).
-//! 3. **`finalize_mpi()` after every `CommResource` has dropped** (i.e. after
-//!    the last `App` is finished). It calls `MPI_Finalize`; using any comm
-//!    afterward is undefined.
+//! 3. **Finalization is automatic.** When GRASS starts MPI, it finalizes it
+//!    at process exit, so any number of Apps, in sequence or as coupled
+//!    sub-Apps, can share one MPI session. Call `finalize_mpi()` yourself only
+//!    to end MPI early, after every `CommResource` has dropped; MPI cannot be
+//!    started again afterwards.
 //!
 //! ## The `unsafe impl Send/Sync` promise
 //!
@@ -70,6 +72,12 @@
 #![warn(missing_docs)]
 
 use std::ops::{Deref, DerefMut};
+
+mod owner;
+pub use owner::OwnerMap;
+
+mod plugin;
+pub use plugin::{default_comm, MpiPlugin};
 
 mod runtime;
 pub use runtime::{
@@ -117,7 +125,7 @@ pub use runtime::{Bootstrap, MpiRuntime, MpiRuntimeError};
 /// ```
 pub mod prelude {
     pub use crate::{
-        config_digest, CommResource, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
+        config_digest, CommResource, MpiPlugin, RoleAssignment, RoleConfig, RoleSpec, RoleTopology,
         SingleProcessComm, TopologyConfig, TopologyMode, TopologyPlan,
     };
     #[cfg(feature = "mpi_backend")]
@@ -178,6 +186,13 @@ pub trait CommBackend: Send + Sync + 'static {
     fn rank(&self) -> i32;
     /// Number of ranks in the communicator (`1` for serial).
     fn size(&self) -> i32;
+    /// This process's rank among the ranks that share its node (`0` for serial), for
+    /// binding one GPU per rank. Backends that cannot tell fall back to
+    /// [`rank`](Self::rank), which spreads ranks the same way when every node holds a
+    /// multiple of its GPU count. May be collective, so call it from setup on every rank.
+    fn node_rank(&self) -> i32 {
+        self.rank()
+    }
     /// Cartesian process-grid dimensions `[nx, ny, nz]` of the rank decomposition.
     fn processor_decomposition(&self) -> [i32; 3];
     /// This rank's `[ix, iy, iz]` coordinate within the process grid.
@@ -188,6 +203,14 @@ pub trait CommBackend: Send + Sync + 'static {
     fn all_reduce_sum_f64(&self, local: f64) -> f64;
     /// Min of `local` across all ranks, returned to every rank (e.g. global dt).
     fn all_reduce_min_f64(&self, local: f64) -> f64;
+    /// Element-wise sum of `values` across all ranks, in place, in one
+    /// collective (e.g. a load-balance histogram). The default issues one
+    /// scalar reduction per element; backends should override it.
+    fn all_reduce_sum_f64_slice(&self, values: &mut [f64]) {
+        for v in values.iter_mut() {
+            *v = self.all_reduce_sum_f64(*v);
+        }
+    }
     /// Block until every rank reaches this point.
     fn barrier(&self);
 
@@ -332,6 +355,11 @@ impl CommBackend for SingleProcessComm {
         // rank), so copy each op's send buffer into its recv buffer. min() guards
         // send-only / recv-only ops (to_proc == -1) whose buffers differ in length.
         for op in ops.iter_mut() {
+            // Match the MPI backend: `-1` disables that half, so leave the
+            // receive buffer untouched.
+            if op.source == -1 || op.dest == -1 {
+                continue;
+            }
             let n = op.send_buf.len().min(op.recv_buf.len());
             op.recv_buf[..n].copy_from_slice(&op.send_buf[..n]);
         }
@@ -425,8 +453,15 @@ fn world_from_universe_or_external_init(
     guard: &mut Option<mpi::environment::Universe>,
 ) -> mpi::topology::SimpleCommunicator {
     if guard.is_none() {
+        assert!(
+            !mpi_is_finalized(),
+            "MPI was already finalized in this process and cannot be started again. \
+             Leave finalization to GRASS (it finalizes at process exit) instead of \
+             calling `finalize_mpi` between Apps."
+        );
         if let Some(universe) = mpi::initialize() {
             *guard = Some(universe);
+            register_finalize_at_exit();
         } else {
             // MPI was initialized outside rsmpi (for example by a C library such
             // as p4est). In that case rsmpi cannot own a `Universe`, but it can
@@ -435,6 +470,42 @@ fn world_from_universe_or_external_init(
         }
     }
     guard.as_ref().unwrap().world()
+}
+
+/// Finalize MPI when the process exits, once, if GRASS started it.
+///
+/// Tying `MPI_Finalize` to one App's cleanup broke every program that runs
+/// more than one App: coupled sub-Apps (the first to finish took MPI down
+/// under the others) and several Apps in sequence (MPI cannot start again).
+/// The process owns MPI instead; Apps only borrow communicators.
+#[cfg(feature = "mpi_backend")]
+fn register_finalize_at_exit() {
+    extern "C" fn finalize_at_exit() {
+        // A poisoned lock means a panic already took the process down; skip.
+        if let Ok(mut lifecycle) = MPI_LIFECYCLE.lock() {
+            *lifecycle = MpiLifecycle::default();
+        }
+        if let Ok(mut guard) = MPI_UNIVERSE.lock() {
+            *guard = None;
+        }
+    }
+    extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::os::raw::c_int;
+    }
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        // SAFETY: registers a plain `extern "C"` function with the C runtime.
+        unsafe { atexit(finalize_at_exit) };
+    });
+}
+
+/// Whether `MPI_Finalize` has already run in this process.
+#[cfg(feature = "mpi_backend")]
+pub fn mpi_is_finalized() -> bool {
+    let mut flag: std::os::raw::c_int = 0;
+    // SAFETY: MPI_Finalized may be called at any time.
+    unsafe { mpi::ffi::MPI_Finalized(&mut flag) };
+    flag != 0
 }
 
 /// Returns this app's communicator: the intra-comm registered by
@@ -532,6 +603,27 @@ pub fn init_app_color(color: i32) {
     try_init_app_color(color).expect("init_app_color lifecycle violation");
 }
 
+/// Whether MPI is already initialized in this process (by GRASS, by a role
+/// runtime, or by a C library). [`MpiPlugin`] uses it to decide who owns
+/// `MPI_Finalize`: whoever initializes MPI finalizes it.
+#[cfg(feature = "mpi_backend")]
+pub fn mpi_is_initialized() -> bool {
+    if MPI_UNIVERSE.lock().unwrap().is_some() {
+        return true;
+    }
+    let mut flag: std::os::raw::c_int = 0;
+    // SAFETY: MPI_Initialized may be called at any time, even before MPI_Init.
+    unsafe { mpi::ffi::MPI_Initialized(&mut flag) };
+    flag != 0
+}
+
+/// Whether MPI is already initialized in this process. Always `false`
+/// without the `mpi_backend` feature.
+#[cfg(not(feature = "mpi_backend"))]
+pub fn mpi_is_initialized() -> bool {
+    false
+}
+
 /// Drop the MPI universe, calling MPI_Finalize. Must be called after all
 /// `Comm` resources have been dropped (i.e. after the last `App` is done).
 #[cfg(feature = "mpi_backend")]
@@ -627,6 +719,9 @@ impl CommBackend for MpiCommBackend {
     fn size(&self) -> i32 {
         self.size
     }
+    fn node_rank(&self) -> i32 {
+        self.world.split_shared(self.rank).rank()
+    }
     fn processor_decomposition(&self) -> [i32; 3] {
         self.processor_decomposition
     }
@@ -651,6 +746,15 @@ impl CommBackend for MpiCommBackend {
         self.world
             .all_reduce_into(&local, &mut result, SystemOperation::min());
         result
+    }
+
+    fn all_reduce_sum_f64_slice(&self, values: &mut [f64]) {
+        if values.is_empty() {
+            return;
+        }
+        let local = values.to_vec();
+        self.world
+            .all_reduce_into(&local[..], values, SystemOperation::sum());
     }
 
     fn barrier(&self) {
@@ -770,6 +874,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn single_process_batch_leaves_disabled_halves_untouched() {
+        let comm = SingleProcessComm::new();
+        let send = [1.0, 2.0];
+        let mut self_recv = [0.0; 2];
+        let mut no_source_recv = [9.0; 2];
+        let mut no_dest_recv = [9.0; 2];
+        comm.sendrecv_batch_f64_into(&mut [
+            SendRecvOp {
+                dest: 0,
+                send_buf: &send,
+                source: 0,
+                recv_buf: &mut self_recv,
+            },
+            SendRecvOp {
+                dest: 0,
+                send_buf: &send,
+                source: -1,
+                recv_buf: &mut no_source_recv,
+            },
+            SendRecvOp {
+                dest: -1,
+                send_buf: &send,
+                source: 0,
+                recv_buf: &mut no_dest_recv,
+            },
+        ]);
+        assert_eq!(self_recv, [1.0, 2.0]);
+        assert_eq!(no_source_recv, [9.0; 2]);
+        assert_eq!(no_dest_recv, [9.0; 2]);
+    }
+
+    #[test]
     fn single_process_comm_rank_and_size() {
         let comm = SingleProcessComm::new();
         assert_eq!(comm.rank(), 0);
@@ -781,6 +917,9 @@ mod tests {
         let comm = SingleProcessComm::new();
         assert_eq!(comm.all_reduce_sum_f64(42.0), 42.0);
         assert_eq!(comm.all_reduce_min_f64(7.5), 7.5);
+        let mut values = [1.0, -2.0, 3.5];
+        comm.all_reduce_sum_f64_slice(&mut values);
+        assert_eq!(values, [1.0, -2.0, 3.5]);
     }
 
     #[test]

@@ -217,10 +217,18 @@ impl CoupledPairRunner {
             Some((peer_range.start, peer_range.end - peer_range.start)),
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(launch)));
-        runtime.finalize();
         match result {
-            Ok(result) => Ok(PairRun::Split { role, result }),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Ok(result) => {
+                runtime.finalize();
+                Ok(PairRun::Split { role, result })
+            }
+            // The peer role is blocked in an exchange this rank will never
+            // join, so finalizing would hang: abort the whole job instead.
+            Err(_) => {
+                use mpi::topology::Communicator;
+                eprintln!("grass: role `{role}` panicked; aborting the MPI job");
+                grass_mpi::get_mpi_world_raw().abort(101)
+            }
         }
     }
 

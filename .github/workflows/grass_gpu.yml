@@ -1,0 +1,45 @@
+name: grass_gpu
+
+# Runs real kernels on Mesa's software Vulkan driver, since GitHub's runners have no GPU.
+# This covers correctness; it says nothing about speed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/grass_gpu/**"
+      - "crates/grass_mpi/**"
+      - "crates/grass_scheduler/**"
+      - ".github/workflows/grass_gpu.yml"
+  pull_request:
+    paths:
+      - "crates/grass_gpu/**"
+      - "crates/grass_mpi/**"
+      - "crates/grass_scheduler/**"
+      - ".github/workflows/grass_gpu.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenMPI and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenmpi-dev openmpi-bin mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p grass_gpu --all-targets --features mpi_backend -- -D warnings
+
+      - name: Test
+        run: cargo test -p grass_gpu --features mpi_backend

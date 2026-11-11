@@ -1,0 +1,13 @@
+[package]
+name = "grass_linalg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Matrix-free Krylov and fixed-point solvers whose inner products are reduced across ranks by grass_mpi"
+readme = "README.md"
+keywords = ["krylov", "conjugate-gradient", "mpi", "simulation"]
+categories = ["simulation", "science", "mathematics"]
+
+[dependencies]
+grass_mpi = { workspace = true }

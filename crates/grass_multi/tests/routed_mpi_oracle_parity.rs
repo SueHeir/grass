@@ -39,7 +39,7 @@ fn plan(source_tag: u8, source: i32, peer_size: i32, epoch: u64) -> Vec<(i32, u6
     if (source as u64 + epoch) % 3 == 2 {
         return Vec::new();
     }
-    let count = if (source as u64 + epoch) % 2 == 0 {
+    let count = if (source as u64 + epoch).is_multiple_of(2) {
         2
     } else {
         1
@@ -48,7 +48,7 @@ fn plan(source_tag: u8, source: i32, peer_size: i32, epoch: u64) -> Vec<(i32, u6
         .map(|ordinal| {
             // This intentionally never chooses the final owner on even epochs,
             // giving that destination a genuine empty-delivery round.
-            let active_owners = if epoch % 2 == 0 {
+            let active_owners = if epoch.is_multiple_of(2) {
                 peer_size - 1
             } else {
                 peer_size
@@ -58,7 +58,7 @@ fn plan(source_tag: u8, source: i32, peer_size: i32, epoch: u64) -> Vec<(i32, u6
             let id = ((source_tag as u64) << 56)
                 | ((epoch & 0xffff) << 24)
                 | ((source as u64) << 8)
-                | ordinal as u64;
+                | ordinal;
             let len = 23 + source as usize * 7 + ordinal as usize * 3 + epoch as usize;
             let payload = (0..len)
                 .map(|byte| {

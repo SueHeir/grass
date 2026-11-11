@@ -41,6 +41,17 @@ pub struct ConfigSnippets {
 /// emit a complete example configuration file assembled from all registered plugins.
 pub struct GenerateConfigFlag;
 
+/// Typed configuration descriptions of every registered plugin, in
+/// registration order, as `(plugin name, description)`. Populated during
+/// plugin registration; [`App::config_reference`] renders it.
+#[derive(Default)]
+pub struct ConfigDescriptions(pub Vec<(String, crate::ConfigDescription)>);
+
+/// Marker resource: when present, [`App::start`] prints a Markdown reference
+/// of every plugin's configuration ([`App::config_reference`]) and exits
+/// instead of running (`--config-docs` with `grass_io`'s `InputPlugin`).
+pub struct ConfigDocsFlag;
+
 /// Central application container. Holds resources, systems, and plugins.
 ///
 /// `App` provides a builder-style API for assembling a simulation from plugins.
@@ -375,6 +386,19 @@ impl App {
     /// If the plugin provides a [`Plugin::default_config`] snippet, appends it
     /// to the [`ConfigSnippets`] resource (creating the resource if needed).
     fn collect_config_snippet(&mut self, plugin: &dyn Plugin) {
+        if let Some(description) = plugin.config_description() {
+            let name = plugin.name().to_string();
+            if let Some(cell) = self.get_mut_resource(TypeId::of::<ConfigDescriptions>()) {
+                let mut borrow = cell.borrow_mut();
+                borrow
+                    .downcast_mut::<ConfigDescriptions>()
+                    .expect("ConfigDescriptions resource has wrong type — this is a framework bug")
+                    .0
+                    .push((name, description));
+            } else {
+                self.add_resource(ConfigDescriptions(vec![(name, description)]));
+            }
+        }
         let snippet = match plugin.config_description() {
             Some(description) => description.render_toml(),
             None => match plugin.default_config() {
@@ -523,10 +547,69 @@ impl App {
         self
     }
 
+    /// Export a seam right after `phase` in this App's normal phase order.
+    ///
+    /// Every phase the App's plugins registered keeps running, in the same
+    /// order; [`resume`](Self::resume) additionally yields at `id` once
+    /// `phase`'s systems have run. Use this to open another code's timestep
+    /// for coupling (for example, exchange contact forces after the particle
+    /// code's pre-force phase) without rebuilding its schedule by hand.
+    pub fn add_seam_after<P: ScheduleSet + 'static>(
+        &mut self,
+        phase: P,
+        id: &'static str,
+    ) -> &mut Self {
+        self.sub_apps.main.add_seam_after(phase, id);
+        self
+    }
+
     /// Inserts a resource into the app's resource store.
     ///
-    /// If a resource of the same type already exists, it is replaced.
+    /// If a resource of the same type already exists, it is replaced, except
+    /// for a *shared* resource (see [`init_shared_resource`](Self::init_shared_resource)):
+    /// replacing one of those silently would cut every plugin already using it
+    /// off from it, so this panics. Use
+    /// [`replace_resource`](Self::replace_resource) to replace one on purpose.
     pub fn add_resource<R: 'static>(&mut self, res: R) -> &mut Self {
+        let type_id = TypeId::of::<R>();
+        if self.sub_apps.main.shared_resources.contains(&type_id) && self.has_resource::<R>() {
+            panic!(
+                "add_resource::<{}>() would replace a shared resource another plugin \
+                 already installed and may be using. Use init_shared_resource to reuse \
+                 it, or replace_resource to replace it on purpose.",
+                std::any::type_name::<R>()
+            );
+        }
+        self.sub_apps.main.add_resource(res);
+        self
+    }
+
+    /// Returns `true` if a resource of type `R` has been added.
+    pub fn has_resource<R: 'static>(&self) -> bool {
+        self.resource_cell(TypeId::of::<R>()).is_some()
+    }
+
+    /// Installs a resource that several plugins share, such as the MPI
+    /// communicator. The first plugin to ask creates it with `make`; every
+    /// later caller reuses that one and `make` is not called. An application
+    /// that wants its own instance (for example a split communicator) adds it
+    /// with this method before the plugins that use it.
+    ///
+    /// Once installed, a plain [`add_resource`](Self::add_resource) of the
+    /// same type panics instead of silently replacing it.
+    pub fn init_shared_resource<R: 'static>(&mut self, make: impl FnOnce() -> R) -> &mut Self {
+        if !self.has_resource::<R>() {
+            self.sub_apps.main.add_resource(make());
+        }
+        self.sub_apps
+            .main
+            .shared_resources
+            .insert(TypeId::of::<R>());
+        self
+    }
+
+    /// Replaces a resource on purpose, including a shared one.
+    pub fn replace_resource<R: 'static>(&mut self, res: R) -> &mut Self {
         self.sub_apps.main.add_resource(res);
         self
     }
@@ -541,6 +624,16 @@ impl App {
     /// has not been added.
     pub fn get_resource_ref<R: 'static>(&self) -> Option<std::cell::Ref<'_, R>> {
         self.sub_apps.main.get_resource_ref::<R>()
+    }
+
+    /// Mutably borrows a resource of type `R` through a shared `&App`, or
+    /// `None` if it has not been added. Panics if `R` is already borrowed.
+    pub fn get_resource_mut<R: 'static>(&self) -> Option<std::cell::RefMut<'_, R>> {
+        let cell = self.resource_cell(TypeId::of::<R>())?;
+        Some(std::cell::RefMut::map(cell.borrow_mut(), |any| {
+            any.downcast_mut::<R>()
+                .expect("resource type matches its TypeId")
+        }))
     }
 
     /// Same as [`get_mut_resource`](Self::get_mut_resource) but with shared
@@ -582,8 +675,9 @@ impl App {
         }
         self.sub_apps.main.add_scheduler_manager();
         self.sub_apps.main.organize_systems();
+        let stage_before = self.sub_apps.main.stage_index();
         self.try_setup()?;
-        self.sub_apps.main.set_running();
+        self.sub_apps.main.set_running(stage_before);
         Ok(self)
     }
 
@@ -655,6 +749,11 @@ impl App {
             self.run_cleanup();
             return Ok(());
         }
+        if self.get_resource_ref::<ConfigDocsFlag>().is_some() {
+            println!("{}", self.config_reference());
+            self.run_cleanup();
+            return Ok(());
+        }
         if let Err(error) = self.validate_capability_contracts_result() {
             self.run_cleanup();
             return Err(error);
@@ -665,19 +764,42 @@ impl App {
             return Ok(());
         }
         self.sub_apps.main.add_scheduler_manager();
-        self.sub_apps.main.organize_systems();
-        self.try_setup()?;
-        self.sub_apps.main.set_running();
-        while !self.sub_apps.main.is_done() {
-            self.sub_apps.main.run();
+        loop {
             if self.sub_apps.main.needs_setup() {
+                // Every stage (and a stage skipped during its own setup)
+                // gets a setup pass before any update step runs.
                 self.sub_apps.main.organize_systems();
+                let stage_before = self.sub_apps.main.stage_index();
                 self.try_setup()?;
-                self.sub_apps.main.set_running();
+                self.sub_apps.main.set_running(stage_before);
+            } else if self.sub_apps.main.is_done() {
+                break;
+            } else {
+                self.sub_apps.main.run();
             }
         }
+        // Same per-system timing report as the infallible `start()` path.
+        self.sub_apps.main.print_timing_report();
         self.run_cleanup();
         Ok(())
+    }
+
+    /// A Markdown reference of every registered plugin's configuration
+    /// sections, in registration order: one heading per section with its
+    /// narrative and a table of keys, types, defaults and descriptions.
+    /// Plugins that only provide a legacy `default_config` snippet are not
+    /// included.
+    pub fn config_reference(&self) -> String {
+        let mut out = String::from("# Configuration reference\n\n");
+        let Some(descriptions) = self.get_resource_ref::<ConfigDescriptions>() else {
+            out.push_str("No plugin in this app reads a configuration section.\n");
+            return out;
+        };
+        for (plugin, d) in &descriptions.0 {
+            out.push_str(&d.render_markdown());
+            out.push_str(&format!("\n_Read by `{plugin}`._\n\n"));
+        }
+        out
     }
 
     /// Prints accumulated config snippets from all registered plugins.
@@ -1935,5 +2057,36 @@ mod tests {
             .name
             .as_deref()
             .is_some_and(|name| name.contains("DependencyMiddle")));
+    }
+
+    #[test]
+    fn shared_resource_is_created_once_and_guarded() {
+        let mut app = App::new();
+        let mut calls = 0;
+        app.init_shared_resource(|| {
+            calls += 1;
+            41_u32
+        });
+        app.init_shared_resource(|| {
+            calls += 1;
+            0_u32
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(*app.get_resource_ref::<u32>().unwrap(), 41);
+
+        app.replace_resource(42_u32);
+        assert_eq!(*app.get_resource_ref::<u32>().unwrap(), 42);
+
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            app.add_resource(0_u32);
+        }));
+        assert!(
+            refused.is_err(),
+            "add_resource must not overwrite a shared resource"
+        );
+
+        // Ordinary resources still replace as before.
+        app.add_resource(1_i64).add_resource(2_i64);
+        assert_eq!(*app.get_resource_ref::<i64>().unwrap(), 2);
     }
 }

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Pure MPI abstraction: CommBackend trait, CommResource wrapper, SingleProcessComm and MpiCommBackend backends"
+description = "MPI abstraction for GRASS: CommBackend trait, the shared CommResource and the MpiPlugin that installs it once per App"
 keywords = ["mpi", "communication", "simulation"]
 categories = ["simulation", "science"]
 
@@ -13,6 +13,7 @@ default = ["mpi_backend"]
 mpi_backend = ["dep:mpi", "dep:libffi-sys"]
 
 [dependencies]
+grass_app = { workspace = true }
 mpi = { version = "0.8.0", features = ["user-operations", "derive"], optional = true }
 libffi-sys = { version = "2.3.0", features = ["system"], optional = true }
 serde = { version = "1", features = ["derive"] }
